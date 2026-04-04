@@ -342,7 +342,7 @@ public partial class PowerPointHandler
                     }
                 }
 
-                shapeTree.AppendChild(newShape);
+                InsertAtPosition(shapeTree, newShape, index);
 
                 // Hyperlink on shape
                 if (properties.TryGetValue("link", out var linkVal))

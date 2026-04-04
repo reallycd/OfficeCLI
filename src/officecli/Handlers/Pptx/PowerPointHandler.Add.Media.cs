@@ -89,7 +89,7 @@ public partial class PowerPointHandler
                     new Drawing.PresetGeometry(new Drawing.AdjustValueList()) { Preset = ParsePresetShape(picGeomName) }
                 );
 
-                imgShapeTree.AppendChild(picture);
+                InsertAtPosition(imgShapeTree, picture, index);
                 GetSlide(imgSlidePart).Save();
 
                 return $"/slide[{imgSlideIdx}]/{BuildElementPathSegment("picture", picture, imgShapeTree.Elements<Picture>().Count())}";
@@ -143,7 +143,7 @@ public partial class PowerPointHandler
 
                     var chartGfEx = BuildExtendedChartGraphicFrame(chartSlidePart, extChartPart,
                         chartId, chartName, chartX, chartY, chartCx, chartCy);
-                    chartShapeTree.AppendChild(chartGfEx);
+                    InsertAtPosition(chartShapeTree, chartGfEx, index);
                     GetSlide(chartSlidePart).Save();
 
                     // Count all charts (both regular and extended)
@@ -167,7 +167,7 @@ public partial class PowerPointHandler
 
                 var chartGf = BuildChartGraphicFrame(chartSlidePart, chartPart, chartId, chartName,
                     chartX, chartY, chartCx, chartCy);
-                chartShapeTree.AppendChild(chartGf);
+                InsertAtPosition(chartShapeTree, chartGf, index);
                 GetSlide(chartSlidePart).Save();
 
                 var chartCount = chartShapeTree.Elements<GraphicFrame>()
@@ -315,7 +315,7 @@ public partial class PowerPointHandler
                     p14Media.MediaTrim = trim;
                 }
 
-                mediaShapeTree.AppendChild(mediaPic);
+                InsertAtPosition(mediaShapeTree, mediaPic, index);
 
                 // 5. Add media timing node (controls playback behavior)
                 var mediaSlide = GetSlide(mediaSlidePart);

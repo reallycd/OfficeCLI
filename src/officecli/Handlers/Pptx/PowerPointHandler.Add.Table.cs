@@ -148,7 +148,7 @@ public partial class PowerPointHandler
                     new Drawing.GraphicData(table) { Uri = "http://schemas.openxmlformats.org/drawingml/2006/table" }
                 );
                 graphicFrame.Append(graphic);
-                tblShapeTree.AppendChild(graphicFrame);
+                InsertAtPosition(tblShapeTree, graphicFrame, index);
                 GetSlide(tblSlidePart).Save();
 
                 var tblCount = tblShapeTree.Elements<GraphicFrame>()

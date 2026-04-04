@@ -57,7 +57,7 @@ public partial class WordHandler
                 throw new ArgumentException("'find' requires either 'replace' and/or format properties (e.g. bold, highlight, color).");
 
             // Support regex=true as an alternative to r"..." prefix
-            if (properties.TryGetValue("regex", out var regexFlag) && ParseHelpers.IsTruthy(regexFlag) && !findText.StartsWith("r\"") && !findText.StartsWith("r'"))
+            if (properties.TryGetValue("regex", out var regexFlag) && ParseHelpers.IsTruthySafe(regexFlag) && !findText.StartsWith("r\"") && !findText.StartsWith("r'"))
                 findText = $"r\"{findText}\"";
 
             var effectivePath = (path is "" or "/") ? "/body" : path;

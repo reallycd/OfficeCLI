@@ -954,10 +954,10 @@ public partial class WordHandler
         if (parent is Paragraph p)
             para = p;
         else
-            throw new ArgumentException("after-find/before-find requires a paragraph parent path.");
+            throw new ArgumentException("after=\"find:...\" / before=\"find:...\" requires a paragraph parent path (e.g. /body/p[1]), not a section-level path like /body.");
 
         // Support regex=true prop as alternative to r"..." prefix
-        if (properties.TryGetValue("regex", out var regexFlag) && ParseHelpers.IsTruthy(regexFlag) && !findValue.StartsWith("r\"") && !findValue.StartsWith("r'"))
+        if (properties.TryGetValue("regex", out var regexFlag) && ParseHelpers.IsTruthySafe(regexFlag) && !findValue.StartsWith("r\"") && !findValue.StartsWith("r'"))
             findValue = $"r\"{findValue}\"";
 
         var (pattern, isRegex) = ParseFindPattern(findValue);

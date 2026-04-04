@@ -98,7 +98,7 @@ public partial class PowerPointHandler
                 drawingPara.AppendChild(altContent);
 
                 eqShape.TextBody = new TextBody(bodyProps, listStyle, drawingPara);
-                eqShapeTree.AppendChild(eqShape);
+                InsertAtPosition(eqShapeTree, eqShape, index);
 
                 // Ensure slide root has xmlns:a14 and mc:Ignorable="a14" so PowerPoint accepts the equation
                 var eqSlide = GetSlide(eqSlidePart);

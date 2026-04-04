@@ -65,6 +65,8 @@ public partial class PowerPointHandler
         {
             var slideIdx = int.Parse(slideMatch.Groups[1].Value) - 1; // 0-based
             var slideCount = GetSlideParts().Count();
+            if (slideIdx < 0 || slideIdx >= slideCount)
+                throw new ArgumentException($"Anchor slide not found: {anchorPath} (total slides: {slideCount})");
             if (position.After != null)
                 return slideIdx + 1 >= slideCount ? null : slideIdx + 1;
             else
@@ -75,7 +77,21 @@ public partial class PowerPointHandler
         var elemMatch = Regex.Match(anchorPath, @"^/slide\[(\d+)\]/(\w+)\[(\d+)\]$");
         if (elemMatch.Success)
         {
+            var slideIdx = int.Parse(elemMatch.Groups[1].Value);
             var elemIdx = int.Parse(elemMatch.Groups[3].Value) - 1; // 0-based
+            // Validate that the anchor element exists
+            var slideParts = GetSlideParts().ToList();
+            if (slideIdx < 1 || slideIdx > slideParts.Count)
+                throw new ArgumentException($"Anchor slide not found: {anchorPath} (total slides: {slideParts.Count})");
+            var anchorShapeTree = GetSlide(slideParts[slideIdx - 1]).CommonSlideData?.ShapeTree;
+            if (anchorShapeTree != null)
+            {
+                var contentChildren = anchorShapeTree.ChildElements
+                    .Where(e => e is not NonVisualGroupShapeProperties && e is not GroupShapeProperties)
+                    .ToList();
+                if (elemIdx < 0 || elemIdx >= contentChildren.Count)
+                    throw new ArgumentException($"Anchor element not found: {anchorPath} (total elements on slide: {contentChildren.Count})");
+            }
             if (position.After != null)
                 return elemIdx + 1; // InsertAtPosition handles bounds
             else
@@ -1513,7 +1529,7 @@ public partial class PowerPointHandler
             throw new ArgumentException($"No paragraphs found at path: {parentPath}");
 
         // Support regex=true prop as alternative to r"..." prefix
-        if (properties.TryGetValue("regex", out var regexFlag) && ParseHelpers.IsTruthy(regexFlag) && !findValue.StartsWith("r\"") && !findValue.StartsWith("r'"))
+        if (properties.TryGetValue("regex", out var regexFlag) && ParseHelpers.IsTruthySafe(regexFlag) && !findValue.StartsWith("r\"") && !findValue.StartsWith("r'"))
             findValue = $"r\"{findValue}\"";
 
         var (pattern, isRegex) = ParseFindPattern(findValue);

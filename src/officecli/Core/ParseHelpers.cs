@@ -127,6 +127,17 @@ public static class ParseHelpers
     }
 
     /// <summary>
+    /// Returns true if the value is a recognized truthy string.
+    /// Returns false for anything else (null, empty, falsy, or unrecognized values).
+    /// Unlike <see cref="IsTruthy"/>, never throws.
+    /// </summary>
+    public static bool IsTruthySafe(string? value)
+    {
+        if (value == null) return false;
+        return value.ToLowerInvariant() is "true" or "1" or "yes" or "on";
+    }
+
+    /// <summary>
     /// Returns true if the value is a recognized boolean string (truthy or falsy).
     /// Returns false for null, empty, or non-boolean values (no exception thrown).
     /// </summary>

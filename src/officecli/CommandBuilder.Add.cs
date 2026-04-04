@@ -238,12 +238,16 @@ static partial class CommandBuilder
         var movePathArg = new Argument<string>("path") { Description = "DOM path of the element to move" };
         var moveToOpt = new Option<string?>("--to") { Description = "Target parent path. If omitted, reorders within the current parent" };
         var moveIndexOpt = new Option<int?>("--index") { Description = "Insert position (0-based). If omitted, appends to end" };
+        var moveAfterOpt = new Option<string?>("--after") { Description = "Move after the element at this path" };
+        var moveBeforeOpt = new Option<string?>("--before") { Description = "Move before the element at this path" };
 
         var moveCommand = new Command("move", "Move an element to a new position or parent");
         moveCommand.Add(moveFileArg);
         moveCommand.Add(movePathArg);
         moveCommand.Add(moveToOpt);
         moveCommand.Add(moveIndexOpt);
+        moveCommand.Add(moveAfterOpt);
+        moveCommand.Add(moveBeforeOpt);
         moveCommand.Add(jsonOption);
 
         moveCommand.SetAction(result => { var json = result.GetValue(jsonOption); return SafeRun(() =>
@@ -252,17 +256,35 @@ static partial class CommandBuilder
             var path = result.GetValue(movePathArg)!;
             var to = result.GetValue(moveToOpt);
             var index = result.GetValue(moveIndexOpt);
+            var after = result.GetValue(moveAfterOpt);
+            var before = result.GetValue(moveBeforeOpt);
+
+            // Validate mutual exclusivity of --index, --after, --before
+            var posCount = (index.HasValue ? 1 : 0) + (after != null ? 1 : 0) + (before != null ? 1 : 0);
+            if (posCount > 1)
+                throw new OfficeCli.Core.CliException("--index, --after, and --before are mutually exclusive. Use only one.")
+                {
+                    Code = "invalid_argument",
+                    Suggestion = "Use --index for positional insert, or --after/--before for anchor-based insert."
+                };
+
+            InsertPosition? position = index.HasValue ? InsertPosition.AtIndex(index.Value)
+                : after != null ? InsertPosition.AfterElement(after)
+                : before != null ? InsertPosition.BeforeElement(before)
+                : null;
 
             if (TryResident(file.FullName, req =>
             {
                 req.Command = "move";
                 req.Args["path"] = path;
                 if (to != null) req.Args["to"] = to;
-                if (index.HasValue) req.Args["index"] = index.Value.ToString();
+                if (position?.Index.HasValue == true) req.Args["index"] = position.Index.Value.ToString();
+                if (position?.After != null) req.Args["after"] = position.After;
+                if (position?.Before != null) req.Args["before"] = position.Before;
             }, json) is {} rc) return rc;
 
             using var handler = DocumentHandlerFactory.Open(file.FullName, editable: true);
-            var resultPath = handler.Move(path, to, index.HasValue ? InsertPosition.AtIndex(index.Value) : null);
+            var resultPath = handler.Move(path, to, position);
             var message = $"Moved to {resultPath}";
             if (json) Console.WriteLine(OutputFormatter.WrapEnvelopeText(message));
             else Console.WriteLine(message);

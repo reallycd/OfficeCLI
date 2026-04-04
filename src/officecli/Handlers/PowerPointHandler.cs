@@ -605,6 +605,31 @@ public partial class PowerPointHandler : IDocumentHandler
 
     public List<ValidationError> Validate() => RawXmlHelper.ValidateDocument(_doc);
 
+    /// <summary>
+    /// Execute a JSON batch of operations on this document.
+    /// Returns one BatchResult per item, with Success=true or Success=false+Error.
+    /// </summary>
+    public List<Core.BatchResult> Batch(string json)
+    {
+        var items = System.Text.Json.JsonSerializer.Deserialize(json, Core.BatchJsonContext.Default.ListBatchItem)
+            ?? throw new ArgumentException("Invalid batch JSON");
+        var results = new List<Core.BatchResult>();
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            try
+            {
+                var output = CommandBuilder.ExecuteBatchItem(this, item, json: false);
+                results.Add(new Core.BatchResult { Index = i, Success = true, Output = output });
+            }
+            catch (Exception ex)
+            {
+                results.Add(new Core.BatchResult { Index = i, Success = false, Error = ex.Message, Item = item });
+            }
+        }
+        return results;
+    }
+
     public void Dispose() => _doc.Dispose();
 
     // ==================== Private Helpers ====================

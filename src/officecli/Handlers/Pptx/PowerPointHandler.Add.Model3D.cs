@@ -209,7 +209,7 @@ public partial class PowerPointHandler
 
         acElement.AppendChild(choiceElement);
         acElement.AppendChild(fallbackElement);
-        shapeTree.AppendChild(acElement);
+        InsertAtPosition(shapeTree, acElement, index);
 
         // Ensure am3d namespace is declared on slide root
         var slide = GetSlide(slidePart);

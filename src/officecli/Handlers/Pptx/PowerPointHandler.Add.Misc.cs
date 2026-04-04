@@ -124,7 +124,7 @@ public partial class PowerPointHandler
                 }
                 connector.ShapeProperties.AppendChild(cxnOutline);
 
-                cxnShapeTree.AppendChild(connector);
+                InsertAtPosition(cxnShapeTree, connector, index);
                 GetSlide(cxnSlidePart).Save();
 
                 return $"/slide[{cxnSlideIdx}]/{BuildElementPathSegment("connector", connector, cxnShapeTree.Elements<ConnectionShape>().Count())}";
@@ -263,7 +263,7 @@ public partial class PowerPointHandler
                     groupShape.AppendChild(s);
                 }
 
-                grpShapeTree.AppendChild(groupShape);
+                InsertAtPosition(grpShapeTree, groupShape, index);
                 GetSlide(grpSlidePart).Save();
 
                 var grpCount = grpShapeTree.Elements<GroupShape>().Count();
@@ -579,7 +579,7 @@ public partial class PowerPointHandler
 
                 acElement.AppendChild(choiceElement);
                 acElement.AppendChild(fallbackElement);
-                zmShapeTree.AppendChild(acElement);
+                InsertAtPosition(zmShapeTree, acElement, index);
                 GetSlide(zmSlidePart).Save();
 
                 var zmCount = zmShapeTree.ChildElements
