@@ -956,7 +956,8 @@ public partial class PowerPointHandler
                     {
                         var rProps = run.RunProperties ?? (run.RunProperties = new Drawing.RunProperties());
                         rProps.RemoveAllChildren<Drawing.SolidFill>();
-                        rProps.AppendChild((Drawing.SolidFill)cellColorFill.CloneNode(true));
+                        rProps.RemoveAllChildren<Drawing.GradientFill>();
+                        InsertFillInRunProperties(rProps, (Drawing.SolidFill)cellColorFill.CloneNode(true));
                     }
                     break;
                 }
