@@ -1098,11 +1098,21 @@ public class WatchServer : IDisposable
         try
         {
             var req = JsonSerializer.Deserialize(json, WatchMarkJsonContext.Default.MarkRequest);
-            // BUG-FUZZER-003: whitespace-only path slips past IsNullOrEmpty,
-            // gets stored, and immediately reconciles to stale — wasting a
-            // mark slot and bumping the version counter for a no-op.
-            if (req == null || string.IsNullOrWhiteSpace(req.Path))
+            if (req == null)
                 return "{\"error\":\"invalid request\"}";
+
+            // BUG-FUZZER-003/004: path hardening.
+            //   1. Normalize: Trim() strips ASCII + Unicode whitespace from edges.
+            //   2. Reject whitespace-only paths (IsNullOrWhiteSpace catches NBSP,
+            //      U+3000 ideographic space, etc.).
+            //   3. Require leading '/': zero-width space U+200B and BOM U+FEFF
+            //      are not .NET whitespace but are never valid data-path prefixes,
+            //      so a StartsWith('/') check also filters them out.
+            //   4. Store the trimmed form so later `unmark --path /p[1]` matches
+            //      what the user typed, not `" /p[1] "` with padding.
+            var trimmedPath = req.Path?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(trimmedPath) || !trimmedPath.StartsWith("/"))
+                return "{\"error\":\"invalid path\"}";
 
             // BUG-TESTER-002: validate color server-side. The browser sets
             // el.style.backgroundColor = mark.color verbatim, so an unsanitized
@@ -1110,14 +1120,26 @@ public class WatchServer : IDisposable
             // single trust boundary for both human-typed CLI and machine agents.
             // CONSISTENCY(mark-color-validation): one validator, both Add and
             // any future Set/update path must call IsValidMarkColor.
-            if (!string.IsNullOrEmpty(req.Color) && !IsValidMarkColor(req.Color))
+            //
+            // BUG-FUZZER-001: Trim() before validation AND before storage, so
+            // `"red\n"` doesn't end up stored as `"red\n"` after being accepted
+            // (the validator trims for matching but used to leave the raw form
+            // in the stored mark, causing a validator-vs-storage inconsistency).
+            var trimmedColor = req.Color?.Trim();
+            // BUG-A-R2-M01: accept bare hex (FF00FF, F0F) for consistency with the
+            // rest of officecli's color parsers. The validator below requires the
+            // canonical #RRGGBB form, so promote 3/6-digit bare hex to that form
+            // before validation. Anything else (named colors, rgb(...), already-
+            // hashed hex) passes through unchanged.
+            trimmedColor = NormalizeMarkColorInput(trimmedColor);
+            if (!string.IsNullOrEmpty(trimmedColor) && !IsValidMarkColor(trimmedColor))
                 return "{\"error\":\"invalid color\"}";
 
             var mark = new WatchMark
             {
-                Path = req.Path,
+                Path = trimmedPath,
                 Find = req.Find,
-                Color = string.IsNullOrEmpty(req.Color) ? "#ffeb3b" : req.Color,
+                Color = string.IsNullOrEmpty(trimmedColor) ? "#ffeb3b" : trimmedColor,
                 Note = req.Note,
                 Expect = req.Expect,
                 MatchedText = Array.Empty<string>(),
@@ -1174,13 +1196,17 @@ public class WatchServer : IDisposable
                     removed = _currentMarks.Count;
                     _currentMarks.Clear();
                 }
-                else if (!string.IsNullOrWhiteSpace(req.Path))
+                else
                 {
-                    // BUG-FUZZER-003: same whitespace-only guard as HandleMarkAdd —
-                    // a "   " path could never have been stored anyway, so reject
-                    // it here to keep both add and remove paths consistent.
-                    removed = _currentMarks.RemoveAll(m =>
-                        string.Equals(m.Path, req.Path, StringComparison.Ordinal));
+                    // BUG-FUZZER-003/004: Trim and require leading '/' for symmetry
+                    // with HandleMarkAdd. Without Trim a `unmark --path " /p[1] "`
+                    // would silently miss a mark added as `/p[1]` and vice versa.
+                    var unmarkPath = req.Path?.Trim() ?? "";
+                    if (!string.IsNullOrWhiteSpace(unmarkPath) && unmarkPath.StartsWith("/"))
+                    {
+                        removed = _currentMarks.RemoveAll(m =>
+                            string.Equals(m.Path, unmarkPath, StringComparison.Ordinal));
+                    }
                 }
                 if (removed > 0) _marksVersion++;
                 snapshot = _currentMarks.ToArray();
@@ -1284,6 +1310,28 @@ public class WatchServer : IDisposable
         "magenta", "brown", "black", "white", "gray", "grey", "lime", "teal",
         "navy", "olive", "maroon", "silver", "gold", "transparent",
     };
+
+    // BUG-A-R2-M01: Promote bare 3- or 6-digit hex to #RRGGBB so the validator
+    // and storage match the rest of officecli's color convention. Returns the
+    // input unchanged for any other shape (named, rgb(...), already #-prefixed,
+    // or null/empty). Idempotent.
+    private static readonly System.Text.RegularExpressions.Regex _bareHex6Rx =
+        new("^[0-9a-fA-F]{6}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex _bareHex3Rx =
+        new("^[0-9a-fA-F]{3}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    internal static string? NormalizeMarkColorInput(string? color)
+    {
+        if (string.IsNullOrEmpty(color)) return color;
+        if (color[0] == '#') return color;
+        if (_bareHex6Rx.IsMatch(color))
+            return "#" + color.ToUpperInvariant();
+        if (_bareHex3Rx.IsMatch(color))
+        {
+            var c = color.ToUpperInvariant();
+            return $"#{c[0]}{c[0]}{c[1]}{c[1]}{c[2]}{c[2]}";
+        }
+        return color;
+    }
 
     internal static bool IsValidMarkColor(string color)
     {
@@ -2058,6 +2106,22 @@ public class WatchServer : IDisposable
                 kick.Connect(500);
             }
             catch { }
+
+            // BUG-BT-003: on Unix, .NET implements named pipes as Unix domain
+            // sockets at $TMPDIR/CoreFxPipe_<name>. The runtime does NOT delete
+            // these on Dispose, so they accumulate in /var/folders across many
+            // watch start/stop cycles (fuzzer found 302 stale files). Clean up
+            // explicitly on Unix; Windows pipes are kernel objects and need no
+            // file cleanup.
+            if (!OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    var sockPath = Path.Combine(Path.GetTempPath(), "CoreFxPipe_" + _pipeName);
+                    if (File.Exists(sockPath)) File.Delete(sockPath);
+                }
+                catch { /* best-effort cleanup */ }
+            }
 
             _cts.Dispose();
         }
