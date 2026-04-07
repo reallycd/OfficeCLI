@@ -181,8 +181,10 @@ public partial class ExcelHandler
 
         // Read default dimensions from sheetFormatPr
         var sheetFmtPr = ws.GetFirstChild<SheetFormatProperties>();
+        // Excel column width → pixels: chars * 7.0017 (POI's DEFAULT_CHARACTER_WIDTH for Calibri 11)
+        // pt = px * 0.75
         var defaultColWidthPt = sheetFmtPr?.DefaultColumnWidth?.Value != null
-            ? sheetFmtPr.DefaultColumnWidth.Value * 5.625 + 3.75 : 48.0;
+            ? sheetFmtPr.DefaultColumnWidth.Value * 7.0017 * 0.75 : 8.43 * 7.0017 * 0.75;
         var defaultRowHeightPt = sheetFmtPr?.DefaultRowHeight?.Value ?? 15.0;
 
         // Read default font size from stylesheet
@@ -223,24 +225,29 @@ public partial class ExcelHandler
             }
         }
 
-        // Determine grid dimensions
+        // Determine grid dimensions — only count cells with actual content (value or formula),
+        // not styled-but-empty cells. Mirrors LibreOffice's GetPrintArea / TrimDataArea behavior.
         var rows = sheetData.Elements<Row>().ToList();
         int maxCol = 0;
         int maxRow = 0;
         foreach (var row in rows)
         {
             var rowIdx = (int)(row.RowIndex?.Value ?? 0);
-            if (rowIdx > maxRow) maxRow = rowIdx;
+            bool rowHasContent = false;
             foreach (var cell in row.Elements<Cell>())
             {
                 var cellRef = cell.CellReference?.Value;
-                if (cellRef != null)
-                {
-                    var (colName, _) = ParseCellReference(cellRef);
-                    var colIdx = ColumnNameToIndex(colName);
-                    if (colIdx > maxCol) maxCol = colIdx;
-                }
+                if (cellRef == null) continue;
+                // Skip empty cells (no value, no formula) — they bloat maxCol with styled blanks
+                var hasValue = cell.CellValue != null && !string.IsNullOrEmpty(cell.CellValue.Text);
+                var hasFormula = cell.CellFormula != null;
+                if (!hasValue && !hasFormula) continue;
+                var (colName, _) = ParseCellReference(cellRef);
+                var colIdx = ColumnNameToIndex(colName);
+                if (colIdx > maxCol) maxCol = colIdx;
+                rowHasContent = true;
             }
+            if (rowHasContent && rowIdx > maxRow) maxRow = rowIdx;
         }
 
         // Empty sheet (SheetData exists but no rows/cells)
@@ -350,9 +357,19 @@ public partial class ExcelHandler
             foreach (var (fromRow, toRow, fromCol, toCol, html) in charts)
                 chartAtRow[fromRow] = (toRow, fromCol, toCol, html);
 
+        // Compute total table width so the table sizes to its content (not the wrapper).
+        // Without an explicit width, table-layout:fixed inside a flex wrapper shrinks columns
+        // proportionally to fit the viewport, ignoring declared col widths.
+        double totalTableWidthPt = 30; // row-header-col width
+        for (int c = 1; c <= maxCol; c++)
+        {
+            if (hiddenCols.Contains(c)) continue;
+            totalTableWidthPt += colWidths.TryGetValue(c, out var cw) ? cw : defaultColWidthPt;
+        }
+
         // Start table
         sb.AppendLine("<div class=\"table-wrapper\">");
-        sb.AppendLine("<table>");
+        sb.AppendLine($"<table style=\"width:{totalTableWidthPt:0.##}pt\">");
         sb.AppendLine($"<caption class=\"sr-only\">{HtmlEncode(sheetName)}</caption>");
 
         // Colgroup for column widths + header column (skip hidden columns to match td count)
@@ -577,7 +594,8 @@ public partial class ExcelHandler
             var min = (int)(col.Min?.Value ?? 1u);
             var max = (int)(col.Max?.Value ?? (uint)min);
             // Hidden columns get width 0
-            var widthPt = col.Hidden?.Value == true ? 0 : (col.Width.Value == 0 ? 0 : col.Width.Value * 5.625 + 3.75);
+            // Excel column width → pixels: chars * 7.0017; pt = px * 0.75 (POI XSSFSheet.getColumnWidthInPixels)
+            var widthPt = col.Hidden?.Value == true ? 0 : (col.Width.Value == 0 ? 0 : col.Width.Value * 7.0017 * 0.75);
             for (int c = min; c <= max; c++)
                 result[c] = widthPt;
         }
@@ -1720,9 +1738,16 @@ public partial class ExcelHandler
             z-index: 2;
             background: #f8f8f8;
             min-width: 40px;
+            /* Drop right border so the data cell's own (often darker) left border shows through.
+               Otherwise, with border-collapse, the row-header's light grey right border can win
+               the collapse contest and erase the merged-cell left border (rowspan cells especially). */
+            border-right: none;
         }
         td {
-            border: 1px solid #e0e0e0;
+            /* No default border. POI/libra approach: only render borders explicitly defined in OOXML.
+               A default 1px light-grey border interferes with border-collapse — it competes with
+               adjacent cells' dark borders and can erase explicit dividers (e.g. row 9→10 in col C
+               where row 9 has no bottom border but row 10 has a dark top border). */
             padding: 2px 4px;
             white-space: nowrap;
             overflow: hidden;
