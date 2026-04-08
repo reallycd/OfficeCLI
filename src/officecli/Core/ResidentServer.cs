@@ -110,56 +110,85 @@ public class ResidentServer : IDisposable
     private async Task RunPingResponderAsync(CancellationToken token)
     {
         var pingPipeName = _pipeName + "-ping";
-        while (!token.IsCancellationRequested)
-        {
-            var server = new NamedPipeServerStream(pingPipeName, PipeDirection.InOut,
-                NamedPipeServerStream.MaxAllowedServerInstances,
-                PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-            try
-            {
-                await server.WaitForConnectionAsync(token);
 
-                // Use raw byte I/O instead of StreamReader/StreamWriter.
-                // StreamReader.ReadLineAsync(CancellationToken) can deadlock on
-                // Windows named pipes under .NET 11 preview — the cancellation-aware
-                // overload uses a different code path that never completes the read.
-                var requestLine = await ReadLineFromPipeAsync(server, token);
-                if (requestLine != null)
+        // BUG-FUZZER-R6-B-01: pre-create the next server instance BEFORE the
+        // current one is disposed, so there is no window where TryConnect can
+        // return false even though the resident is alive. Without this, a
+        // second `officecli open` racing into the dispose-and-recreate gap
+        // would think no resident exists and spawn a duplicate process.
+        // Both instances live concurrently via MaxAllowedServerInstances; the
+        // OS routes the next client to whichever server is in
+        // WaitForConnectionAsync first.
+        NamedPipeServerStream NewServer() => new(pingPipeName, PipeDirection.InOut,
+            NamedPipeServerStream.MaxAllowedServerInstances,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+
+        var current = NewServer();
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
                 {
-                    var request = System.Text.Json.JsonSerializer.Deserialize<ResidentRequest>(requestLine, ResidentJsonContext.Default.ResidentRequest);
-                    if (request?.Command == "__ping__")
+                    await current.WaitForConnectionAsync(token);
+
+                    // Hand over the just-accepted server to the request
+                    // handler and immediately stand up the replacement so the
+                    // pipe is never unlistened. The OS holds the new server
+                    // ready while this request is being processed.
+                    var accepted = current;
+                    current = NewServer();
+
+                    // Use raw byte I/O instead of StreamReader/StreamWriter.
+                    // StreamReader.ReadLineAsync(CancellationToken) can deadlock on
+                    // Windows named pipes under .NET 11 preview — the cancellation-aware
+                    // overload uses a different code path that never completes the read.
+                    try
                     {
-                        var response = MakeResponse(0, _filePath, "");
-                        await WriteLineToPipeAsync(server, response, token);
-                    }
-                    else if (request?.Command == "__close__")
-                    {
-                        var response = MakeResponse(0, "Closing resident.", "");
-                        await WriteLineToPipeAsync(server, response, token);
-                        _cts.Cancel();
-                        // Kick the main pipe listener out of WaitForConnectionAsync
-                        try
+                        var requestLine = await ReadLineFromPipeAsync(accepted, token);
+                        if (requestLine != null)
                         {
-                            using var kick = new NamedPipeClientStream(".", _pipeName, PipeDirection.InOut);
-                            kick.Connect(500);
+                            var request = System.Text.Json.JsonSerializer.Deserialize<ResidentRequest>(requestLine, ResidentJsonContext.Default.ResidentRequest);
+                            if (request?.Command == "__ping__")
+                            {
+                                var response = MakeResponse(0, _filePath, "");
+                                await WriteLineToPipeAsync(accepted, response, token);
+                            }
+                            else if (request?.Command == "__close__")
+                            {
+                                var response = MakeResponse(0, "Closing resident.", "");
+                                await WriteLineToPipeAsync(accepted, response, token);
+                                _cts.Cancel();
+                                // Kick the main pipe listener out of WaitForConnectionAsync
+                                try
+                                {
+                                    using var kick = new NamedPipeClientStream(".", _pipeName, PipeDirection.InOut);
+                                    kick.Connect(500);
+                                }
+                                catch { }
+                                return;
+                            }
                         }
-                        catch { }
-                        break;
+                    }
+                    finally
+                    {
+                        await accepted.DisposeAsync();
                     }
                 }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch
+                {
+                    // Ignore individual request errors; the next iteration's
+                    // current server is already standing by.
+                }
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch
-            {
-                // Ignore ping errors
-            }
-            finally
-            {
-                await server.DisposeAsync();
-            }
+        }
+        finally
+        {
+            try { await current.DisposeAsync(); } catch { }
         }
     }
 
@@ -337,8 +366,13 @@ public class ResidentServer : IDisposable
                 ExecuteValidate();
                 break;
             default:
-                Console.Error.WriteLine($"Unknown command: {request.Command}");
-                break;
+                // BUG-FUZZER-R6-A-06/07: previously this branch only wrote to
+                // stderr and fell through, leaving the response with
+                // ExitCode=0. Callers (and especially the AI agent piping the
+                // CLI) had no way to detect that a typo / case-mangled verb
+                // was actually rejected. Throw so ProcessRequest's exception
+                // handler maps this to a proper non-zero ExitCode response.
+                throw new InvalidOperationException($"Unknown command: {request.Command}");
         }
     }
 

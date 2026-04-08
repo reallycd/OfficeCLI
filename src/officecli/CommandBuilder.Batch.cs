@@ -76,6 +76,40 @@ static partial class CommandBuilder
                 return 0;
             }
 
+            // BUG-FUZZER-R6-03: batch must honour the same .docx document
+            // protection check that `set` enforces. Without this, a protected
+            // doc could be silently modified via
+            //   officecli batch protected.docx --commands '[{"command":"set",...}]'
+            // even though the same set issued via the standalone `set` command
+            // would be rejected. We piggy-back on `--force` (which already
+            // means "ignore safety guards" for the continue-on-error path) so
+            // agents that need to override protection use the same flag they
+            // already know from `set --force`.
+            // CONSISTENCY(docx-protection): if you change the protection
+            // semantics, also update CommandBuilder.Set.cs at the matching
+            // CheckDocxProtection call site.
+            var force = !stopOnError;
+            if (!force && file.Extension.Equals(".docx", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var batchItem in items)
+                {
+                    // Only mutation commands need the protection gate. Read
+                    // commands (get/query/view) are unaffected by document
+                    // protection — protection blocks writes, not reads.
+                    var cmdLower = (batchItem.Command ?? "").ToLowerInvariant();
+                    if (cmdLower is not ("set" or "add" or "remove" or "raw-set"))
+                        continue;
+                    // Property-bag protection-changing op is its own escape
+                    // hatch (mirrors set's isProtectionChange exemption).
+                    if (batchItem.Props != null && batchItem.Props.Keys.Any(k =>
+                        k.Equals("protection", StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    var path = batchItem.Path ?? "";
+                    var rc = CheckDocxProtection(file.FullName, path, json);
+                    if (rc != 0) return rc;
+                }
+            }
+
             // If a resident process is running, forward each command to it
             if (ResidentClient.TryConnect(file.FullName, out _))
             {

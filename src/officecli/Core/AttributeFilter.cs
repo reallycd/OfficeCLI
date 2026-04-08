@@ -293,6 +293,17 @@ public static class AttributeFilter
             return (!string.IsNullOrEmpty(node.Type), node.Type ?? "");
         }
 
+        // BUG-BT-R6-01: "style" falls back to node.Style if not in Format.
+        // Word/PPT handlers populate the top-level DocumentNode.Style property
+        // (serialized as the top-level "style" key in JSON output) but do NOT
+        // duplicate it into Format. Without this fallback, query selectors
+        // like `paragraph[style=Normal]` returned 0 results even though every
+        // paragraph in the document literally had style="Normal".
+        if (string.Equals(key, "style", StringComparison.OrdinalIgnoreCase))
+        {
+            return (!string.IsNullOrEmpty(node.Style), node.Style ?? "");
+        }
+
         return (false, "");
     }
 

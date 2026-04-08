@@ -609,6 +609,23 @@ static partial class CommandBuilder
                     }
                 }
             }
+
+            // Pattern 3 (BUG-BT-R6): common typos for the `--prop` option name.
+            // `--props '{"k":"v"}'` is silently swallowed by System.CommandLine
+            // because `--props` (with trailing s) is not a known option, so the
+            // JSON value goes into UnmatchedTokens too. Catch the typo so the
+            // existing warning machinery emits a clear hint instead of letting
+            // the agent ship a shape with no text.
+            if (token is "--props" or "-props" or "--prop=" && i + 1 < tokens.Count)
+            {
+                var nextToken = tokens[i + 1];
+                if (!nextToken.StartsWith("--"))
+                {
+                    result.Add($"--prop {nextToken}");
+                    i++;
+                    continue;
+                }
+            }
         }
         return result;
     }
