@@ -259,7 +259,11 @@ officecli get-marks report.docx --json \
 officecli get-marks report.docx --json | jq '(.marks // []) | .[] | {find, stale}'
 ```
 
-> **Perf note:** if you're running more than ~3 sequential `set` operations on a watched file, use `batch --input <file.json>` instead — each `set` triggers a watch re-render which can take seconds. `batch` re-renders once at the end.
+> **Perf note:** each standalone `officecli set` (or `add`/`remove`) costs ~3 s end-to-end on a non-trivial deck because it forks a process, opens the file, mutates, and saves on every call — independent of whether `watch` is running. For loops of more than ~3 mutations, prefer one of:
+> - `officecli batch <file>` with all the ops in a single JSON payload (one open/save cycle), or
+> - `officecli open <file>` … many ops … `officecli close <file>` (resident mode keeps the document in memory across commands).
+>
+> A 20-shape `set` loop drops from ~67 s to under 1 s with either approach.
 
 All mark commands support `--json`. Server rejections produce a non-zero exit + error envelope. Even on error, `get-marks --json` always emits a `{version, marks, error?}` shape so the canonical apply pipeline above never crashes on `null`. Check the `error` field if you need to fail fast.
 
