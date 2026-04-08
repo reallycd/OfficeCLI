@@ -3965,6 +3965,14 @@ internal static class PivotTableHelper
                 {
                     dataField.NumberFormatId = nfid;
                 }
+                // showDataAs=percent_* always renders as a fraction in [0,1],
+                // regardless of source column format. Override to built-in
+                // numFmtId 10 ("0.00%") so Excel displays "43.08%" instead of
+                // the bare "0.43" the source format would produce.
+                if (IsPercentShowAs(showAs))
+                {
+                    dataField.NumberFormatId = 10u;
+                }
                 df.AppendChild(dataField);
             }
             pivotDef.DataFields = df;
@@ -5064,6 +5072,12 @@ internal static class PivotTableHelper
                 {
                     dataField.NumberFormatId = nfid;
                 }
+                // CONSISTENCY(percent-numfmt): mirror Add path — percent_* showAs
+                // overrides any inherited numFmtId so values render as percentages.
+                if (IsPercentShowAs(showAs))
+                {
+                    dataField.NumberFormatId = 10u;
+                }
                 df.AppendChild(dataField);
             }
             pivotDef.DataFields = df;
@@ -5358,6 +5372,23 @@ internal static class PivotTableHelper
         if (v == ShowDataAsValues.PercentageDifference) return "percent_diff";
         if (v == ShowDataAsValues.Index) return "index";
         return v.ToString().ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// True if the showAs token is any of the percent_* family
+    /// (percent_of_total / _row / _col + camelCase / "percent" aliases).
+    /// Used to force DataField.NumberFormatId to built-in 10 ("0.00%") so
+    /// computed fractions display as percentages instead of bare decimals.
+    /// </summary>
+    private static bool IsPercentShowAs(string showAs)
+    {
+        return showAs.ToLowerInvariant() switch
+        {
+            "percent_of_total" or "percentoftotal" or "percent" => true,
+            "percent_of_row" or "percentofrow" => true,
+            "percent_of_col" or "percent_of_column" or "percentofcol" or "percentofcolumn" => true,
+            _ => false,
+        };
     }
 
     private static ShowDataAsValues? ParseShowDataAs(string showAs)
