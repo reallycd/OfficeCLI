@@ -26,6 +26,8 @@ internal static partial class PivotTableHelper
         using var _gtScope = PushGrandTotalsOptions(properties);
         // CONSISTENCY(thread-static-pivot-opts): same pattern for subtotals.
         using var _subScope = PushSubtotalsOptions(properties);
+        // CONSISTENCY(thread-static-pivot-opts): same pattern for layout mode.
+        using var _layoutScope = PushLayoutMode(properties);
 
         var unsupported = new List<string>();
         var pivotDef = pivotPart.PivotTableDefinition;
@@ -42,6 +44,24 @@ internal static partial class PivotTableHelper
             _rowGrandTotals = false;
         if (!_colGrandTotals.HasValue && pivotDef.RowGrandTotals?.Value == false)
             _colGrandTotals = false;
+
+        // Seed layout sticky state: detect current layout from definition
+        // attributes when the caller did not explicitly pass layout=. This keeps
+        // the layout stable across unrelated Set operations (e.g. `set rows=...`
+        // must not silently revert an outline pivot to compact).
+        if (_layoutMode == null)
+        {
+            if (pivotDef.Compact?.Value == false)
+            {
+                var firstAxisField = pivotDef.PivotFields?.Elements<PivotField>()
+                    .FirstOrDefault(pf => pf.Axis != null);
+                if (firstAxisField?.Outline?.Value == false)
+                    _layoutMode = "tabular";
+                else
+                    _layoutMode = "outline";
+            }
+            // else: compact (default) — _layoutMode stays null → ActiveLayoutMode returns "compact"
+        }
 
         // Seed subtotals sticky state: if any existing row/col pivotField has
         // DefaultSubtotal=false, assume the user previously turned subtotals off
@@ -187,6 +207,53 @@ internal static partial class PivotTableHelper
                         fieldAreaProps["__sort_only__"] = value;
                     }
                     break;
+                case "layout":
+                {
+                    // Already consumed by PushLayoutMode at the top of this
+                    // method. Apply definition-level + per-field attributes
+                    // immediately, then trigger a re-render for geometry change
+                    // (rowLabelCols depends on layout mode).
+                    var lower = (value ?? "").Trim().ToLowerInvariant();
+                    // Definition-level attributes
+                    if (lower == "compact")
+                    {
+                        pivotDef.Compact = null; // revert to default true
+                        pivotDef.CompactData = null;
+                        pivotDef.Outline = true;
+                        pivotDef.OutlineData = true;
+                    }
+                    else if (lower == "outline")
+                    {
+                        pivotDef.Compact = false;
+                        pivotDef.CompactData = false;
+                        pivotDef.Outline = true;
+                        pivotDef.OutlineData = true;
+                    }
+                    else // tabular
+                    {
+                        pivotDef.Compact = false;
+                        pivotDef.CompactData = false;
+                        pivotDef.Outline = null;
+                        pivotDef.OutlineData = null;
+                    }
+                    // Per-field attributes
+                    if (pivotDef.PivotFields != null)
+                    {
+                        foreach (var pf in pivotDef.PivotFields.Elements<PivotField>())
+                        {
+                            pf.Compact = (lower == "compact") ? null : (BooleanValue)false;
+                            pf.Outline = (lower == "tabular") ? (BooleanValue)false : null;
+                        }
+                    }
+                    // Trigger re-render for geometry change
+                    if (!fieldAreaProps.ContainsKey("rows") && !fieldAreaProps.ContainsKey("cols")
+                        && !fieldAreaProps.ContainsKey("values") && !fieldAreaProps.ContainsKey("filters")
+                        && !fieldAreaProps.ContainsKey("__sort_only__"))
+                    {
+                        fieldAreaProps["__sort_only__"] = "";
+                    }
+                    break;
+                }
                 default:
                 {
                     // R15-4: accept `dataField{N}.showAs=<token>` as the
@@ -380,6 +447,11 @@ internal static partial class PivotTableHelper
             pf.DataField = null;
             pf.DefaultSubtotal = null;
             pf.RemoveAllChildren<Items>();
+            // CONSISTENCY(thread-static-pivot-opts): layout-dependent per-field
+            // attributes. Mirrors BuildPivotTableDefinition per-field logic.
+            var layoutMode = ActiveLayoutMode;
+            pf.Compact = (layoutMode == "compact") ? null : (BooleanValue)false;
+            pf.Outline = (layoutMode == "tabular") ? (BooleanValue)false : null;
 
             // Determine if this field's cache data is numeric (for Items generation)
             var isNumeric = IsFieldNumeric(cacheFields, i);

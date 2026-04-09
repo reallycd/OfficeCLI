@@ -155,13 +155,6 @@ internal static partial class PivotTableHelper
             ItemPrintTitles = true,
             MultipleFieldFilters = false,
             Indent = 0u,
-            // outline + outlineData are emitted by both Microsoft Excel (pivot5.xlsx)
-            // and LibreOffice (pivot_dark1.xlsx). They select the "outline" layout —
-            // the default presentation where row labels stack into one column. Without
-            // these, Excel falls back to a layout that's not fully wired through and
-            // refuses to render the data area.
-            Outline = true,
-            OutlineData = true,
             // Caption attributes — when present, Excel uses these strings instead
             // of its locale-default "Row Labels" / "Column Labels" / "Grand Total".
             // Without these the rendered cells we wrote into sheetData ("地区",
@@ -172,6 +165,22 @@ internal static partial class PivotTableHelper
             ColumnHeaderCaption = colFieldIndices.Count > 0 ? headers[colFieldIndices[0]] : "Columns",
             GrandTotalCaption = "总计"
         };
+
+        // Layout-dependent attributes on PivotTableDefinition.
+        // Compact: compact=default(true), outline=true, outlineData=true
+        // Outline: compact=false, compactData=false, outline=true, outlineData=true
+        // Tabular: compact=false, compactData=false, outline=default, outlineData=default
+        var layoutMode = ActiveLayoutMode;
+        if (layoutMode == "outline" || layoutMode == "tabular")
+        {
+            pivotDef.Compact = false;
+            pivotDef.CompactData = false;
+        }
+        if (layoutMode != "tabular")
+        {
+            pivotDef.Outline = true;
+            pivotDef.OutlineData = true;
+        }
 
         // Grand totals toggles. Both attributes default to true in ECMA-376 —
         // only emit when the user opted out, matching real Excel + LibreOffice
@@ -216,6 +225,14 @@ internal static partial class PivotTableHelper
         for (int i = 0; i < headers.Length; i++)
         {
             var pf = new PivotField { ShowAll = false };
+            // Layout-dependent per-field attributes.
+            // Compact: compact=default(true), outline=default(true)
+            // Outline: compact=false, outline=default(true)
+            // Tabular: compact=false, outline=false
+            if (layoutMode == "outline" || layoutMode == "tabular")
+                pf.Compact = false;
+            if (layoutMode == "tabular")
+                pf.Outline = false;
             var values = i < columnData.Count ? columnData[i] : Array.Empty<string>();
             var isNumeric = values.Length > 0 && values.All(v =>
                 string.IsNullOrEmpty(v) || double.TryParse(v, System.Globalization.CultureInfo.InvariantCulture, out _));

@@ -129,6 +129,24 @@ internal static partial class PivotTableHelper
         // AutoSort — so Set can't round-trip 'sortByField'. See
         // CONSISTENCY(pivot-sort-store) v2 candidate for full AutoSort support.
 
+        // Layout form readback. Detect from definition-level compact attribute
+        // and per-pivotField outline attribute.
+        // Compact = compact=true or absent (default), outline fields = default
+        // Outline = compact=false, pivotField outline = default (true)
+        // Tabular = compact=false, pivotField outline = false
+        {
+            bool defCompact = pivotDef.Compact?.Value ?? true;
+            string layout = "compact";
+            if (!defCompact)
+            {
+                var firstAxisPf = pivotFields?.Elements<PivotField>()
+                    .FirstOrDefault(pf => pf.Axis != null);
+                bool fieldOutline = firstAxisPf?.Outline?.Value ?? true;
+                layout = fieldOutline ? "outline" : "tabular";
+            }
+            node.Format["layout"] = layout;
+        }
+
         // Style
         var styleInfo = pivotDef.PivotTableStyle;
         if (styleInfo?.Name?.HasValue == true)

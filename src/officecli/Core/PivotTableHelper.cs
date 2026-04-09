@@ -1622,7 +1622,6 @@ internal static partial class PivotTableHelper
     internal static void RefreshPivotCellsForView(WorksheetPart worksheetPart)
     {
         var pivotParts = worksheetPart.PivotTableParts.ToList();
-        Console.Error.WriteLine($"DEBUG RefreshPivotCellsForView: {pivotParts.Count} pivot(s)");
         if (pivotParts.Count == 0) return;
 
         foreach (var pivotPart in pivotParts)
@@ -1645,7 +1644,6 @@ internal static partial class PivotTableHelper
                 pivotDef.PageFields?.Elements<PageField>(), f => f.Field?.Value ?? -1);
             var valueFields = ReadCurrentDataFields(pivotDef.DataFields);
 
-            Console.Error.WriteLine($"DEBUG: rows={rowFieldIndices.Count} cols={colFieldIndices.Count} vals={valueFields.Count}");
             if (valueFields.Count == 0) continue;
 
             // Read cache data

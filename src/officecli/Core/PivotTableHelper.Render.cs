@@ -61,6 +61,18 @@ internal static partial class PivotTableHelper
         // N≥3 row or col fields → general tree-based renderer (handles arbitrary depth).
         // N≤2 cases continue to use the specialized renderers below for byte-level
         // backward compatibility (regression-tested via test-samples/pivot_baselines).
+        //
+        // Non-compact layouts (outline/tabular) always route through the general
+        // renderer because specialized renderers hardcode compact-mode column
+        // placement (all row labels in one column). The general renderer handles
+        // multi-column row labels for outline/tabular.
+        if (ActiveLayoutMode != "compact" && valueFields.Count >= 1)
+        {
+            RenderGeneralPivot(targetSheet, position, headers, columnData,
+                rowFieldIndices, colFieldIndices, valueFields, filterFieldIndices, valueStyleIds);
+            return;
+        }
+
         // Catch-all for field combinations not handled by the specialized N≤2
         // renderers below: 0×0, 0×1, 0×2, 2×0. RenderGeneralPivot handles
         // empty row/col axes naturally via empty AxisTrees.
@@ -1666,9 +1678,16 @@ internal static partial class PivotTableHelper
         // (internal tree nodes) from both axes. Leaf positions keep their
         // relative ordering, and the grand total column block is still
         // controlled separately by ActiveRow/ColGrandTotals below.
+        //
+        // Exception: compact mode keeps row-axis internal nodes as label-only
+        // rows even when subtotals are off. Excel's compact layout displays
+        // parent group headers (e.g. product name) as separate indented rows
+        // without aggregated values, so users can see the hierarchy.
         bool emitSubtotals = ActiveDefaultSubtotal;
+        bool compactLabelRows = !emitSubtotals && ActiveLayoutMode == "compact"
+            && rowFieldIndices.Count >= 2;
         var rowPositions = WalkAxisTree(rowTree, isCol: false)
-            .Where(p => emitSubtotals || !p.isSubtotal).ToList();
+            .Where(p => emitSubtotals || !p.isSubtotal || compactLabelRows).ToList();
         var colPositions = WalkAxisTree(colTree, isCol: true)
             .Where(p => emitSubtotals || !p.isSubtotal).ToList();
 
@@ -1819,7 +1838,12 @@ internal static partial class PivotTableHelper
         // separately so the writer doesn't accidentally include it inside the
         // per-outer subtotal block.
         int colCells = colPositions.Count * K;
-        int firstDataCol = anchorColIdx + 1;
+        // Compact: all row fields share one column → firstDataCol = anchor + 1
+        // Outline/Tabular: one column per row field → firstDataCol = anchor + N
+        int rowLabelCols = ActiveLayoutMode == "compact"
+            ? 1
+            : Math.Max(1, rowFieldIndices.Count);
+        int firstDataCol = anchorColIdx + rowLabelCols;
         var colIdxByPosition = new int[colPositions.Count, K];
         for (int p = 0; p < colPositions.Count; p++)
             for (int d = 0; d < K; d++)
@@ -1845,25 +1869,38 @@ internal static partial class PivotTableHelper
         else
             headerRows = 1 + colFieldIndices.Count + (K > 1 ? 1 : 0);
 
+        // Helper: write row field header labels into the label columns.
+        // Compact: single caption at anchorColIdx (first row field name).
+        // Outline/Tabular: one header per row field, each in its own column.
+        void WriteRowFieldHeaders(Row row, int rowIndex)
+        {
+            if (ActiveLayoutMode == "compact")
+            {
+                var caption = rowFieldIndices.Count > 0
+                    ? headers[rowFieldIndices[0]]
+                    : "Row Labels";
+                row.AppendChild(MakeStringCell(anchorColIdx, rowIndex, caption));
+            }
+            else
+            {
+                for (int f = 0; f < rowFieldIndices.Count; f++)
+                    row.AppendChild(MakeStringCell(anchorColIdx + f, rowIndex, headers[rowFieldIndices[f]]));
+            }
+        }
+
         if (colFieldIndices.Count == 0)
         {
-            var rowLabelCaption = rowFieldIndices.Count > 0
-                ? headers[rowFieldIndices[0]]
-                : "Row Labels";
-
             if (K > 1)
             {
-                // R0: "Values" axis caption at col B (first data col).
+                // R0: "Values" axis caption at first data col.
                 var valuesCaptionRow = new Row { RowIndex = (uint)anchorRow };
                 valuesCaptionRow.AppendChild(MakeStringCell(firstDataCol, anchorRow, "Values"));
                 sheetData.AppendChild(valuesCaptionRow);
 
-                // R1: row-label caption at col A, K data field names at cols
-                // B..B+K-1 (which is where grandTotalColStart maps to when
-                // colPositions is empty — there's no body col block).
+                // R1: row-label caption(s), K data field names.
                 int dfHeaderRowIdx = anchorRow + 1;
                 var dfHeaderRow = new Row { RowIndex = (uint)dfHeaderRowIdx };
-                dfHeaderRow.AppendChild(MakeStringCell(anchorColIdx, dfHeaderRowIdx, rowLabelCaption));
+                WriteRowFieldHeaders(dfHeaderRow, dfHeaderRowIdx);
                 if (emitRowGrand)
                 {
                     for (int d = 0; d < K; d++)
@@ -1874,10 +1911,9 @@ internal static partial class PivotTableHelper
             }
             else
             {
-                // Single header row: row-label caption at col A, single data
-                // field name at col B.
+                // Single header row: row-label caption(s), single data field name.
                 var headerRow = new Row { RowIndex = (uint)anchorRow };
-                headerRow.AppendChild(MakeStringCell(anchorColIdx, anchorRow, rowLabelCaption));
+                WriteRowFieldHeaders(headerRow, anchorRow);
                 if (emitRowGrand)
                     headerRow.AppendChild(MakeStringCell(grandTotalColStart, anchorRow, valueFields[0].name));
                 sheetData.AppendChild(headerRow);
@@ -1906,10 +1942,10 @@ internal static partial class PivotTableHelper
             int headerRowIdx = anchorRow + level;
             var headerRow = new Row { RowIndex = (uint)headerRowIdx };
             // Row label column header on the LAST col-field row carries the
-            // outermost row field name (when K=1) or stays empty (when K>1
+            // row field name(s) (when K=1) or stays empty (when K>1
             // because the data-field-name row below carries it).
             if (level == colFieldIndices.Count && K == 1 && rowFieldIndices.Count > 0)
-                headerRow.AppendChild(MakeStringCell(anchorColIdx, headerRowIdx, headers[rowFieldIndices[0]]));
+                WriteRowFieldHeaders(headerRow, headerRowIdx);
 
             for (int p = 0; p < colPositions.Count; p++)
             {
@@ -2013,7 +2049,7 @@ internal static partial class PivotTableHelper
             int dfRowIdx = anchorRow + headerRows - 1;
             var dfRow = new Row { RowIndex = (uint)dfRowIdx };
             if (rowFieldIndices.Count > 0)
-                dfRow.AppendChild(MakeStringCell(anchorColIdx, dfRowIdx, headers[rowFieldIndices[0]]));
+                WriteRowFieldHeaders(dfRow, dfRowIdx);
             for (int p = 0; p < colPositions.Count; p++)
             {
                 var (_, isLeaf, isSubtotal) = colPositions[p];
@@ -2031,30 +2067,48 @@ internal static partial class PivotTableHelper
             var (rowNode, rIsLeaf, rIsSubtotal) = rowPositions[rp];
             int rowIdx = firstDataRowIdx + rp;
             var row = new Row { RowIndex = (uint)rowIdx };
-            var rowLabelCell = MakeStringCell(anchorColIdx, rowIdx, rowNode.Label);
-            // Compact-mode indent: level 1 (outermost row field) gets no indent
-            // (style 0), level 2 gets indent 1, level 3 gets indent 2, etc.
-            // rowNode.Depth is 1-based (1 for top-level children of root).
-            var indentStyle = GetIndentStyleIndex(rowNode.Depth - 1);
-            if (indentStyle != 0) rowLabelCell.StyleIndex = indentStyle;
-            row.AppendChild(rowLabelCell);
-
-            for (int cp = 0; cp < colPositions.Count; cp++)
+            if (ActiveLayoutMode == "compact")
             {
-                var (colNode, cIsLeaf, cIsSubtotal) = colPositions[cp];
-                bool any = HasAnyValue(rowNode, colNode);
-                for (int d = 0; d < K; d++)
+                // Compact-mode: all labels in one column with indentation.
+                // level 1 (outermost row field) gets no indent (style 0),
+                // level 2 gets indent 1, level 3 gets indent 2, etc.
+                var rowLabelCell = MakeStringCell(anchorColIdx, rowIdx, rowNode.Label);
+                var indentStyle = GetIndentStyleIndex(rowNode.Depth - 1);
+                if (indentStyle != 0) rowLabelCell.StyleIndex = indentStyle;
+                row.AppendChild(rowLabelCell);
+            }
+            else
+            {
+                // Outline/Tabular: each row field level writes to its own column.
+                // rowNode.Depth is 1-based; the label goes at column (anchor + depth - 1).
+                int labelCol = anchorColIdx + rowNode.Depth - 1;
+                row.AppendChild(MakeStringCell(labelCol, rowIdx, rowNode.Label));
+            }
+
+            // Label-only rows: compact internal nodes with subtotals off
+            // get the label but no aggregated values (mirrors Excel's compact
+            // layout where parent group headers have no data).
+            bool isLabelOnly = compactLabelRows && rIsSubtotal && !emitSubtotals;
+
+            if (!isLabelOnly)
+            {
+                for (int cp = 0; cp < colPositions.Count; cp++)
                 {
-                    var v = ComputeCell(rowNode, colNode, d);
-                    // Skip 0-value cells when there are no underlying values to
-                    // mirror Excel's behavior of leaving sparse intersections blank.
-                    if (any || v != 0)
-                        row.AppendChild(MakeNumericCell(colIdxByPosition[cp, d], rowIdx, v, valueStyleIds[d]));
+                    var (colNode, cIsLeaf, cIsSubtotal) = colPositions[cp];
+                    bool any = HasAnyValue(rowNode, colNode);
+                    for (int d = 0; d < K; d++)
+                    {
+                        var v = ComputeCell(rowNode, colNode, d);
+                        // Skip 0-value cells when there are no underlying values to
+                        // mirror Excel's behavior of leaving sparse intersections blank.
+                        if (any || v != 0)
+                            row.AppendChild(MakeNumericCell(colIdxByPosition[cp, d], rowIdx, v, valueStyleIds[d]));
+                    }
                 }
             }
 
             // Grand total cells (per data field) — the row's value across all cols.
-            if (emitRowGrand)
+            if (emitRowGrand && !isLabelOnly)
             {
                 var grandRowNode = new AxisNode(string.Empty, 0, Array.Empty<string>());
                 for (int d = 0; d < K; d++)
