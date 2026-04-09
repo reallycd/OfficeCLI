@@ -147,7 +147,7 @@ public partial class ExcelHandler
             var dirAttr = isRtl ? " dir=\"rtl\"" : "";
             sb.AppendLine($"<div class=\"sheet-content{activeClass}\" data-sheet=\"{sheetIdx}\"{dirAttr}>");
             var charts = CollectSheetCharts(worksheetPart);
-            RenderSheetTable(sb, sheetName, renderPart, stylesheet, charts);
+            RenderSheetTable(sb, sheetName, renderPart, stylesheet, charts, sheetIdx);
             sb.AppendLine("</div>");
         }
         sb.AppendLine("</div>");
@@ -202,7 +202,7 @@ public partial class ExcelHandler
     // ==================== Sheet Rendering ====================
 
     private void RenderSheetTable(StringBuilder sb, string sheetName, WorksheetPart worksheetPart, Stylesheet? stylesheet,
-        List<(int fromRow, int toRow, int fromCol, int toCol, string html)>? charts = null)
+        List<(int fromRow, int toRow, int fromCol, int toCol, string html)>? charts = null, int sheetIdx = 0)
     {
         var ws = GetSheet(worksheetPart);
         var sheetData = ws.GetFirstChild<SheetData>();
@@ -495,7 +495,7 @@ public partial class ExcelHandler
                     .Count(c => !hiddenCols.Contains(c));
                 var rowSpan = chartEntry.toRow - r;
 
-                sb.Append("<tr>");
+                sb.Append($"<tr data-row=\"{sheetIdx}-{r}\">");
                 sb.Append($"<th class=\"row-header\">{r}</th>");
                 // Empty cells before the chart
                 for (int c = 1; c < chartFromCol1 && c <= maxCol; c++)
@@ -522,7 +522,7 @@ public partial class ExcelHandler
             // Skip rows that are within a chart's rowspan (but still render non-chart columns)
             if (charts != null && charts.Any(ch => r > ch.fromRow && r < ch.toRow))
             {
-                sb.Append("<tr>");
+                sb.Append($"<tr data-row=\"{sheetIdx}-{r}\">");
                 sb.Append($"<th class=\"row-header\">{r}</th>");
                 var activeChart = charts.First(ch => r > ch.fromRow && r < ch.toRow);
                 var acFromCol1 = activeChart.fromCol + 1;
@@ -541,14 +541,14 @@ public partial class ExcelHandler
                 continue;
             }
 
-            if (hiddenRows.Contains(r)) { sb.AppendLine("<tr style=\"display:none\"></tr>"); continue; }
+            if (hiddenRows.Contains(r)) { sb.AppendLine($"<tr data-row=\"{sheetIdx}-{r}\" style=\"display:none\"></tr>"); continue; }
             bool isRowFrozen = frozenRows > 0 && r <= frozenRows;
             var rowStyles = new List<string>();
             if (rowHeights.TryGetValue(r, out var rh)) rowStyles.Add($"height:{rh:0.##}pt");
             if (isRowFrozen) rowStyles.Add("background:#fff");
             var rowStyle = rowStyles.Count > 0 ? $" style=\"{string.Join(";", rowStyles)}\"" : "";
             var frozenAttr = isRowFrozen ? " data-frozen=\"1\"" : "";
-            sb.Append($"<tr{rowStyle}{frozenAttr}>");
+            sb.Append($"<tr data-row=\"{sheetIdx}-{r}\"{rowStyle}{frozenAttr}>");
 
             // Row header
             string rowHeaderStyle;

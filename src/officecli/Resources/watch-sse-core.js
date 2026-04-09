@@ -244,6 +244,51 @@
             wordPatchUpdate(msg);
             return;
         }
+        if (msg.action === 'excel-patch') {
+            // Version gap check: if we missed messages, fallback to full reload
+            if (msg.baseVersion !== 0 && msg.baseVersion !== _clientVersion) {
+                location.reload();
+                return;
+            }
+            // Apply style patch if present
+            msg.patches.forEach(function(patch) {
+                if (patch.op === 'style') {
+                    var oldStyles = document.querySelectorAll('head style');
+                    oldStyles.forEach(function(s) { s.remove(); });
+                    var tmp = document.createElement('div');
+                    tmp.innerHTML = patch.html;
+                    var styles = tmp.querySelectorAll('style');
+                    styles.forEach(function(s) { document.head.appendChild(s.cloneNode(true)); });
+                    return;
+                }
+                var existing = document.querySelector('tr[data-row="' + patch.row + '"]');
+                if (patch.op === 'replace' && existing) {
+                    var tmp = document.createElement('tbody');
+                    tmp.innerHTML = patch.html;
+                    var newRow = tmp.firstElementChild;
+                    if (newRow) existing.parentNode.replaceChild(newRow, existing);
+                } else if (patch.op === 'remove' && existing) {
+                    existing.remove();
+                } else if (patch.op === 'add' && !existing) {
+                    // Find the tbody in the correct sheet and append
+                    var parts = patch.row.split('-');
+                    var sheetDiv = document.querySelector('.sheet-content[data-sheet="' + parts[0] + '"]');
+                    if (sheetDiv) {
+                        var tbody = sheetDiv.querySelector('tbody');
+                        if (tbody) {
+                            var tmp = document.createElement('tbody');
+                            tmp.innerHTML = patch.html;
+                            var newRow = tmp.firstElementChild;
+                            if (newRow) tbody.appendChild(newRow);
+                        }
+                    }
+                }
+            });
+            if (msg.scrollTo) window._pendingScrollTo = msg.scrollTo;
+            if (msg.version !== undefined) _clientVersion = msg.version;
+            _callReapplyHook();
+            return;
+        }
         if (msg.action === 'full') {
             // Word: fallback diff-based update
             if (document.querySelector('.page-wrapper[data-section]')) {

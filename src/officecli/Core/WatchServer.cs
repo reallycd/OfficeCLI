@@ -366,6 +366,25 @@ internal class WatchServer : IDisposable
                 }
             }
 
+            // Excel: try row-level diff instead of full refresh
+            if (msg.Action == "full" && !string.IsNullOrEmpty(msg.FullHtml)
+                && !string.IsNullOrEmpty(oldHtml) && oldHtml.Contains("data-row=\""))
+            {
+                var excelPatches = ComputeExcelPatches(oldHtml, msg.FullHtml);
+                var oldStyle = ExtractStyleBlock(oldHtml);
+                var newStyle = ExtractStyleBlock(msg.FullHtml);
+                var styleChanged = oldStyle != newStyle;
+
+                if (excelPatches != null || styleChanged)
+                {
+                    excelPatches ??= new List<(string Op, string Row, string? Html)>();
+                    if (styleChanged)
+                        excelPatches.Insert(0, ("style", "", newStyle));
+                    SendSseExcelPatch(excelPatches, _version, baseVersion, msg.ScrollTo);
+                    return;
+                }
+            }
+
             // Forward to SSE clients (full or PPT incremental)
             SendSseEvent(msg.Action, msg.Slide, msg.Html, msg.ScrollTo, _version);
         }
@@ -1025,6 +1044,105 @@ internal class WatchServer : IDisposable
             if (i > 0) sb.Append(',');
             sb.Append("{\"op\":\"").Append(patches[i].Op).Append('"');
             sb.Append(",\"block\":").Append(patches[i].Block);
+            if (patches[i].Html != null)
+            {
+                sb.Append(",\"html\":");
+                AppendJsonString(sb, patches[i].Html!);
+            }
+            sb.Append('}');
+        }
+        sb.Append(']');
+        if (scrollTo != null)
+        {
+            sb.Append(",\"scrollTo\":");
+            AppendJsonString(sb, scrollTo);
+        }
+        sb.Append('}');
+        BroadcastSse(sb.ToString());
+    }
+
+    // ==================== Excel Row-Level Diff ====================
+
+    /// <summary>Split Excel HTML into rows keyed by "sheetIdx-rowNum" from data-row attributes.</summary>
+    private static Dictionary<string, string> SplitExcelRows(string html)
+    {
+        var rows = new Dictionary<string, string>();
+        var rx = new System.Text.RegularExpressions.Regex(@"<tr\s[^>]*data-row=""([^""]+)""[^>]*>");
+        var matches = rx.Matches(html);
+        for (int i = 0; i < matches.Count; i++)
+        {
+            var m = matches[i];
+            var key = m.Groups[1].Value;
+            var contentStart = m.Index;
+            var endTag = "</tr>";
+            var endIdx = html.IndexOf(endTag, contentStart + m.Length, StringComparison.Ordinal);
+            if (endIdx >= 0)
+                rows[key] = html[contentStart..(endIdx + endTag.Length)];
+        }
+        return rows;
+    }
+
+    /// <summary>Compute row-level patches between old and new Excel HTML. Returns null if diff is too large (fallback to full).</summary>
+    internal static List<(string Op, string Row, string? Html)>? ComputeExcelPatches(string oldHtml, string newHtml)
+    {
+        if (string.IsNullOrEmpty(oldHtml) || string.IsNullOrEmpty(newHtml))
+            return null;
+        if (!oldHtml.Contains("data-row=\"") || !newHtml.Contains("data-row=\""))
+            return null;
+
+        var oldRows = SplitExcelRows(oldHtml);
+        var newRows = SplitExcelRows(newHtml);
+
+        if (oldRows.Count == 0 && newRows.Count == 0) return null;
+
+        var patches = new List<(string Op, string Row, string? Html)>();
+
+        // Check all keys from both old and new
+        var allKeys = new HashSet<string>(oldRows.Keys);
+        allKeys.UnionWith(newRows.Keys);
+
+        foreach (var key in allKeys)
+        {
+            var inOld = oldRows.TryGetValue(key, out var oldContent);
+            var inNew = newRows.TryGetValue(key, out var newContent);
+
+            if (inOld && inNew)
+            {
+                if (oldContent != newContent)
+                    patches.Add(("replace", key, newContent));
+            }
+            else if (!inOld && inNew)
+            {
+                patches.Add(("add", key, newContent));
+            }
+            else if (inOld && !inNew)
+            {
+                patches.Add(("remove", key, null));
+            }
+        }
+
+        if (patches.Count == 0) return null;
+
+        // If more than 60% of rows changed, fallback to full refresh
+        var totalRows = Math.Max(oldRows.Count, newRows.Count);
+        if (totalRows >= 5 && patches.Count > totalRows * 0.6)
+            return null;
+
+        return patches;
+    }
+
+    private void SendSseExcelPatch(List<(string Op, string Row, string? Html)> patches, int version, int baseVersion, string? scrollTo)
+    {
+        var sb = new StringBuilder();
+        sb.Append("{\"action\":\"excel-patch\"");
+        sb.Append(",\"version\":").Append(version);
+        sb.Append(",\"baseVersion\":").Append(baseVersion);
+        sb.Append(",\"patches\":[");
+        for (int i = 0; i < patches.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append("{\"op\":\"").Append(patches[i].Op).Append('"');
+            sb.Append(",\"row\":\"").Append(patches[i].Row).Append('"');
             if (patches[i].Html != null)
             {
                 sb.Append(",\"html\":");
