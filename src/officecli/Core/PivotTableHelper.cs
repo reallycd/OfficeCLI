@@ -2553,8 +2553,14 @@ internal static class PivotTableHelper
             ws.AppendChild(sheetData);
         }
 
+        // CONSISTENCY(grand-totals): cache the grand totals toggles once per
+        // render call. emitRowGrand = right column block; emitColGrand = bottom row.
+        bool emitRowGrand = ActiveRowGrandTotals;
+        bool emitColGrand = ActiveColGrandTotals;
+
         // Pre-compute K-aware col positions: each (outer, inner) leaf gets K
         // cells, each outer subtotal gets K cells, K final grand total cells.
+        // Grand total column block is skipped entirely when emitRowGrand=false.
         var leafColPositions = new Dictionary<(string outer, string inner, int d), int>();
         var subtotalColPositions = new Dictionary<(string outer, int d), int>();
         var grandTotalColPositions = new int[K];
@@ -2575,10 +2581,13 @@ internal static class PivotTableHelper
                 currentCol++;
             }
         }
-        for (int d = 0; d < K; d++)
+        if (emitRowGrand)
         {
-            grandTotalColPositions[d] = currentCol;
-            currentCol++;
+            for (int d = 0; d < K; d++)
+            {
+                grandTotalColPositions[d] = currentCol;
+                currentCol++;
+            }
         }
 
         // ----- Header rows -----
@@ -2613,7 +2622,8 @@ internal static class PivotTableHelper
                         innerHdrRowIdx, inner));
                 innerHdrRow.AppendChild(MakeStringCell(subtotalColPositions[(outer, 0)], innerHdrRowIdx, outer + " Total"));
             }
-            innerHdrRow.AppendChild(MakeStringCell(grandTotalColPositions[0], innerHdrRowIdx, totalLabel));
+            if (emitRowGrand)
+                innerHdrRow.AppendChild(MakeStringCell(grandTotalColPositions[0], innerHdrRowIdx, totalLabel));
             sheetData.AppendChild(innerHdrRow);
         }
         else
@@ -2635,9 +2645,12 @@ internal static class PivotTableHelper
                     outerHdrRow.AppendChild(MakeStringCell(subtotalColPositions[(outer, d)],
                         outerHdrRowIdx, $"{outer} {valueFields[d].name}"));
             }
-            for (int d = 0; d < K; d++)
-                outerHdrRow.AppendChild(MakeStringCell(grandTotalColPositions[d],
-                    outerHdrRowIdx, $"Total {valueFields[d].name}"));
+            if (emitRowGrand)
+            {
+                for (int d = 0; d < K; d++)
+                    outerHdrRow.AppendChild(MakeStringCell(grandTotalColPositions[d],
+                        outerHdrRowIdx, $"Total {valueFields[d].name}"));
+            }
             sheetData.AppendChild(outerHdrRow);
 
             // Row 2 (inner col): inner label at the first data col of each (outer, inner) sub-group.
@@ -2693,8 +2706,11 @@ internal static class PivotTableHelper
                         outerSubRow.AppendChild(MakeNumericCell(subtotalColPositions[(colOuter, d)], currentRowIdx, sub, valueStyleIds[d]));
                 }
             }
-            for (int d = 0; d < K; d++)
-                outerSubRow.AppendChild(MakeNumericCell(grandTotalColPositions[d], currentRowIdx, OuterRowGrandTotal(rowOuter, d), valueStyleIds[d]));
+            if (emitRowGrand)
+            {
+                for (int d = 0; d < K; d++)
+                    outerSubRow.AppendChild(MakeNumericCell(grandTotalColPositions[d], currentRowIdx, OuterRowGrandTotal(rowOuter, d), valueStyleIds[d]));
+            }
             sheetData.AppendChild(outerSubRow);
             currentRowIdx++;
 
@@ -2722,29 +2738,38 @@ internal static class PivotTableHelper
                             leafRow.AppendChild(MakeNumericCell(subtotalColPositions[(colOuter, d)], currentRowIdx, sub, valueStyleIds[d]));
                     }
                 }
-                for (int d = 0; d < K; d++)
-                    leafRow.AppendChild(MakeNumericCell(grandTotalColPositions[d], currentRowIdx, LeafRowGrandTotal(rowOuter, rowInner, d), valueStyleIds[d]));
+                if (emitRowGrand)
+                {
+                    for (int d = 0; d < K; d++)
+                        leafRow.AppendChild(MakeNumericCell(grandTotalColPositions[d], currentRowIdx, LeafRowGrandTotal(rowOuter, rowInner, d), valueStyleIds[d]));
+                }
                 sheetData.AppendChild(leafRow);
                 currentRowIdx++;
             }
         }
 
         // Grand total row.
-        var grandRow = new Row { RowIndex = (uint)currentRowIdx };
-        grandRow.AppendChild(MakeStringCell(anchorColIdx, currentRowIdx, totalLabel));
-        foreach (var (colOuter, colInners) in colGroups)
+        if (emitColGrand)
         {
-            foreach (var colInner in colInners)
+            var grandRow = new Row { RowIndex = (uint)currentRowIdx };
+            grandRow.AppendChild(MakeStringCell(anchorColIdx, currentRowIdx, totalLabel));
+            foreach (var (colOuter, colInners) in colGroups)
+            {
+                foreach (var colInner in colInners)
+                    for (int d = 0; d < K; d++)
+                        grandRow.AppendChild(MakeNumericCell(leafColPositions[(colOuter, colInner, d)], currentRowIdx,
+                            GrandRowLeafCol(colOuter, colInner, d), valueStyleIds[d]));
                 for (int d = 0; d < K; d++)
-                    grandRow.AppendChild(MakeNumericCell(leafColPositions[(colOuter, colInner, d)], currentRowIdx,
-                        GrandRowLeafCol(colOuter, colInner, d), valueStyleIds[d]));
-            for (int d = 0; d < K; d++)
-                grandRow.AppendChild(MakeNumericCell(subtotalColPositions[(colOuter, d)], currentRowIdx, GrandRowColSub(colOuter, d), valueStyleIds[d]));
+                    grandRow.AppendChild(MakeNumericCell(subtotalColPositions[(colOuter, d)], currentRowIdx, GrandRowColSub(colOuter, d), valueStyleIds[d]));
+            }
+            if (emitRowGrand)
+            {
+                for (int d = 0; d < K; d++)
+                    grandRow.AppendChild(MakeNumericCell(grandTotalColPositions[d], currentRowIdx,
+                        Reduce(perDataField[d], valueFields[d].func), valueStyleIds[d]));
+            }
+            sheetData.AppendChild(grandRow);
         }
-        for (int d = 0; d < K; d++)
-            grandRow.AppendChild(MakeNumericCell(grandTotalColPositions[d], currentRowIdx,
-                Reduce(perDataField[d], valueFields[d].func), valueStyleIds[d]));
-        sheetData.AppendChild(grandRow);
 
         // Page filter cells (same logic as the other renderers).
         if (filterFieldIndices != null && filterFieldIndices.Count > 0)
