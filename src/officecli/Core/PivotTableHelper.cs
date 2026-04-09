@@ -354,17 +354,34 @@ internal static class PivotTableHelper
     // ~15 nested sites (item builders, geometry, all 6 renderers, definition
     // builder), and threading parameters would explode signature churn.
     //
-    // OOXML semantics (ECMA-376 § 18.10.1.73 on pivotTableDefinition):
-    //   rowGrandTotals — "Show grand totals for rows" = per-row grand totals
-    //                    = RIGHTMOST grand total COLUMN (a total for each row)
-    //   colGrandTotals — "Show grand totals for columns" = per-col grand totals
-    //                    = BOTTOM grand total ROW (a total for each column)
+    // OOXML semantics (ECMA-376 § 18.10.1.73 on pivotTableDefinition), EMPIRICALLY
+    // VERIFIED against an Excel-authored pivot the user created via
+    // "Grand Totals → On for Rows Only" in the UI (test-samples/grand_totals_demo_Fix.xlsx):
+    //   rowGrandTotals  — BOTTOM grand total ROW (one row at the bottom of the
+    //                     pivot containing the per-col grand totals). Excel UI's
+    //                     "On for Rows Only" enables this and writes colGrandTotals=0.
+    //   colGrandTotals  — RIGHTMOST grand total COLUMN (one column at the right
+    //                     of the pivot containing the per-row grand totals). Excel UI's
+    //                     "On for Columns Only" enables this and writes rowGrandTotals=0.
+    //
+    // ⚠️  WARNING — HISTORICAL BUG: the initial implementation of this feature had
+    // the mapping BACKWARDS (assumed rowGrandTotals = right column). The ThreadStatic
+    // names below are kept stable to minimize churn, but their meaning was REDEFINED
+    // during bug fix commit: `_rowGrandTotals` is the CLI-level flag whose true/false
+    // maps to "render right column yes/no" (= OOXML colGrandTotals), and
+    // `_colGrandTotals` maps to "render bottom row yes/no" (= OOXML rowGrandTotals).
+    // The renderer / geometry / item builders use `ActiveRowGrandTotals` /
+    // `ActiveColGrandTotals` to mean "right col visible" / "bottom row visible"
+    // respectively. The attribute writer / reader / parser swap the names when
+    // talking to OOXML so the final XML and visual match Excel UI.
     //
     // Both default to true. We only write the attribute when the user
     // explicitly opts out (matches how real Excel + LibreOffice serialize).
     [ThreadStatic] private static bool? _rowGrandTotals;
     [ThreadStatic] private static bool? _colGrandTotals;
 
+    // ActiveRowGrandTotals: "render the right grand-total column" (= OOXML colGrandTotals)
+    // ActiveColGrandTotals: "render the bottom grand-total row"   (= OOXML rowGrandTotals)
     private static bool ActiveRowGrandTotals => _rowGrandTotals ?? true;
     private static bool ActiveColGrandTotals => _colGrandTotals ?? true;
 
@@ -380,8 +397,11 @@ internal static class PivotTableHelper
         var prevRow = _rowGrandTotals;
         var prevCol = _colGrandTotals;
 
-        // Master 'grandTotals' key (friendly). 'rows' means only per-row grand
-        // totals (right column); 'cols' means only per-col grand totals (bottom).
+        // Master 'grandTotals' key (friendly), matching Excel UI semantics:
+        //   'rows' = Excel's "On for Rows Only" = BOTTOM row visible, right col hidden
+        //   'cols' = Excel's "On for Columns Only" = RIGHT col visible, bottom row hidden
+        // Internally: _rowGrandTotals = "render right col", _colGrandTotals = "render bottom row"
+        // (see comment at the ThreadStatic declaration above).
         if (properties.TryGetValue("grandTotals", out var gt)
             || properties.TryGetValue("grandtotals", out gt))
         {
@@ -392,19 +412,23 @@ internal static class PivotTableHelper
                 case "none": case "off": case "false": case "0": case "no":
                     _rowGrandTotals = false; _colGrandTotals = false; break;
                 case "rows": case "row":
-                    _rowGrandTotals = true; _colGrandTotals = false; break;
-                case "cols": case "col": case "columns":
+                    // "On for Rows Only" = only bottom row, no right col.
                     _rowGrandTotals = false; _colGrandTotals = true; break;
+                case "cols": case "col": case "columns":
+                    // "On for Columns Only" = only right col, no bottom row.
+                    _rowGrandTotals = true; _colGrandTotals = false; break;
             }
         }
 
-        // Fine-grained bool keys (OOXML-level), parsed AFTER the master key
-        // so they override it when both are supplied.
+        // Fine-grained bool keys mirror OOXML attribute names (ECMA-376):
+        //   rowGrandTotals=... → bottom row toggle (internal: _colGrandTotals)
+        //   colGrandTotals=... → right col toggle  (internal: _rowGrandTotals)
+        // Parsed AFTER the master key so they override it when both are supplied.
         if (TryParseBoolProp(properties, "rowGrandTotals", out var rgt))
-            _rowGrandTotals = rgt;
+            _colGrandTotals = rgt;
         if (TryParseBoolProp(properties, "colGrandTotals", out var cgt)
             || TryParseBoolProp(properties, "columnGrandTotals", out cgt))
-            _colGrandTotals = cgt;
+            _rowGrandTotals = cgt;
 
         return new GrandTotalsScope(prevRow, prevCol);
     }
@@ -4489,8 +4513,11 @@ internal static class PivotTableHelper
         // Grand totals toggles. Both attributes default to true in ECMA-376 —
         // only emit when the user opted out, matching real Excel + LibreOffice
         // serialization behavior.
-        if (!ActiveRowGrandTotals) pivotDef.RowGrandTotals = false;
-        if (!ActiveColGrandTotals) pivotDef.ColumnGrandTotals = false;
+        // OOXML attribute mapping (ECMA-376, empirically verified):
+        //   RowGrandTotals    = BOTTOM grand total ROW  (→ internal _colGrandTotals)
+        //   ColumnGrandTotals = RIGHT grand total COLUMN (→ internal _rowGrandTotals)
+        if (!ActiveRowGrandTotals) pivotDef.ColumnGrandTotals = false;
+        if (!ActiveColGrandTotals) pivotDef.RowGrandTotals = false;
 
         // Use typed property setters to ensure correct schema order
 
@@ -5867,9 +5894,12 @@ internal static class PivotTableHelper
         // when the caller did not explicitly pass the keys. This keeps prior
         // toggles sticky across unrelated Set operations (e.g. `set rows=...`
         // must not silently re-enable grand totals that were turned off earlier).
-        if (!_rowGrandTotals.HasValue && pivotDef.RowGrandTotals?.Value == false)
+        // OOXML attribute → internal flag mapping:
+        //   RowGrandTotals (bottom row)    → _colGrandTotals
+        //   ColumnGrandTotals (right col)  → _rowGrandTotals
+        if (!_rowGrandTotals.HasValue && pivotDef.ColumnGrandTotals?.Value == false)
             _rowGrandTotals = false;
-        if (!_colGrandTotals.HasValue && pivotDef.ColumnGrandTotals?.Value == false)
+        if (!_colGrandTotals.HasValue && pivotDef.RowGrandTotals?.Value == false)
             _colGrandTotals = false;
 
         // Seed subtotals sticky state: if any existing row/col pivotField has
@@ -6391,11 +6421,13 @@ internal static class PivotTableHelper
         // Sync grand-totals attributes. Only touch when the caller explicitly
         // set them in this Set call (_*.HasValue); otherwise leave whatever
         // the definition already carried so repeated Sets don't clobber an
-        // earlier toggle.
+        // earlier toggle. OOXML mapping: internal _rowGrandTotals controls
+        // the right column → OOXML ColumnGrandTotals; _colGrandTotals controls
+        // the bottom row → OOXML RowGrandTotals.
         if (_rowGrandTotals.HasValue)
-            pivotDef.RowGrandTotals = _rowGrandTotals.Value ? null : (BooleanValue)false;
+            pivotDef.ColumnGrandTotals = _rowGrandTotals.Value ? null : (BooleanValue)false;
         if (_colGrandTotals.HasValue)
-            pivotDef.ColumnGrandTotals = _colGrandTotals.Value ? null : (BooleanValue)false;
+            pivotDef.RowGrandTotals = _colGrandTotals.Value ? null : (BooleanValue)false;
 
         // Rebuild RowItems / ColumnItems for the new field assignments. The previous
         // configuration's row/col layout no longer matches; without these the rendered
