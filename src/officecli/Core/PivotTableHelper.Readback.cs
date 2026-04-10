@@ -147,6 +147,13 @@ internal static partial class PivotTableHelper
             node.Format["layout"] = layout;
         }
 
+        // grandTotalCaption readback
+        {
+            var caption = pivotDef.GrandTotalCaption?.Value;
+            if (!string.IsNullOrEmpty(caption) && caption != "Grand Total")
+                node.Format["grandTotalCaption"] = caption;
+        }
+
         // insertBlankRow readback — check outermost row axis field
         if (pivotFields != null)
         {

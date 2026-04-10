@@ -199,7 +199,7 @@ internal static partial class PivotTableHelper
             "source", "src", "name", "position", "pos", "style",
             "rows", "cols", "filters", "values",
             "aggregate", "showdataas", "topn",
-            "sort", "layout", "repeatlabels", "blankrows",
+            "sort", "layout", "repeatlabels", "blankrows", "grandtotalcaption",
             "grandtotals", "rowgrandtotals", "colgrandtotals",
             "subtotals", "defaultsubtotal",
             // <pivotTableStyleInfo> bool toggles (see ApplyPivotStyleInfoProps).
@@ -613,6 +613,27 @@ internal static partial class PivotTableHelper
         public void Dispose() { _insertBlankRow = _prev; }
     }
 
+    // CONSISTENCY(thread-static-pivot-opts): grandTotalCaption — user-specified
+    // label for the grand total row/column. Defaults to "Grand Total".
+    [ThreadStatic] private static string? _grandTotalCaption;
+
+    private static string ActiveGrandTotalCaption => _grandTotalCaption ?? "Grand Total";
+
+    private static IDisposable PushGrandTotalCaption(Dictionary<string, string> properties)
+    {
+        var prev = _grandTotalCaption;
+        if (properties.TryGetValue("grandtotalcaption", out var val) && !string.IsNullOrWhiteSpace(val))
+            _grandTotalCaption = val.Trim();
+        return new GrandTotalCaptionScope(prev);
+    }
+
+    private sealed class GrandTotalCaptionScope : IDisposable
+    {
+        private readonly string? _prev;
+        public GrandTotalCaptionScope(string? prev) { _prev = prev; }
+        public void Dispose() { _grandTotalCaption = _prev; }
+    }
+
     /// <summary>
     /// Apply axis ordering (ascending/descending) to an OrderBy clause using
     /// the currently-active sort mode. All axis sort sites use this helper.
@@ -784,6 +805,8 @@ internal static partial class PivotTableHelper
         using var _repeatScope = PushRepeatItemLabels(properties);
         // CONSISTENCY(thread-static-pivot-opts): same pattern for insertBlankRow.
         using var _blankRowScope = PushInsertBlankRow(properties);
+        // CONSISTENCY(thread-static-pivot-opts): same pattern for grandTotalCaption.
+        using var _captionScope = PushGrandTotalCaption(properties);
 
         // 1. Read source data to build cache
         var (headers, columnData, columnStyleIds) = ReadSourceData(sourceSheet, sourceRef);

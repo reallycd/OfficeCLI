@@ -257,7 +257,7 @@ internal static partial class PivotTableHelper
         // multi_data_authored.xlsx exactly.
         var (anchorCol, anchorRow) = ParseCellRef(position);
         var anchorColIdx = ColToIndex(anchorCol);
-        var totalColLabel = "Grand Total";
+        var totalColLabel = ActiveGrandTotalCaption;
 
         var ws = targetSheet.Worksheet
             ?? throw new InvalidOperationException("Target worksheet has no Worksheet element");
@@ -593,7 +593,7 @@ internal static partial class PivotTableHelper
         // ===== Write cells =====
         var (anchorCol, anchorRow) = ParseCellRef(position);
         var anchorColIdx = ColToIndex(anchorCol);
-        var totalLabel = "Grand Total";
+        var totalLabel = ActiveGrandTotalCaption;
 
         var ws = targetSheet.Worksheet
             ?? throw new InvalidOperationException("Target worksheet has no Worksheet element");
@@ -914,7 +914,7 @@ internal static partial class PivotTableHelper
         // ===== Write cells =====
         var (anchorCol, anchorRow) = ParseCellRef(position);
         var anchorColIdx = ColToIndex(anchorCol);
-        var totalLabel = "Grand Total";
+        var totalLabel = ActiveGrandTotalCaption;
 
         var ws = targetSheet.Worksheet
             ?? throw new InvalidOperationException("Target worksheet has no Worksheet element");
@@ -1348,7 +1348,7 @@ internal static partial class PivotTableHelper
         // ===== Write cells =====
         var (anchorCol, anchorRow) = ParseCellRef(position);
         var anchorColIdx = ColToIndex(anchorCol);
-        var totalLabel = "Grand Total";
+        var totalLabel = ActiveGrandTotalCaption;
 
         var ws = targetSheet.Worksheet
             ?? throw new InvalidOperationException("Target worksheet has no Worksheet element");
@@ -1787,7 +1787,7 @@ internal static partial class PivotTableHelper
         // ===== Write cells =====
         var (anchorCol, anchorRow) = ParseCellRef(position);
         var anchorColIdx = ColToIndex(anchorCol);
-        var totalLabel = "Grand Total";
+        var totalLabel = ActiveGrandTotalCaption;
 
         var ws = targetSheet.Worksheet
             ?? throw new InvalidOperationException("Target worksheet has no Worksheet element");

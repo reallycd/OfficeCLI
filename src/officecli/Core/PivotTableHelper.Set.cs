@@ -32,6 +32,8 @@ internal static partial class PivotTableHelper
         using var _repeatScope = PushRepeatItemLabels(properties);
         // CONSISTENCY(thread-static-pivot-opts): same pattern for insertBlankRow.
         using var _blankRowScope = PushInsertBlankRow(properties);
+        // CONSISTENCY(thread-static-pivot-opts): same pattern for grandTotalCaption.
+        using var _captionScope = PushGrandTotalCaption(properties);
 
         var unsupported = new List<string>();
         var pivotDef = pivotPart.PivotTableDefinition;
@@ -290,6 +292,18 @@ internal static partial class PivotTableHelper
                         extLst.AppendChild(ext);
                     }
                     // Trigger re-render
+                    if (!fieldAreaProps.ContainsKey("rows") && !fieldAreaProps.ContainsKey("cols")
+                        && !fieldAreaProps.ContainsKey("values") && !fieldAreaProps.ContainsKey("filters")
+                        && !fieldAreaProps.ContainsKey("__sort_only__"))
+                    {
+                        fieldAreaProps["__sort_only__"] = "";
+                    }
+                    break;
+                }
+                case "grandtotalcaption":
+                {
+                    pivotDef.GrandTotalCaption = value?.Trim() ?? "Grand Total";
+                    // Trigger re-render so materialized cells reflect the new caption
                     if (!fieldAreaProps.ContainsKey("rows") && !fieldAreaProps.ContainsKey("cols")
                         && !fieldAreaProps.ContainsKey("values") && !fieldAreaProps.ContainsKey("filters")
                         && !fieldAreaProps.ContainsKey("__sort_only__"))
