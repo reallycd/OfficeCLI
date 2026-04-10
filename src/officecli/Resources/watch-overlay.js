@@ -24,7 +24,7 @@
         });
         _selection.forEach(function(path) {
             try {
-                var sel = '[data-path="' + path.replace(/"/g, '\\"') + '"]';
+                var sel = '[data-path="' + path.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]';
                 document.querySelectorAll(sel).forEach(function(el) {
                     el.classList.add('officecli-selected');
                 });
@@ -206,7 +206,7 @@
             if (!m || !m.path) continue;
             var el;
             try {
-                var sel = '[data-path="' + m.path.replace(/"/g, '\\"') + '"]';
+                var sel = '[data-path="' + m.path.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]';
                 el = _markRoot.querySelector(sel);
             } catch (e) { el = null; }
             if (!el) {
