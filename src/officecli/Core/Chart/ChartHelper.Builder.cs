@@ -100,6 +100,26 @@ internal static partial class ChartHelper
                 chartElement = BuildLineChart(stacked, percentStacked,
                     categories, seriesData, catAxisId, valAxisId, colors);
                 break;
+            case "area" when is3D:
+            {
+                var grouping3d = percentStacked ? C.GroupingValues.PercentStacked
+                    : stacked ? C.GroupingValues.Stacked
+                    : C.GroupingValues.Standard;
+                var area3d = new C.Area3DChart(
+                    new C.Grouping { Val = grouping3d },
+                    new C.VaryColors { Val = false }
+                );
+                for (int i = 0; i < seriesData.Count; i++)
+                {
+                    var color = colors != null && i < colors.Length ? colors[i] : DefaultSeriesColors[i % DefaultSeriesColors.Length];
+                    area3d.AppendChild(BuildAreaSeries((uint)i, seriesData[i].name,
+                        categories, seriesData[i].values, color));
+                }
+                area3d.AppendChild(new C.AxisId { Val = catAxisId });
+                area3d.AppendChild(new C.AxisId { Val = valAxisId });
+                chartElement = area3d;
+                break;
+            }
             case "area":
                 chartElement = BuildAreaChart(stacked, percentStacked,
                     categories, seriesData, catAxisId, valAxisId, colors);

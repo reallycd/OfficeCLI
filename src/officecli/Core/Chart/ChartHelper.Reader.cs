@@ -503,7 +503,7 @@ internal static partial class ChartHelper
         // series (flat values, no marker, dashed outline) is a ref-line overlay added by
         // AddReferenceLine — it must not promote the underlying chart to a "combo".
         var chartTypeCount = plotArea.ChildElements
-            .Count(e => (e is C.BarChart or C.LineChart or C.PieChart or C.AreaChart
+            .Count(e => (e is C.BarChart or C.LineChart or C.PieChart or C.AreaChart or C.Area3DChart
                 or C.ScatterChart or C.DoughnutChart or C.Bar3DChart or C.Line3DChart or C.Pie3DChart
                 or C.BubbleChart or C.RadarChart or C.StockChart)
                 && !(e is C.LineChart lc && IsReferenceLineOnlyChart(lc)));
@@ -533,6 +533,13 @@ internal static partial class ChartHelper
             if (areaGrp == "stacked") return "area_stacked";
             if (areaGrp == "percentStacked") return "area_percentStacked";
             return "area";
+        }
+        if (plotArea.GetFirstChild<C.Area3DChart>() is C.Area3DChart area3d)
+        {
+            var area3dGrp = area3d.GetFirstChild<C.Grouping>()?.Val?.InnerText;
+            if (area3dGrp == "stacked") return "area3d_stacked";
+            if (area3dGrp == "percentStacked") return "area3d_percentStacked";
+            return "area3d";
         }
         if (plotArea.GetFirstChild<C.ScatterChart>() != null) return "scatter";
         if (plotArea.GetFirstChild<C.BubbleChart>() != null) return "bubble";
