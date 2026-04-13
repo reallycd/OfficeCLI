@@ -38,15 +38,14 @@
         return { sheet: sheet, minC: minC, maxC: maxC, minR: minR, maxR: maxR, cells: cells };
     }
 
-    var _SEL_CLASSES = ['officecli-selected', 'officecli-sel-range',
-        'officecli-sel-t', 'officecli-sel-b', 'officecli-sel-l', 'officecli-sel-r',
-        'officecli-sel-handle'];
+    var _SEL_CLASSES = ['officecli-selected', 'officecli-sel-range', 'officecli-sel-handle'];
 
     function applySelectionToDom() {
-        // Clear all selection classes
+        // Clear all selection classes + inline box-shadow from previous range
         var allSel = _SEL_CLASSES.map(function(c) { return '.' + c; }).join(',');
         document.querySelectorAll(allSel).forEach(function(el) {
             _SEL_CLASSES.forEach(function(c) { el.classList.remove(c); });
+            el.style.boxShadow = '';
         });
         if (_selection.length === 0) return;
 
@@ -66,17 +65,21 @@
                     document.querySelectorAll(cs).forEach(function(th) { th.classList.add('officecli-selected'); });
                 } catch(e) {}
             }
-            // Apply range fill + edge borders to cells
+            // Apply range fill + inset box-shadow for perimeter (no layout shift)
+            var B = '#217346', W = 2; // border color and width
             for (var i = 0; i < rect.cells.length; i++) {
                 var cell = rect.cells[i];
                 try {
                     var sel = '[data-path="' + cell.path.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]';
                     document.querySelectorAll(sel).forEach(function(el) {
                         el.classList.add('officecli-sel-range');
-                        if (cell.row === rect.minR) el.classList.add('officecli-sel-t');
-                        if (cell.row === rect.maxR) el.classList.add('officecli-sel-b');
-                        if (cell.col === rect.minC) el.classList.add('officecli-sel-l');
-                        if (cell.col === rect.maxC) el.classList.add('officecli-sel-r');
+                        // Build inset box-shadow for edge borders
+                        var shadows = [];
+                        if (cell.row === rect.minR) shadows.push('inset 0 '+W+'px 0 '+B);
+                        if (cell.row === rect.maxR) shadows.push('inset 0 -'+W+'px 0 '+B);
+                        if (cell.col === rect.minC) shadows.push('inset '+W+'px 0 0 '+B);
+                        if (cell.col === rect.maxC) shadows.push('inset -'+W+'px 0 0 '+B);
+                        if (shadows.length > 0) el.style.boxShadow = shadows.join(',');
                         if (cell.row === rect.maxR && cell.col === rect.maxC)
                             el.classList.add('officecli-sel-handle');
                     });
@@ -177,16 +180,11 @@
     (function() {
         var style = document.createElement('style');
         style.textContent =
-            // Range fill: light gray/blue like real Excel
+            // Range fill: light gray like real Excel (box-shadow for borders, no layout shift)
             'td.officecli-sel-range{' +
                 'background:rgba(33,115,70,0.10) !important;' +
                 'position:relative;' +
             '}' +
-            // Range perimeter borders (only on edges)
-            'td.officecli-sel-t{border-top:2px solid #217346 !important;}' +
-            'td.officecli-sel-b{border-bottom:2px solid #217346 !important;}' +
-            'td.officecli-sel-l{border-left:2px solid #217346 !important;}' +
-            'td.officecli-sel-r{border-right:2px solid #217346 !important;}' +
             // Fill handle: small square at bottom-right corner of range
             'td.officecli-sel-handle::after{' +
                 'content:"";position:absolute;right:-4px;bottom:-4px;' +
