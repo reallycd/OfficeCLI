@@ -485,7 +485,8 @@ public class ResidentServer : IDisposable
                 return MakeResponse(0, envelope, "");
             }
 
-            return MakeResponse(0, stdout, stderr);
+            int exitCode = stderr.Contains("UNSUPPORTED") ? 2 : 0;
+            return MakeResponse(exitCode, stdout, stderr);
         }
         catch (Exception ex)
         {
@@ -878,7 +879,10 @@ public class ResidentServer : IDisposable
         var path = req.GetArg("path", "/");
         var properties = req.GetProps();
         var unsupported = _handler.Set(path, properties);
-        var applied = properties.Where(kv => !unsupported.Contains(kv.Key)).ToList();
+        var unsupportedKeys = unsupported
+            .Select(u => u.Contains(' ') ? u[..u.IndexOf(' ')] : u)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var applied = properties.Where(kv => !unsupportedKeys.Contains(kv.Key)).ToList();
         if (applied.Count > 0)
             Console.WriteLine($"Updated {path}: {string.Join(", ", applied.Select(kv => $"{kv.Key}={kv.Value}"))}");
         else if (unsupported.Count > 0)
