@@ -1643,8 +1643,8 @@ public partial class ExcelHandler
                 // Step 3: Restore minute placeholders
                 dotnetFmt = dotnetFmt.Replace("\x01\x01", "mm").Replace("\x01", "m");
                 // Step 4: Other conversions
-                // If AM/PM format (has 'tt' or 't'), use h (12h); otherwise use H (24h)
-                if (!dotnetFmt.Contains('t'))
+                // If AM/PM format (has 't' outside quotes), use h (12h); otherwise use H (24h)
+                if (!ContainsCharOutsideQuotes(dotnetFmt, 't'))
                     dotnetFmt = dotnetFmt.Replace("hh", "HH").Replace("h", "H");
                 dotnetFmt = dotnetFmt.Replace("dddd", "dddd").Replace("ddd", "ddd").Replace("dd", "dd");
                 return dt.ToString(dotnetFmt, System.Globalization.CultureInfo.InvariantCulture);
@@ -1723,6 +1723,20 @@ public partial class ExcelHandler
                 var lower = char.ToLowerInvariant(ch);
                 if (lower is 'y' or 'm' or 'd' or 'h' or 's') return true;
             }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Returns true if ch appears outside double-quoted strings in fmtCode.
+    /// </summary>
+    private static bool ContainsCharOutsideQuotes(string fmtCode, char target)
+    {
+        bool inQuote = false;
+        foreach (var ch in fmtCode)
+        {
+            if (ch == '"') { inQuote = !inQuote; continue; }
+            if (!inQuote && ch == target) return true;
         }
         return false;
     }
