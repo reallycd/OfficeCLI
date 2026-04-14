@@ -3,6 +3,7 @@
 
 using System.CommandLine;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using OfficeCli.Core;
 using OfficeCli.Handlers;
@@ -160,24 +161,53 @@ static partial class CommandBuilder
             return false;
         }
 
+        // On Windows, .NET's UseShellExecute=false always calls CreateProcess
+        // with bInheritHandles=TRUE (even without explicit redirects), which
+        // leaks the caller's pipe handles into the resident child.  When the
+        // caller's stdout is a pipe ($(), | cat, CI, SDK), the pipe never
+        // gets EOF until the resident exits (~60s idle), blocking the caller.
+        //
+        // Fix: temporarily mark our own std handles as non-inheritable before
+        // spawning, then restore.  This prevents the shell's pipe handles
+        // from leaking into the resident while still allowing .NET's internal
+        // handle plumbing to work.
         var startInfo = new ProcessStartInfo
         {
             FileName = exePath,
             Arguments = $"__resident-serve__ \"{filePath}\"",
             UseShellExecute = false,
             CreateNoWindow = true,
-            // Do NOT redirect stdout: on Windows, RedirectStandardOutput
-            // causes bInheritHandles=TRUE which leaks the outer shell's
-            // pipe handle into the resident, blocking the caller for ~60s
-            // until the resident's idle timeout.  Stderr is still redirected
-            // to capture diagnostics if the resident fails during startup.
             RedirectStandardError = true
         };
 
         if (idleSeconds.HasValue)
             startInfo.Environment["OFFICECLI_RESIDENT_IDLE_SECONDS"] = idleSeconds.Value.ToString();
 
-        var process = Process.Start(startInfo);
+        // Prevent the shell's pipe handles from leaking into the resident.
+        bool isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+        nint hStdOut = 0, hStdErr = 0, hStdIn = 0;
+        if (isWindows)
+        {
+            hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+            hStdErr = GetStdHandle(STD_ERROR_HANDLE);
+            hStdIn  = GetStdHandle(STD_INPUT_HANDLE);
+            SetHandleInformation(hStdOut, HANDLE_FLAG_INHERIT, 0);
+            SetHandleInformation(hStdErr, HANDLE_FLAG_INHERIT, 0);
+            SetHandleInformation(hStdIn,  HANDLE_FLAG_INHERIT, 0);
+        }
+
+        Process? process;
+        try { process = Process.Start(startInfo); }
+        finally
+        {
+            if (isWindows)
+            {
+                SetHandleInformation(hStdOut, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+                SetHandleInformation(hStdErr, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+                SetHandleInformation(hStdIn,  HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+            }
+        }
+
         if (process == null)
         {
             error = "Failed to start resident process.";
@@ -206,6 +236,20 @@ static partial class CommandBuilder
         process.Dispose();
         return false;
     }
+
+    // ==================== Win32 P/Invoke for handle inheritance control ==========
+
+    private const int STD_INPUT_HANDLE  = -10;
+    private const int STD_OUTPUT_HANDLE = -11;
+    private const int STD_ERROR_HANDLE  = -12;
+    private const uint HANDLE_FLAG_INHERIT = 0x00000001;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetHandleInformation(nint hObject, uint dwMask, uint dwFlags);
 
     // ==================== Helper: try forwarding to resident ====================
     //
