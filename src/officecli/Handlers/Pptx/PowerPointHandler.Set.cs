@@ -1083,15 +1083,57 @@ public partial class PowerPointHandler
                         if (blip == null) { unsupported.Add(key); break; }
                         var (imgStream, imgType) = OfficeCli.Core.ImageSource.Resolve(value);
                         using var imgStreamDispose2 = imgStream;
-                        // Remove old image part to avoid storage bloat
+                        // Remove old image part(s) to avoid storage bloat,
+                        // including the asvg:svgBlip-referenced SVG part
+                        // when the previous image was SVG.
                         var oldEmbedId = blip.Embed?.Value;
                         if (oldEmbedId != null)
                         {
                             try { slidePart.DeletePart(oldEmbedId); } catch { }
                         }
-                        var newImgPart = slidePart.AddImagePart(imgType);
-                        newImgPart.FeedData(imgStream);
-                        blip.Embed = slidePart.GetIdOfPart(newImgPart);
+                        var oldPicSvgRelId = OfficeCli.Core.SvgImageHelper.GetSvgRelId(blip);
+                        if (oldPicSvgRelId != null)
+                        {
+                            try { slidePart.DeletePart(oldPicSvgRelId); } catch { }
+                        }
+
+                        if (imgType == ImagePartType.Svg)
+                        {
+                            using var newSvgBuf = new MemoryStream();
+                            imgStream.CopyTo(newSvgBuf);
+                            newSvgBuf.Position = 0;
+                            var newSvgPart = slidePart.AddImagePart(ImagePartType.Svg);
+                            newSvgPart.FeedData(newSvgBuf);
+                            var newPicSvgRelId = slidePart.GetIdOfPart(newSvgPart);
+
+                            var pngFb = slidePart.AddImagePart(ImagePartType.Png);
+                            pngFb.FeedData(new MemoryStream(
+                                OfficeCli.Core.SvgImageHelper.TransparentPng1x1, writable: false));
+                            blip.Embed = slidePart.GetIdOfPart(pngFb);
+                            OfficeCli.Core.SvgImageHelper.AppendSvgExtension(blip, newPicSvgRelId);
+                        }
+                        else
+                        {
+                            var newImgPart = slidePart.AddImagePart(imgType);
+                            newImgPart.FeedData(imgStream);
+                            blip.Embed = slidePart.GetIdOfPart(newImgPart);
+                            if (oldPicSvgRelId != null)
+                            {
+                                var extLst = blip.GetFirstChild<Drawing.BlipExtensionList>();
+                                if (extLst != null)
+                                {
+                                    foreach (var ext in extLst.Elements<Drawing.BlipExtension>().ToList())
+                                    {
+                                        if (string.Equals(ext.Uri?.Value,
+                                            OfficeCli.Core.SvgImageHelper.SvgExtensionUri,
+                                            StringComparison.OrdinalIgnoreCase))
+                                            ext.Remove();
+                                    }
+                                    if (!extLst.Elements<Drawing.BlipExtension>().Any())
+                                        extLst.Remove();
+                                }
+                            }
+                        }
                         break;
                     }
                     case "rotation" or "rotate":

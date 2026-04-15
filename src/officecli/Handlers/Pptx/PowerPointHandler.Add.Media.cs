@@ -41,11 +41,41 @@ public partial class PowerPointHandler
                 rawImgStream.CopyTo(imgStream);
                 imgStream.Position = 0;
 
-                // Embed image into slide part
-                var imagePart = imgSlidePart.AddImagePart(imgPartType);
-                imagePart.FeedData(imgStream);
-                imgStream.Position = 0;
-                var imgRelId = imgSlidePart.GetIdOfPart(imagePart);
+                // Embed image into slide part. For SVG, emit the dual
+                // representation Office requires: PNG fallback at r:embed,
+                // SVG referenced via a:blip/a:extLst asvg:svgBlip.
+                string imgRelId;
+                string? picSvgRelId = null;
+                if (imgPartType == ImagePartType.Svg)
+                {
+                    var svgPart = imgSlidePart.AddImagePart(ImagePartType.Svg);
+                    svgPart.FeedData(imgStream);
+                    imgStream.Position = 0;
+                    picSvgRelId = imgSlidePart.GetIdOfPart(svgPart);
+
+                    if (properties.TryGetValue("fallback", out var picFallback) && !string.IsNullOrWhiteSpace(picFallback))
+                    {
+                        var (fbRaw, fbType) = OfficeCli.Core.ImageSource.Resolve(picFallback);
+                        using var fbDispose = fbRaw;
+                        var fbPart = imgSlidePart.AddImagePart(fbType);
+                        fbPart.FeedData(fbRaw);
+                        imgRelId = imgSlidePart.GetIdOfPart(fbPart);
+                    }
+                    else
+                    {
+                        var pngPart = imgSlidePart.AddImagePart(ImagePartType.Png);
+                        pngPart.FeedData(new MemoryStream(
+                            OfficeCli.Core.SvgImageHelper.TransparentPng1x1, writable: false));
+                        imgRelId = imgSlidePart.GetIdOfPart(pngPart);
+                    }
+                }
+                else
+                {
+                    var imagePart = imgSlidePart.AddImagePart(imgPartType);
+                    imagePart.FeedData(imgStream);
+                    imgStream.Position = 0;
+                    imgRelId = imgSlidePart.GetIdOfPart(imagePart);
+                }
 
                 // Dimensions (default: 6in x 4in, with auto aspect-ratio)
                 // CONSISTENCY(picture-aspect): when only one dimension is
@@ -97,6 +127,8 @@ public partial class PowerPointHandler
 
                 picture.BlipFill = new BlipFill();
                 picture.BlipFill.Blip = new Drawing.Blip { Embed = imgRelId };
+                if (picSvgRelId != null)
+                    OfficeCli.Core.SvgImageHelper.AppendSvgExtension(picture.BlipFill.Blip, picSvgRelId);
                 picture.BlipFill.AppendChild(new Drawing.Stretch(new Drawing.FillRectangle()));
 
                 picture.ShapeProperties = new ShapeProperties();

@@ -1106,16 +1106,64 @@ public partial class WordHandler
                             var (wordImgStream, imgType) = OfficeCli.Core.ImageSource.Resolve(value);
                             using var wordImgDispose = wordImgStream;
 
-                            // Remove old image part to avoid storage bloat
+                            // Remove old image part(s) to avoid storage bloat —
+                            // include the asvg:svgBlip extension part if the
+                            // previous image was SVG, otherwise it would be
+                            // orphaned in word/media/.
                             var oldEmbedId = blip.Embed?.Value;
                             if (oldEmbedId != null)
                             {
                                 try { mainPartImg.DeletePart(oldEmbedId); } catch { }
                             }
+                            var oldSvgRelId = OfficeCli.Core.SvgImageHelper.GetSvgRelId(blip);
+                            if (oldSvgRelId != null)
+                            {
+                                try { mainPartImg.DeletePart(oldSvgRelId); } catch { }
+                            }
 
-                            var newImgPart = mainPartImg.AddImagePart(imgType);
-                            newImgPart.FeedData(wordImgStream);
-                            blip.Embed = mainPartImg.GetIdOfPart(newImgPart);
+                            if (imgType == ImagePartType.Svg)
+                            {
+                                // Match AddPicture: SVG part referenced via
+                                // extension, raster fallback at r:embed.
+                                using var svgBytes = new MemoryStream();
+                                wordImgStream.CopyTo(svgBytes);
+                                svgBytes.Position = 0;
+
+                                var svgPart = mainPartImg.AddImagePart(ImagePartType.Svg);
+                                svgPart.FeedData(svgBytes);
+                                var newSvgRelId = mainPartImg.GetIdOfPart(svgPart);
+
+                                var pngPart = mainPartImg.AddImagePart(ImagePartType.Png);
+                                pngPart.FeedData(new MemoryStream(
+                                    OfficeCli.Core.SvgImageHelper.TransparentPng1x1, writable: false));
+                                blip.Embed = mainPartImg.GetIdOfPart(pngPart);
+                                OfficeCli.Core.SvgImageHelper.AppendSvgExtension(blip, newSvgRelId);
+                            }
+                            else
+                            {
+                                var newImgPart = mainPartImg.AddImagePart(imgType);
+                                newImgPart.FeedData(wordImgStream);
+                                blip.Embed = mainPartImg.GetIdOfPart(newImgPart);
+                                // Drop the SVG extension if we replaced an SVG
+                                // with a raster image; otherwise Word would
+                                // keep rendering the stale SVG reference.
+                                if (oldSvgRelId != null)
+                                {
+                                    var extLst = blip.GetFirstChild<A.BlipExtensionList>();
+                                    if (extLst != null)
+                                    {
+                                        foreach (var ext in extLst.Elements<A.BlipExtension>().ToList())
+                                        {
+                                            if (string.Equals(ext.Uri?.Value,
+                                                OfficeCli.Core.SvgImageHelper.SvgExtensionUri,
+                                                StringComparison.OrdinalIgnoreCase))
+                                                ext.Remove();
+                                        }
+                                        if (!extLst.Elements<A.BlipExtension>().Any())
+                                            extLst.Remove();
+                                    }
+                                }
+                            }
                             break;
                         }
 

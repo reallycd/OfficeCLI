@@ -1114,9 +1114,39 @@ public partial class ExcelHandler
                 var (xlImgStream, imgPartType) = OfficeCli.Core.ImageSource.Resolve(imgPath);
                 using var xlImgDispose = xlImgStream;
 
-                var imgPart = picDrawingsPart.AddImagePart(imgPartType);
-                imgPart.FeedData(xlImgStream);
-                var imgRelId = picDrawingsPart.GetIdOfPart(imgPart);
+                // CONSISTENCY(svg-dual-rep): same dual-representation as Word
+                // and PPT — main r:embed points to a PNG fallback, SVG is
+                // referenced via a:blip/a:extLst asvg:svgBlip.
+                string imgRelId;
+                string? xlSvgRelId = null;
+                if (imgPartType == ImagePartType.Svg)
+                {
+                    var svgPart = picDrawingsPart.AddImagePart(ImagePartType.Svg);
+                    svgPart.FeedData(xlImgStream);
+                    xlSvgRelId = picDrawingsPart.GetIdOfPart(svgPart);
+
+                    if (properties.TryGetValue("fallback", out var xlFallback) && !string.IsNullOrWhiteSpace(xlFallback))
+                    {
+                        var (fbRaw, fbType) = OfficeCli.Core.ImageSource.Resolve(xlFallback);
+                        using var fbDispose = fbRaw;
+                        var fbPart = picDrawingsPart.AddImagePart(fbType);
+                        fbPart.FeedData(fbRaw);
+                        imgRelId = picDrawingsPart.GetIdOfPart(fbPart);
+                    }
+                    else
+                    {
+                        var pngPart = picDrawingsPart.AddImagePart(ImagePartType.Png);
+                        pngPart.FeedData(new MemoryStream(
+                            OfficeCli.Core.SvgImageHelper.TransparentPng1x1, writable: false));
+                        imgRelId = picDrawingsPart.GetIdOfPart(pngPart);
+                    }
+                }
+                else
+                {
+                    var imgPart = picDrawingsPart.AddImagePart(imgPartType);
+                    imgPart.FeedData(xlImgStream);
+                    imgRelId = picDrawingsPart.GetIdOfPart(imgPart);
+                }
 
                 var picId = picDrawingsPart.WorksheetDrawing.Descendants<XDR.NonVisualDrawingProperties>()
                     .Select(p => (uint?)p.Id?.Value ?? 0u).DefaultIfEmpty(0u).Max() + 1;
@@ -1145,10 +1175,7 @@ public partial class ExcelHandler
                             new XDR.NonVisualDrawingProperties { Id = picId, Name = $"Picture {picId}", Description = alt },
                             new XDR.NonVisualPictureDrawingProperties(new Drawing.PictureLocks { NoChangeAspect = true })
                         ),
-                        new XDR.BlipFill(
-                            new Drawing.Blip { Embed = imgRelId },
-                            new Drawing.Stretch(new Drawing.FillRectangle())
-                        ),
+                        BuildPictureBlipFill(imgRelId, xlSvgRelId),
                         new XDR.ShapeProperties(
                             new Drawing.Transform2D(
                                 new Drawing.Offset { X = 0, Y = 0 },

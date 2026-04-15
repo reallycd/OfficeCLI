@@ -14,6 +14,19 @@ namespace OfficeCli.Handlers;
 
 public partial class ExcelHandler
 {
+    /// <summary>
+    /// Build an XDR BlipFill with an optional asvg:svgBlip extension when
+    /// the caller wires in an SVG image part. Keeps Add/Set picture paths
+    /// free of inline extension boilerplate.
+    /// </summary>
+    private static XDR.BlipFill BuildPictureBlipFill(string pngRelId, string? svgRelId)
+    {
+        var blip = new Drawing.Blip { Embed = pngRelId };
+        if (!string.IsNullOrEmpty(svgRelId))
+            OfficeCli.Core.SvgImageHelper.AppendSvgExtension(blip, svgRelId);
+        return new XDR.BlipFill(blip, new Drawing.Stretch(new Drawing.FillRectangle()));
+    }
+
     // ==================== Path Normalization ====================
 
     /// <summary>
