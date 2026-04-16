@@ -292,7 +292,7 @@ public partial class WordHandler
             if (string.IsNullOrWhiteSpace(mergeFieldName))
                 throw new ArgumentException("MERGEFIELD requires a 'fieldName' property (e.g. --prop fieldName=CustomerName).");
         }
-        else if (effectiveType is "ref" or "pageref")
+        else if (effectiveType is "ref" or "pageref" or "noteref")
         {
             refBookmarkName = properties.GetValueOrDefault("bookmarkName")
                            ?? properties.GetValueOrDefault("bookmarkname")
@@ -310,20 +310,56 @@ public partial class WordHandler
                 throw new ArgumentException("SEQ requires an 'identifier' property (e.g. --prop identifier=Figure).");
         }
 
+        // For STYLEREF and DOCPROPERTY, extract the required name parameter
+        string? styleRefName = null;
+        if (effectiveType == "styleref")
+        {
+            styleRefName = properties.GetValueOrDefault("styleName")
+                        ?? properties.GetValueOrDefault("stylename")
+                        ?? properties.GetValueOrDefault("name");
+            if (string.IsNullOrWhiteSpace(styleRefName))
+                throw new ArgumentException("STYLEREF requires a 'styleName' property (e.g. --prop styleName=\"Heading 1\").");
+        }
+        string? docPropertyName = null;
+        if (effectiveType == "docproperty")
+        {
+            docPropertyName = properties.GetValueOrDefault("propertyName")
+                           ?? properties.GetValueOrDefault("propertyname")
+                           ?? properties.GetValueOrDefault("name");
+            if (string.IsNullOrWhiteSpace(docPropertyName))
+                throw new ArgumentException("DOCPROPERTY requires a 'propertyName' property (e.g. --prop propertyName=Department).");
+        }
+
         var fieldInstr = effectiveType switch
         {
             "pagenum" or "pagenumber" or "page" => " PAGE ",
             "numpages" => " NUMPAGES ",
+            "sectionpages" => " SECTIONPAGES ",
+            "section" => " SECTION ",
             "date" => " DATE \\@ \"yyyy-MM-dd\" ",
+            "createdate" => " CREATEDATE \\@ \"yyyy-MM-dd\" ",
+            "savedate" => " SAVEDATE \\@ \"yyyy-MM-dd\" ",
+            "printdate" => " PRINTDATE \\@ \"yyyy-MM-dd\" ",
+            "edittime" => " EDITTIME ",
             "author" => " AUTHOR ",
+            "lastsavedby" => " LASTSAVEDBY ",
             "title" => " TITLE ",
             "subject" => " SUBJECT ",
             "filename" => " FILENAME ",
             "time" => " TIME ",
+            "numwords" => " NUMWORDS ",
+            "numchars" => " NUMCHARS ",
+            "revnum" => " REVNUM ",
+            "template" => " TEMPLATE ",
+            "comments" or "doccomments" => " COMMENTS ",
+            "keywords" => " KEYWORDS ",
             "mergefield" => $" MERGEFIELD {mergeFieldName} ",
             "ref" => $" REF {refBookmarkName}{(IsTruthy(properties.GetValueOrDefault("hyperlink")) ? " \\h" : "")} ",
             "pageref" => $" PAGEREF {refBookmarkName}{(IsTruthy(properties.GetValueOrDefault("hyperlink")) ? " \\h" : "")} ",
+            "noteref" => $" NOTEREF {refBookmarkName}{(IsTruthy(properties.GetValueOrDefault("hyperlink")) ? " \\h" : "")} ",
             "seq" => $" SEQ {seqIdentifier} ",
+            "styleref" => $" STYLEREF \"{styleRefName}\" ",
+            "docproperty" => $" DOCPROPERTY \"{docPropertyName}\" ",
             "if" => BuildIfFieldInstruction(properties),
             _ => properties.ContainsKey("instruction")
                 ? properties["instruction"]
@@ -338,9 +374,9 @@ public partial class WordHandler
             : effectiveType switch
             {
                 "mergefield" => $"\u00AB{mergeFieldName}\u00BB",
-                "ref" => $"\u00AB{refBookmarkName}\u00BB",
-                "pageref" => "1",
-                "seq" => "1",
+                "ref" or "noteref" => $"\u00AB{refBookmarkName}\u00BB",
+                "styleref" => $"\u00AB{styleRefName}\u00BB",
+                "docproperty" => $"\u00AB{docPropertyName}\u00BB",
                 "if" => properties.GetValueOrDefault("trueText", ""),
                 _ => "1"
             };

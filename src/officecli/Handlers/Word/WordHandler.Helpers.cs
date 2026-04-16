@@ -979,8 +979,11 @@ public partial class WordHandler
     private static readonly HashSet<string> InlineTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "run", "r", "picture", "image", "img", "hyperlink", "link",
-        "field", "pagenum", "pagenumber", "page", "numpages", "date", "author", "mergefield",
-        "ref", "pageref", "seq", "if",
+        "field", "pagenum", "pagenumber", "page", "numpages", "sectionpages", "section",
+        "date", "createdate", "savedate", "printdate", "edittime", "time",
+        "author", "lastsavedby", "title", "subject", "filename",
+        "numwords", "numchars", "revnum", "template", "comments", "doccomments", "keywords",
+        "mergefield", "ref", "pageref", "noteref", "seq", "styleref", "docproperty", "if",
         "pagebreak", "columnbreak", "break", "footnote", "endnote",
         "equation", "formula", "math", "bookmark", "formfield"
     };

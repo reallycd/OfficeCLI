@@ -550,12 +550,18 @@ Types and properties:
   footer  -- parent: /
     text, type (default|first|even), font, size, bold, italic, color, alignment
 
-  field (pagenum, numpages, date, mergefield, ref, pageref, seq, if)  -- parent: /body/p[N] or /body
+  field  -- parent: /body/p[N] or /body
     instruction (field code), text (placeholder), font, size, bold, color, alignment (body-level)
-    For mergefield: fieldName (required) — merge field name
-    For ref/pageref: bookmarkName (required), hyperlink (bool) — cross-reference
-    For seq: identifier (required) — sequence name (e.g. "Figure", "Table")
-    For if: expression (required), trueText, falseText — conditional field
+    Zero-param types: pagenum, numpages, sectionpages, section, date, time,
+      createdate, savedate, printdate, edittime, author, lastsavedby,
+      title, subject, filename, numwords, numchars, revnum, template, comments, keywords
+    Parameterized types:
+      mergefield: fieldName (required)
+      ref/pageref/noteref: bookmarkName (required), hyperlink (bool)
+      seq: identifier (required, e.g. "Figure", "Table")
+      styleref: styleName (required, e.g. "Heading 1")
+      docproperty: propertyName (required)
+      if: expression (required), trueText, falseText
 
   pagebreak (break)  -- parent: /body/p[N] or /body
     type (page|column|textwrapping, default: page)
