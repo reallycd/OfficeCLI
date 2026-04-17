@@ -43,6 +43,20 @@ public partial class ExcelHandler
         return true;
     }
 
+    // Make a string safe to use as an Excel table name, displayName, or
+    // tableColumn name. Excel refuses to open files where these identifiers
+    // look like a cell reference ("tbl1" → column TBL row 1) or are purely
+    // numeric ("30"). Suffix "_" to disambiguate rather than throwing — these
+    // names are usually officecli-derived (Table{id} default, tableColumn
+    // read from header cell), so failing would surprise callers.
+    internal static string SanitizeTableIdentifier(string? name)
+    {
+        if (string.IsNullOrEmpty(name)) return "_";
+        if (LooksLikeCellReference(name) || System.Text.RegularExpressions.Regex.IsMatch(name, @"^[0-9]+$"))
+            return name + "_";
+        return name;
+    }
+
     // ==================== Path Normalization ====================
 
     /// <summary>

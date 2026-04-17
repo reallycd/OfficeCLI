@@ -1426,16 +1426,8 @@ public partial class ExcelHandler
                     .Select(tdp => tdp.Table?.Id?.Value ?? 0);
                 var tableId = existingTableIds.Any() ? existingTableIds.Max() + 1 : 1;
 
-                var tableName = properties.GetValueOrDefault("name", $"Table{tableId}");
-                var displayName = properties.GetValueOrDefault("displayName", tableName);
-                // Excel rejects table names that parse as a cell reference
-                // (e.g. "tbl1" → column TBL=13584, row 1). The file won't open
-                // at all. Reject early with a clear error so callers pick a
-                // different name (e.g. "Table1", "tbl_1", "MyTable").
-                foreach (var n in new[] { tableName, displayName })
-                    if (LooksLikeCellReference(n))
-                        throw new ArgumentException(
-                            $"Table name '{n}' looks like a cell reference — Excel will refuse to open the file. Pick a name that is not <letters><digits> within A1:XFD1048576 (e.g. 'Table1', 'tbl_1', 'MyTable').");
+                var tableName = SanitizeTableIdentifier(properties.GetValueOrDefault("name", $"Table{tableId}"));
+                var displayName = SanitizeTableIdentifier(properties.GetValueOrDefault("displayName", tableName));
                 var styleName = properties.GetValueOrDefault("style", "TableStyleMedium2");
                 var hasHeader = !properties.TryGetValue("headerRow", out var hrVal) || IsTruthy(hrVal);
                 var hasTotalRow = properties.TryGetValue("totalRow", out var trVal) && IsTruthy(trVal);
@@ -1471,6 +1463,18 @@ public partial class ExcelHandler
                             colNames[i] = (headerCell != null ? GetCellDisplayValue(headerCell) : null) ?? $"Column{i + 1}";
                             if (string.IsNullOrEmpty(colNames[i]))
                                 colNames[i] = $"Column{i + 1}";
+                            // Excel rejects a table whose header cell is typed
+                            // as a number. Convert the cell to an inline string
+                            // so the header reads as text, and tableColumn name
+                            // (read above) still matches the cell's visible
+                            // value exactly — Excel also requires that match.
+                            if (headerCell != null && (headerCell.DataType == null || headerCell.DataType.Value == CellValues.Number))
+                            {
+                                var text = colNames[i];
+                                headerCell.DataType = CellValues.InlineString;
+                                headerCell.CellValue = null;
+                                headerCell.InlineString = new InlineString(new Text(text));
+                            }
                         }
                     }
                     else
@@ -1493,6 +1497,18 @@ public partial class ExcelHandler
                     table.TotalsRowCount = 1;
 
                 table.AppendChild(new AutoFilter { Reference = rangeRef });
+
+                // Dedupe duplicate column names (Excel also trips on those).
+                var usedColNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < colCount; i++)
+                {
+                    var baseName = colNames[i];
+                    var cn = baseName;
+                    var dedupIdx = 2;
+                    while (!usedColNames.Add(cn))
+                        cn = $"{baseName}{dedupIdx++}";
+                    colNames[i] = cn;
+                }
 
                 var tableColumns = new TableColumns { Count = (uint)colCount };
                 for (int i = 0; i < colCount; i++)
