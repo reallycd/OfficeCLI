@@ -2095,38 +2095,43 @@ public partial class ExcelHandler
                 }
 
                 // Effects (shadow, glow, reflection, softEdge) — shape-level only for shapes with fill
-                // For fill=none shapes, shadow/glow go to text-level (rPr) below
+                // For fill=none shapes, shadow/glow go to text-level (rPr) below.
+                // CT_EffectList schema order: blur → fillOverlay → glow → innerShdw → outerShdw → prstShdw → reflection → softEdge
+                // Build each effect into a typed slot, then AppendChild in schema order below.
                 var isNoFillShape = properties.TryGetValue("fill", out var fillCheck) && fillCheck.Equals("none", StringComparison.OrdinalIgnoreCase);
-                Drawing.EffectList? shpEffectList = null;
+                Drawing.Glow? shpGlowEl = null;
+                Drawing.OuterShadow? shpShadowEl = null;
+                Drawing.Reflection? shpReflEl = null;
+                Drawing.SoftEdge? shpSoftEl = null;
                 if (!isNoFillShape)
                 {
                     if (properties.TryGetValue("shadow", out var shpShadow) && !shpShadow.Equals("none", StringComparison.OrdinalIgnoreCase))
                     {
                         var normalizedShadow = shpShadow.Replace(':', '-');
                         if (IsValidBooleanString(normalizedShadow) && IsTruthy(normalizedShadow)) normalizedShadow = "000000";
-                        shpEffectList ??= new Drawing.EffectList();
-                        shpEffectList.AppendChild(OfficeCli.Core.DrawingEffectsHelper.BuildOuterShadow(normalizedShadow, OfficeCli.Core.DrawingEffectsHelper.BuildRgbColor));
+                        shpShadowEl = OfficeCli.Core.DrawingEffectsHelper.BuildOuterShadow(normalizedShadow, OfficeCli.Core.DrawingEffectsHelper.BuildRgbColor);
                     }
                     if (properties.TryGetValue("glow", out var shpGlow) && !shpGlow.Equals("none", StringComparison.OrdinalIgnoreCase))
                     {
                         var normalizedGlow = shpGlow.Replace(':', '-');
                         if (IsValidBooleanString(normalizedGlow) && IsTruthy(normalizedGlow)) normalizedGlow = "4472C4";
-                        shpEffectList ??= new Drawing.EffectList();
-                        shpEffectList.AppendChild(OfficeCli.Core.DrawingEffectsHelper.BuildGlow(normalizedGlow, OfficeCli.Core.DrawingEffectsHelper.BuildRgbColor));
+                        shpGlowEl = OfficeCli.Core.DrawingEffectsHelper.BuildGlow(normalizedGlow, OfficeCli.Core.DrawingEffectsHelper.BuildRgbColor);
                     }
                 }
                 if (properties.TryGetValue("reflection", out var shpRefl) && !shpRefl.Equals("none", StringComparison.OrdinalIgnoreCase))
-                {
-                    shpEffectList ??= new Drawing.EffectList();
-                    shpEffectList.AppendChild(OfficeCli.Core.DrawingEffectsHelper.BuildReflection(shpRefl));
-                }
+                    shpReflEl = OfficeCli.Core.DrawingEffectsHelper.BuildReflection(shpRefl);
                 if (properties.TryGetValue("softedge", out var shpSoft) && !shpSoft.Equals("none", StringComparison.OrdinalIgnoreCase))
+                    shpSoftEl = OfficeCli.Core.DrawingEffectsHelper.BuildSoftEdge(shpSoft);
+                if (shpGlowEl != null || shpShadowEl != null || shpReflEl != null || shpSoftEl != null)
                 {
-                    shpEffectList ??= new Drawing.EffectList();
-                    shpEffectList.AppendChild(OfficeCli.Core.DrawingEffectsHelper.BuildSoftEdge(shpSoft));
-                }
-                if (shpEffectList != null)
+                    // CONSISTENCY(effect-list-schema-order): glow → outerShdw → reflection → softEdge
+                    var shpEffectList = new Drawing.EffectList();
+                    if (shpGlowEl != null) shpEffectList.AppendChild(shpGlowEl);
+                    if (shpShadowEl != null) shpEffectList.AppendChild(shpShadowEl);
+                    if (shpReflEl != null) shpEffectList.AppendChild(shpReflEl);
+                    if (shpSoftEl != null) shpEffectList.AppendChild(shpSoftEl);
                     spPr.AppendChild(shpEffectList);
+                }
 
                 // Build TextBody with runs
                 var bodyPr = new Drawing.BodyProperties { Anchor = Drawing.TextAnchoringTypeValues.Center };
@@ -2188,23 +2193,28 @@ public partial class ExcelHandler
                     var isNoFill = properties.TryGetValue("fill", out var f) && f.Equals("none", StringComparison.OrdinalIgnoreCase);
                     if (isNoFill)
                     {
-                        Drawing.EffectList? txtEffects = null;
+                        // CONSISTENCY(effect-list-schema-order): glow → outerShdw per CT_EffectList
+                        Drawing.Glow? txtGlowEl = null;
+                        Drawing.OuterShadow? txtShadowEl = null;
                         if (properties.TryGetValue("shadow", out var ts) && !ts.Equals("none", StringComparison.OrdinalIgnoreCase))
                         {
                             var normalizedTs = ts.Replace(':', '-');
                             if (IsValidBooleanString(normalizedTs) && IsTruthy(normalizedTs)) normalizedTs = "000000";
-                            txtEffects ??= new Drawing.EffectList();
-                            txtEffects.AppendChild(OfficeCli.Core.DrawingEffectsHelper.BuildOuterShadow(normalizedTs, OfficeCli.Core.DrawingEffectsHelper.BuildRgbColor));
+                            txtShadowEl = OfficeCli.Core.DrawingEffectsHelper.BuildOuterShadow(normalizedTs, OfficeCli.Core.DrawingEffectsHelper.BuildRgbColor);
                         }
                         if (properties.TryGetValue("glow", out var tg) && !tg.Equals("none", StringComparison.OrdinalIgnoreCase))
                         {
                             var normalizedTg = tg.Replace(':', '-');
                             if (IsValidBooleanString(normalizedTg) && IsTruthy(normalizedTg)) normalizedTg = "4472C4";
-                            txtEffects ??= new Drawing.EffectList();
-                            txtEffects.AppendChild(OfficeCli.Core.DrawingEffectsHelper.BuildGlow(normalizedTg, OfficeCli.Core.DrawingEffectsHelper.BuildRgbColor));
+                            txtGlowEl = OfficeCli.Core.DrawingEffectsHelper.BuildGlow(normalizedTg, OfficeCli.Core.DrawingEffectsHelper.BuildRgbColor);
                         }
-                        if (txtEffects != null)
+                        if (txtGlowEl != null || txtShadowEl != null)
+                        {
+                            var txtEffects = new Drawing.EffectList();
+                            if (txtGlowEl != null) txtEffects.AppendChild(txtGlowEl);
+                            if (txtShadowEl != null) txtEffects.AppendChild(txtShadowEl);
                             rPr.AppendChild(txtEffects);
+                        }
                     }
 
                     // Fonts last (schema order). Accept `font=Arial` or `font.name=Arial`.

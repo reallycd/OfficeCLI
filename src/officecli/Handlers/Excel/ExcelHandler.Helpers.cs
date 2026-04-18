@@ -2261,27 +2261,77 @@ public partial class ExcelHandler
         else
         {
             if (effectList == null) { effectList = new Drawing.EffectList(); spPr.AppendChild(effectList); }
+            // CONSISTENCY(effect-list-schema-order): CT_EffectList order is
+            // blur → fillOverlay → glow → innerShdw → outerShdw → prstShdw → reflection → softEdge.
+            // Excel (and PPT) silently drops out-of-order children, so we must
+            // InsertBefore the next-in-order sibling rather than AppendChild.
+            OpenXmlElement newEffect;
             switch (key)
             {
                 case "shadow":
                     effectList.RemoveAllChildren<Drawing.OuterShadow>();
-                    effectList.AppendChild(OfficeCli.Core.DrawingEffectsHelper.BuildOuterShadow(normalizedVal, OfficeCli.Core.DrawingEffectsHelper.BuildRgbColor));
+                    newEffect = OfficeCli.Core.DrawingEffectsHelper.BuildOuterShadow(normalizedVal, OfficeCli.Core.DrawingEffectsHelper.BuildRgbColor);
                     break;
                 case "glow":
                     effectList.RemoveAllChildren<Drawing.Glow>();
-                    effectList.AppendChild(OfficeCli.Core.DrawingEffectsHelper.BuildGlow(normalizedVal, OfficeCli.Core.DrawingEffectsHelper.BuildRgbColor));
+                    newEffect = OfficeCli.Core.DrawingEffectsHelper.BuildGlow(normalizedVal, OfficeCli.Core.DrawingEffectsHelper.BuildRgbColor);
                     break;
                 case "reflection":
                     effectList.RemoveAllChildren<Drawing.Reflection>();
-                    effectList.AppendChild(OfficeCli.Core.DrawingEffectsHelper.BuildReflection(normalizedVal));
+                    newEffect = OfficeCli.Core.DrawingEffectsHelper.BuildReflection(normalizedVal);
                     break;
                 case "softedge":
                     effectList.RemoveAllChildren<Drawing.SoftEdge>();
-                    effectList.AppendChild(OfficeCli.Core.DrawingEffectsHelper.BuildSoftEdge(normalizedVal));
+                    newEffect = OfficeCli.Core.DrawingEffectsHelper.BuildSoftEdge(normalizedVal);
                     break;
+                default: return true;
             }
+            InsertEffectInSchemaOrder(effectList, newEffect);
         }
         return true;
+    }
+
+    /// <summary>
+    /// Insert an effectLst child at the correct DrawingML CT_EffectList schema position:
+    /// blur → fillOverlay → glow → innerShdw → outerShdw → prstShdw → reflection → softEdge.
+    /// </summary>
+    private static void InsertEffectInSchemaOrder(Drawing.EffectList effectList, OpenXmlElement newEffect)
+    {
+        // Determine all types that must come AFTER newEffect per schema order.
+        OpenXmlElement? insertBefore = newEffect switch
+        {
+            Drawing.Blur => (OpenXmlElement?)effectList.GetFirstChild<Drawing.FillOverlay>()
+                ?? effectList.GetFirstChild<Drawing.Glow>()
+                ?? effectList.GetFirstChild<Drawing.InnerShadow>()
+                ?? effectList.GetFirstChild<Drawing.OuterShadow>()
+                ?? effectList.GetFirstChild<Drawing.PresetShadow>()
+                ?? (OpenXmlElement?)effectList.GetFirstChild<Drawing.Reflection>()
+                ?? effectList.GetFirstChild<Drawing.SoftEdge>(),
+            Drawing.FillOverlay => (OpenXmlElement?)effectList.GetFirstChild<Drawing.Glow>()
+                ?? effectList.GetFirstChild<Drawing.InnerShadow>()
+                ?? effectList.GetFirstChild<Drawing.OuterShadow>()
+                ?? effectList.GetFirstChild<Drawing.PresetShadow>()
+                ?? (OpenXmlElement?)effectList.GetFirstChild<Drawing.Reflection>()
+                ?? effectList.GetFirstChild<Drawing.SoftEdge>(),
+            Drawing.Glow => (OpenXmlElement?)effectList.GetFirstChild<Drawing.InnerShadow>()
+                ?? effectList.GetFirstChild<Drawing.OuterShadow>()
+                ?? effectList.GetFirstChild<Drawing.PresetShadow>()
+                ?? (OpenXmlElement?)effectList.GetFirstChild<Drawing.Reflection>()
+                ?? effectList.GetFirstChild<Drawing.SoftEdge>(),
+            Drawing.InnerShadow => (OpenXmlElement?)effectList.GetFirstChild<Drawing.OuterShadow>()
+                ?? effectList.GetFirstChild<Drawing.PresetShadow>()
+                ?? (OpenXmlElement?)effectList.GetFirstChild<Drawing.Reflection>()
+                ?? effectList.GetFirstChild<Drawing.SoftEdge>(),
+            Drawing.OuterShadow => (OpenXmlElement?)effectList.GetFirstChild<Drawing.PresetShadow>()
+                ?? (OpenXmlElement?)effectList.GetFirstChild<Drawing.Reflection>()
+                ?? effectList.GetFirstChild<Drawing.SoftEdge>(),
+            Drawing.PresetShadow => (OpenXmlElement?)effectList.GetFirstChild<Drawing.Reflection>()
+                ?? effectList.GetFirstChild<Drawing.SoftEdge>(),
+            Drawing.Reflection => (OpenXmlElement?)effectList.GetFirstChild<Drawing.SoftEdge>(),
+            _ => null,
+        };
+        if (insertBefore != null) effectList.InsertBefore(newEffect, insertBefore);
+        else effectList.AppendChild(newEffect);
     }
 
     /// <summary>
