@@ -17,6 +17,11 @@ public partial class PowerPointHandler
     private static void RenderTextBody(StringBuilder sb, OpenXmlElement textBody, Dictionary<string, string> themeColors,
         Shape? placeholderShape = null, OpenXmlPart? placeholderPart = null)
     {
+        // Per-textbody auto-number counters, keyed by scheme type + paragraph level.
+        // Resets when switching type/level. Paragraphs aren't wrapped in <ol>, so
+        // we count manually and emit the numeric glyph inline.
+        var autoNumCounters = new Dictionary<string, int>();
+        string? lastAutoKey = null;
         foreach (var para in textBody.Elements<Drawing.Paragraph>())
         {
             // Resolve per-paragraph font size based on paragraph level
@@ -65,11 +70,33 @@ public partial class PowerPointHandler
             var bulletAuto = pProps?.GetFirstChild<Drawing.AutoNumberedBullet>();
             var hasBullet = bulletChar != null || bulletAuto != null;
 
+            // Resolve auto-numbered glyph (e.g. "1.", "a.", "iv.") and track per-scheme counter.
+            string? autoNumGlyph = null;
+            if (bulletAuto != null)
+            {
+                int paraLevel = pProps?.Level?.Value ?? 0;
+                string schemeKey = (bulletAuto.Type?.HasValue == true ? bulletAuto.Type.Value.ToString() : "arabicPeriod") + "@" + paraLevel;
+                if (lastAutoKey != schemeKey)
+                {
+                    autoNumCounters[schemeKey] = 0;
+                    lastAutoKey = schemeKey;
+                }
+                int startAt = bulletAuto.StartAt?.Value ?? 1;
+                int n = autoNumCounters.TryGetValue(schemeKey, out var c) ? c : 0;
+                int index = (n == 0 ? startAt : startAt + n);
+                autoNumCounters[schemeKey] = n + 1;
+                autoNumGlyph = FormatAutoNumberGlyph(bulletAuto.Type?.HasValue == true ? bulletAuto.Type.Value : Drawing.TextAutoNumberSchemeValues.ArabicPeriod, index);
+            }
+            else
+            {
+                lastAutoKey = null;
+            }
+
             sb.Append($"<div class=\"para\" style=\"{string.Join(";", paraStyles)}\">");
 
             if (hasBullet)
             {
-                var bullet = bulletChar ?? "\u2022";
+                var bullet = autoNumGlyph ?? bulletChar ?? "\u2022";
                 var buStyles = new List<string>();
 
                 // Bullet color: explicit buClr > first run color > default (inherit)
@@ -104,8 +131,20 @@ public partial class PowerPointHandler
                     }
                 }
 
+                // Hanging-indent tab gap: size bullet span to match the negative
+                // indent so text starts at marL regardless of bullet glyph width.
+                // OOXML marL (e.g. 457200 EMU = 0.5in = 36pt) paired with indent
+                // = -marL creates the hanging layout; we mirror it in CSS by
+                // making the bullet an inline-block of width |indent|.
+                long indentEmu = pProps?.Indent?.Value ?? 0;
+                if (indentEmu < 0)
+                {
+                    var gapPt = Units.EmuToPt(-indentEmu);
+                    buStyles.Add($"display:inline-block");
+                    buStyles.Add($"width:{gapPt}pt");
+                }
                 var buStyle = buStyles.Count > 0 ? $" style=\"{string.Join(";", buStyles)}\"" : "";
-                sb.Append($"<span class=\"bullet\"{buStyle}>{HtmlEncode(bullet)} </span>");
+                sb.Append($"<span class=\"bullet\"{buStyle}>{HtmlEncode(bullet)}</span>");
             }
 
             // Check for OfficeMath (a14:m inside mc:AlternateContent) in paragraph XML
@@ -264,5 +303,59 @@ public partial class PowerPointHandler
             sb.Append($"<span style=\"{string.Join(";", styles)}\">{HtmlEncode(text)}</span>");
         else
             sb.Append(HtmlEncode(text));
+    }
+
+    // Format an auto-numbered bullet glyph (e.g. "1.", "(a)", "iv)") for a given
+    // OOXML scheme and 1-based index. Covers the common schemes emitted by
+    // ApplyListStyle; unsupported schemes fall back to "N." arabic-period.
+    private static string FormatAutoNumberGlyph(Drawing.TextAutoNumberSchemeValues scheme, int n)
+    {
+        string key = scheme.ToString();
+        // Decompose the scheme name — it's of form "{alpha|AlphaUc|romanLc|RomanUc|arabic|...}{Period|ParenBoth|ParenR|Plain|Minus}"
+        // Use InnerText style match when possible
+        string body;
+        if (key.StartsWith("alphaLc", StringComparison.OrdinalIgnoreCase) || key.StartsWith("AlphaLc", StringComparison.OrdinalIgnoreCase))
+            body = ToAlpha(n, upper: false);
+        else if (key.StartsWith("alphaUc", StringComparison.OrdinalIgnoreCase) || key.StartsWith("AlphaUc", StringComparison.OrdinalIgnoreCase))
+            body = ToAlpha(n, upper: true);
+        else if (key.StartsWith("romanLc", StringComparison.OrdinalIgnoreCase) || key.StartsWith("RomanLc", StringComparison.OrdinalIgnoreCase))
+            body = ToRoman(n).ToLowerInvariant();
+        else if (key.StartsWith("romanUc", StringComparison.OrdinalIgnoreCase) || key.StartsWith("RomanUc", StringComparison.OrdinalIgnoreCase))
+            body = ToRoman(n);
+        else
+            body = n.ToString();
+
+        if (key.EndsWith("Period", StringComparison.OrdinalIgnoreCase)) return body + ".";
+        if (key.EndsWith("ParenBoth", StringComparison.OrdinalIgnoreCase)) return "(" + body + ")";
+        if (key.EndsWith("ParenR", StringComparison.OrdinalIgnoreCase)) return body + ")";
+        if (key.EndsWith("Minus", StringComparison.OrdinalIgnoreCase)) return "- " + body + " -";
+        if (key.EndsWith("Plain", StringComparison.OrdinalIgnoreCase)) return body;
+        return body + ".";
+    }
+
+    private static string ToAlpha(int n, bool upper)
+    {
+        if (n <= 0) n = 1;
+        var sb = new StringBuilder();
+        while (n > 0)
+        {
+            n--;
+            sb.Insert(0, (char)((upper ? 'A' : 'a') + (n % 26)));
+            n /= 26;
+        }
+        return sb.ToString();
+    }
+
+    private static string ToRoman(int n)
+    {
+        if (n <= 0) return n.ToString();
+        int[] values = { 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 };
+        string[] numerals = { "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I" };
+        var sb = new StringBuilder();
+        for (int i = 0; i < values.Length; i++)
+        {
+            while (n >= values[i]) { sb.Append(numerals[i]); n -= values[i]; }
+        }
+        return sb.ToString();
     }
 }
