@@ -634,6 +634,61 @@ public partial class ExcelHandler
     }
 
     /// <summary>
+    /// Ensure the worksheet root declares `xmlns:x14` + `mc:Ignorable="x14"`.
+    /// Without both, Excel silently drops the x14 extension block where
+    /// sparklines, dataBar 2010+ extensions, and other Office2010 features
+    /// live. CONSISTENCY(x14-ignorable): same pattern the sparkline branch
+    /// uses inline.
+    /// </summary>
+    internal static void EnsureWorksheetX14Ignorable(Worksheet ws)
+    {
+        const string mcNs = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+        const string x14Ns = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+        if (ws.LookupNamespace("mc") == null)
+            ws.AddNamespaceDeclaration("mc", mcNs);
+        if (ws.LookupNamespace("x14") == null)
+            ws.AddNamespaceDeclaration("x14", x14Ns);
+        var ignorable = ws.MCAttributes?.Ignorable?.Value ?? "";
+        if (!ignorable.Split(' ').Contains("x14"))
+        {
+            ws.MCAttributes ??= new MarkupCompatibilityAttributes();
+            ws.MCAttributes.Ignorable = string.IsNullOrEmpty(ignorable) ? "x14" : $"{ignorable} x14";
+        }
+    }
+
+    /// <summary>
+    /// Append an x14:conditionalFormatting block to the worksheet's extLst under
+    /// ext URI `{78C0D931-6437-407d-A8EE-F0AAD7539E65}`. Creates the extension
+    /// on first call, appends to the existing x14:conditionalFormattings
+    /// container on subsequent calls. Also ensures mc:Ignorable="x14" is set.
+    /// </summary>
+    internal static void EnsureWorksheetX14ConditionalFormatting(Worksheet ws, X14.ConditionalFormatting x14Cf)
+    {
+        const string cfExtUri = "{78C0D931-6437-407d-A8EE-F0AAD7539E65}";
+        const string x14Ns = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+
+        EnsureWorksheetX14Ignorable(ws);
+
+        var extList = ws.GetFirstChild<WorksheetExtensionList>() ?? ws.AppendChild(new WorksheetExtensionList());
+        var ext = extList.Elements<WorksheetExtension>().FirstOrDefault(e => e.Uri == cfExtUri);
+        X14.ConditionalFormattings cfContainer;
+        if (ext != null)
+        {
+            cfContainer = ext.GetFirstChild<X14.ConditionalFormattings>()
+                ?? ext.AppendChild(new X14.ConditionalFormattings());
+        }
+        else
+        {
+            ext = new WorksheetExtension { Uri = cfExtUri };
+            ext.AddNamespaceDeclaration("x14", x14Ns);
+            cfContainer = new X14.ConditionalFormattings();
+            ext.Append(cfContainer);
+            extList.Append(ext);
+        }
+        cfContainer.Append(x14Cf);
+    }
+
+    /// <summary>
     /// Mark a worksheet as dirty. The actual save (with schema-order reorder) is
     /// deferred to <see cref="FlushDirtyParts"/> which runs in Dispose().
     /// This replaces per-mutation Save() calls — batch operations over many cells

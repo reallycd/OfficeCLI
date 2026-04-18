@@ -1076,16 +1076,19 @@ public partial class ExcelHandler
                     Priority = NextCfPriority(GetSheet(cfWorksheet))
                 };
                 var dataBar = new DataBar();
-                dataBar.Append(new ConditionalFormatValueObject
+                // R10-1: when cfvo type is min/max, omit `val` attribute (Excel rejects val="").
+                var dbMinCfvo = new ConditionalFormatValueObject
                 {
-                    Type = minVal != null ? ConditionalFormatValueObjectValues.Number : ConditionalFormatValueObjectValues.Min,
-                    Val = minVal
-                });
-                dataBar.Append(new ConditionalFormatValueObject
+                    Type = minVal != null ? ConditionalFormatValueObjectValues.Number : ConditionalFormatValueObjectValues.Min
+                };
+                if (minVal != null) dbMinCfvo.Val = minVal;
+                dataBar.Append(dbMinCfvo);
+                var dbMaxCfvo = new ConditionalFormatValueObject
                 {
-                    Type = maxVal != null ? ConditionalFormatValueObjectValues.Number : ConditionalFormatValueObjectValues.Max,
-                    Val = maxVal
-                });
+                    Type = maxVal != null ? ConditionalFormatValueObjectValues.Number : ConditionalFormatValueObjectValues.Max
+                };
+                if (maxVal != null) dbMaxCfvo.Val = maxVal;
+                dataBar.Append(dbMaxCfvo);
                 dataBar.Append(new DocumentFormat.OpenXml.Spreadsheet.Color { Rgb = normalizedColor });
                 cfRule.Append(dataBar);
                 // CF6 — dataBar `showValue=false` hides the cell's numeric
@@ -1095,6 +1098,23 @@ public partial class ExcelHandler
                     dataBar.ShowValue = false;
                 ApplyStopIfTrue(cfRule, properties);
 
+                // R10-1: Also emit Excel 2010+ x14 extension so negative values
+                // render leftward in red with an axis. Without this block, Excel
+                // uses the 2007 dataBar which treats all values as positive
+                // (rightward blue bars, no axis, no red for negatives).
+                var dbGuid = "{" + Guid.NewGuid().ToString().ToUpperInvariant() + "}";
+                // Attach x14:id extension onto the 2007 cfRule so it's paired
+                // with the sibling x14:cfRule in the worksheet extLst.
+                var dbRuleExtList = new ConditionalFormattingRuleExtensionList();
+                var dbRuleExt = new ConditionalFormattingRuleExtension
+                {
+                    Uri = "{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"
+                };
+                dbRuleExt.AddNamespaceDeclaration("x14", "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main");
+                dbRuleExt.Append(new X14.Id(dbGuid));
+                dbRuleExtList.Append(dbRuleExt);
+                cfRule.Append(dbRuleExtList);
+
                 var cf = new ConditionalFormatting(cfRule)
                 {
                     SequenceOfReferences = new ListValue<StringValue>(
@@ -1103,6 +1123,57 @@ public partial class ExcelHandler
 
                 var wsElement = GetSheet(cfWorksheet);
                 InsertConditionalFormatting(wsElement, cf);
+
+                // R10-1: Build the x14:dataBar counterpart under worksheet extLst.
+                var dbNegColor = ParseHelpers.NormalizeArgbColor(properties.GetValueOrDefault("negativeColor", "FF0000"));
+                var dbAxisColor = ParseHelpers.NormalizeArgbColor(properties.GetValueOrDefault("axisColor", "000000"));
+                var dbAxisPos = (properties.GetValueOrDefault("axisPosition") ?? "automatic").ToLowerInvariant();
+                var dbAxisPosVal = dbAxisPos switch
+                {
+                    "middle" => X14.DataBarAxisPositionValues.Middle,
+                    "none" => X14.DataBarAxisPositionValues.None,
+                    _ => X14.DataBarAxisPositionValues.Automatic
+                };
+
+                var x14DataBar = new X14.DataBar
+                {
+                    MinLength = 0U,
+                    MaxLength = 100U,
+                    AxisPosition = dbAxisPosVal
+                };
+                var x14MinCfvo = new X14.ConditionalFormattingValueObject
+                {
+                    Type = minVal != null
+                        ? X14.ConditionalFormattingValueObjectTypeValues.Numeric
+                        : X14.ConditionalFormattingValueObjectTypeValues.AutoMin
+                };
+                if (minVal != null) x14MinCfvo.Append(new DocumentFormat.OpenXml.Office.Excel.Formula(minVal));
+                x14DataBar.Append(x14MinCfvo);
+                var x14MaxCfvo = new X14.ConditionalFormattingValueObject
+                {
+                    Type = maxVal != null
+                        ? X14.ConditionalFormattingValueObjectTypeValues.Numeric
+                        : X14.ConditionalFormattingValueObjectTypeValues.AutoMax
+                };
+                if (maxVal != null) x14MaxCfvo.Append(new DocumentFormat.OpenXml.Office.Excel.Formula(maxVal));
+                x14DataBar.Append(x14MaxCfvo);
+                x14DataBar.Append(new X14.FillColor { Rgb = normalizedColor });
+                x14DataBar.Append(new X14.NegativeFillColor { Rgb = dbNegColor });
+                x14DataBar.Append(new X14.BarAxisColor { Rgb = dbAxisColor });
+
+                var x14CfRule = new X14.ConditionalFormattingRule
+                {
+                    Type = ConditionalFormatValues.DataBar,
+                    Id = dbGuid
+                };
+                x14CfRule.Append(x14DataBar);
+
+                var x14Cf = new X14.ConditionalFormatting();
+                x14Cf.AddNamespaceDeclaration("xm", "http://schemas.microsoft.com/office/excel/2006/main");
+                x14Cf.Append(x14CfRule);
+                x14Cf.Append(new DocumentFormat.OpenXml.Office.Excel.ReferenceSequence(sqref));
+
+                EnsureWorksheetX14ConditionalFormatting(wsElement, x14Cf);
 
                 SaveWorksheet(cfWorksheet);
                 var dbCfCount = wsElement.Elements<ConditionalFormatting>().Count();
