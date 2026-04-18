@@ -1283,6 +1283,20 @@ internal static partial class ChartHelper
                     break;
                 }
 
+                // CL15 — showLeaderLines on pie/doughnut. Alias of datalabels.showleaderlines.
+                case "showleaderlines":
+                {
+                    var plotArea2 = chart.GetFirstChild<C.PlotArea>();
+                    if (plotArea2 == null) { unsupported.Add(key); break; }
+                    var show = ParseHelpers.IsTruthy(value);
+                    foreach (var dl in plotArea2.Descendants<C.DataLabels>())
+                    {
+                        dl.RemoveAllChildren<C.ShowLeaderLines>();
+                        dl.AppendChild(new C.ShowLeaderLines { Val = show });
+                    }
+                    break;
+                }
+
                 // ==================== DataLabel Enhancements ====================
 
                 case "datalabels.separator" or "labelseparator":

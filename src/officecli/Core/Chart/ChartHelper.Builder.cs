@@ -407,7 +407,7 @@ internal static partial class ChartHelper
         "plotvisonly", "plotvisibleonly", "autotitledeleted",
         "datalabels.separator", "labelseparator",
         "datalabels.numfmt", "labelnumfmt",
-        "datalabels.showleaderlines", "leaderlines",
+        "datalabels.showleaderlines", "leaderlines", "showleaderlines",
         // CL23 — chart-level trendline.* fan-out
         "trendline.label", "trendline.forecastforward", "trendline.forecastbackward",
         "trendline.order", "trendline.period", "trendline.intercept",
