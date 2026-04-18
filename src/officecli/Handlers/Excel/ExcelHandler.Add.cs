@@ -3785,23 +3785,53 @@ public partial class ExcelHandler
                 ?? throw new ArgumentException($"Row {rowIdx} not found");
             var clone = (Row)row.CloneNode(true);
 
+            // R8-1: CloneNode preserves the source row's RowIndex and every
+            // cell's CellReference (e.g. "A1","B1"). Without rewriting these,
+            // the new row collides with the source (Excel shows one row at
+            // rowIdx, A2 appears empty) or is silently ignored. Compute the
+            // new rowIndex from the target sheet and rewrite all cell refs.
+            uint newRowIndex;
             if (index.HasValue)
             {
                 var rows = targetSheetData.Elements<Row>().ToList();
                 if (index.Value >= 0 && index.Value < rows.Count)
-                    rows[index.Value].InsertBeforeSelf(clone);
+                {
+                    newRowIndex = rows[index.Value].RowIndex?.Value ?? (uint)(index.Value + 1);
+                    // Shift existing rows at/after this position down by 1
+                    ShiftRowsDown(tgtWorksheet, (int)newRowIndex);
+                    // Re-fetch sheetData (ShiftRowsDown may reorder)
+                    targetSheetData = GetSheet(tgtWorksheet).GetFirstChild<SheetData>()!;
+                    var afterRow = targetSheetData.Elements<Row>()
+                        .LastOrDefault(r => (r.RowIndex?.Value ?? 0) < newRowIndex);
+                    if (afterRow != null) afterRow.InsertAfterSelf(clone);
+                    else targetSheetData.InsertAt(clone, 0);
+                }
                 else
+                {
+                    newRowIndex = (targetSheetData.Elements<Row>()
+                        .LastOrDefault()?.RowIndex?.Value ?? 0u) + 1;
                     targetSheetData.AppendChild(clone);
+                }
             }
             else
             {
+                newRowIndex = (targetSheetData.Elements<Row>()
+                    .LastOrDefault()?.RowIndex?.Value ?? 0u) + 1;
                 targetSheetData.AppendChild(clone);
             }
 
+            clone.RowIndex = newRowIndex;
+            foreach (var c in clone.Elements<Cell>())
+            {
+                var oldRef = c.CellReference?.Value;
+                if (string.IsNullOrEmpty(oldRef)) continue;
+                var m = Regex.Match(oldRef, @"^([A-Z]+)\d+$", RegexOptions.IgnoreCase);
+                if (m.Success)
+                    c.CellReference = $"{m.Groups[1].Value.ToUpperInvariant()}{newRowIndex}";
+            }
+
             SaveWorksheet(tgtWorksheet);
-            var newRows = targetSheetData.Elements<Row>().ToList();
-            var newIdx = newRows.IndexOf(clone) + 1;
-            return $"{targetParentPath}/row[{newIdx}]";
+            return $"{targetParentPath}/row[{newRowIndex}]";
         }
 
         throw new ArgumentException($"Copy not supported for: {elementRef}. Supported: row[N]");
