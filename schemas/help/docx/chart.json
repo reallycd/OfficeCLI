@@ -1,0 +1,64 @@
+{
+  "$schema": "../_schema.json",
+  "format": "docx",
+  "element": "chart",
+  "parent": "paragraph|body",
+  "operations": {
+    "add": true,
+    "set": true,
+    "get": true,
+    "query": true,
+    "remove": true
+  },
+  "paths": {
+    "positional": ["/body/p[N]/chart[M]"]
+  },
+  "note": "Embedded as inline DrawingML chart (c:chart) or extended chart (cx:chart) depending on chartType. Data via inline spec or per-series props. Mirrors pptx/chart surface.",
+  "properties": {
+    "chartType": {
+      "type": "enum",
+      "values": ["column", "bar", "line", "pie", "doughnut", "area", "scatter", "radar", "stock", "bubble", "surface", "funnel", "treemap", "sunburst", "boxWhisker", "histogram"],
+      "aliases": ["type", "charttype"],
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop chartType=column"],
+      "readback": "chart type name",
+      "enforcement": "report"
+    },
+    "title": {
+      "type": "string",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop title=\"Q1\""],
+      "readback": "chart title",
+      "enforcement": "report"
+    },
+    "data": {
+      "type": "string",
+      "description": "inline series spec 'S1:1,2,3;S2:4,5,6'.",
+      "add": true, "set": false, "get": false,
+      "examples": ["--prop data=\"Sales:10,20,30\""],
+      "readback": "n/a",
+      "enforcement": "report"
+    },
+    "categories": {
+      "type": "string",
+      "add": true, "set": false, "get": false,
+      "examples": ["--prop categories=A,B,C"],
+      "readback": "n/a",
+      "enforcement": "report"
+    },
+    "width": {
+      "type": "length",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop width=15cm"],
+      "readback": "EMU / unit-qualified",
+      "enforcement": "report"
+    },
+    "height": {
+      "type": "length",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop height=10cm"],
+      "readback": "EMU / unit-qualified",
+      "enforcement": "report"
+    }
+  }
+}

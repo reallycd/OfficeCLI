@@ -1,0 +1,50 @@
+{
+  "$schema": "../_schema.json",
+  "format": "docx",
+  "element": "trackedchange",
+  "parent": "paragraph|run",
+  "operations": {
+    "add": true,
+    "set": true,
+    "get": true,
+    "query": true,
+    "remove": true
+  },
+  "paths": {
+    "positional": ["/body/p[N]/ins[M]", "/body/p[N]/del[M]"]
+  },
+  "note": "Raw revision element. Type selector routes to w:ins / w:del / w:moveTo / w:moveFrom. Handler also accepts bulk aliases (trackedchanges, acceptallchanges, rejectallchanges, acceptchanges, rejectchanges).",
+  "properties": {
+    "type": {
+      "type": "enum",
+      "values": ["ins", "del", "moveTo", "moveFrom"],
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop type=ins"],
+      "readback": "revision type",
+      "enforcement": "report"
+    },
+    "text": {
+      "type": "string",
+      "description": "text content for ins / content marker for del.",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop text=\"new text\""],
+      "readback": "concatenated text",
+      "enforcement": "report"
+    },
+    "author": {
+      "type": "string",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop author=\"Alice\""],
+      "readback": "revision author",
+      "enforcement": "report"
+    },
+    "date": {
+      "type": "string",
+      "description": "ISO-8601 timestamp. Defaults to UtcNow.",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop date=2025-01-15T10:00:00Z"],
+      "readback": "Date attribute",
+      "enforcement": "report"
+    }
+  }
+}

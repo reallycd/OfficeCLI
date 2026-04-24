@@ -1,0 +1,78 @@
+{
+  "$schema": "../_schema.json",
+  "format": "pptx",
+  "element": "connector",
+  "parent": "slide",
+  "operations": {
+    "add": true,
+    "set": true,
+    "get": true,
+    "query": true,
+    "remove": true
+  },
+  "paths": {
+    "positional": ["/slide[N]/connector[M]"]
+  },
+  "note": "Aliases: connection. Straight / bent / curved connector lines. 'from' and 'to' can reference shape paths to auto-attach endpoints.",
+  "properties": {
+    "shape": {
+      "type": "enum",
+      "values": ["line", "straightConnector1", "bentConnector2", "bentConnector3", "curvedConnector2", "curvedConnector3"],
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop shape=straightConnector1"],
+      "readback": "geometry preset name",
+      "enforcement": "report"
+    },
+    "from": {
+      "type": "string",
+      "description": "start-point shape path or coordinate.",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop from=/slide[1]/shape[1]"],
+      "readback": "start reference",
+      "enforcement": "report"
+    },
+    "to": {
+      "type": "string",
+      "description": "end-point shape path or coordinate.",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop to=/slide[1]/shape[2]"],
+      "readback": "end reference",
+      "enforcement": "report"
+    },
+    "x": {
+      "type": "length",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop x=1in"],
+      "readback": "EMU",
+      "enforcement": "report"
+    },
+    "y": {
+      "type": "length",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop y=1in"],
+      "readback": "EMU",
+      "enforcement": "report"
+    },
+    "width": {
+      "type": "length",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop width=2in"],
+      "readback": "EMU",
+      "enforcement": "report"
+    },
+    "height": {
+      "type": "length",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop height=1in"],
+      "readback": "EMU",
+      "enforcement": "report"
+    },
+    "color": {
+      "type": "color",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop color=#000000"],
+      "readback": "#-prefixed uppercase hex",
+      "enforcement": "report"
+    }
+  }
+}
