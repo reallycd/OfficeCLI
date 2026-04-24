@@ -122,6 +122,29 @@ internal static class SchemaHelpLoader
     }
 
     /// <summary>
+    /// Check whether a schema's top-level operations[verb] is true. Used by
+    /// `officecli help &lt;format&gt; &lt;verb&gt;` to filter the element list.
+    /// </summary>
+    internal static bool ElementSupportsVerb(string format, string element, string verb)
+    {
+        try
+        {
+            using var doc = LoadSchema(format, element);
+            if (doc.RootElement.TryGetProperty("operations", out var ops)
+                && ops.TryGetProperty(verb, out var v)
+                && v.ValueKind == JsonValueKind.True)
+            {
+                return true;
+            }
+        }
+        catch
+        {
+            // Swallow — a bad schema shouldn't kill the filter.
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Suggest the closest candidate from <paramref name="candidates"/> to
     /// <paramref name="input"/> using substring + Levenshtein. Returns null
     /// if no candidate is close enough.

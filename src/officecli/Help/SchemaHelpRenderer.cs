@@ -24,7 +24,13 @@ internal static class SchemaHelpRenderer
         return System.Text.Encoding.UTF8.GetString(ms.ToArray());
     }
 
-    internal static string RenderHuman(JsonDocument doc)
+    /// <summary>
+    /// Render a schema as human-readable text. When <paramref name="verbFilter"/>
+    /// is one of add/set/get/query/remove, properties are filtered to those
+    /// that declare <c>verbFilter: true</c>; the header carries a "(verb-view)"
+    /// marker so callers can tell they are seeing a filtered page.
+    /// </summary>
+    internal static string RenderHuman(JsonDocument doc, string? verbFilter = null)
     {
         var sb = new StringBuilder();
         var root = doc.RootElement;
@@ -34,9 +40,22 @@ internal static class SchemaHelpRenderer
         var isContainer = root.TryGetProperty("container", out var c)
                           && c.ValueKind == JsonValueKind.True;
 
-        var header = $"{format} {element}";
+        var header = verbFilter == null
+            ? $"{format} {element}"
+            : $"{format} {verbFilter} {element}";
         sb.AppendLine(header);
         sb.AppendLine(new string('-', Math.Max(14, header.Length)));
+
+        // When a verb filter is active, short-circuit if the element doesn't
+        // support that verb at all — clearer than rendering an empty page.
+        if (verbFilter != null
+            && root.TryGetProperty("operations", out var opsEl)
+            && (!opsEl.TryGetProperty(verbFilter, out var opVal)
+                || opVal.ValueKind != JsonValueKind.True))
+        {
+            sb.AppendLine($"'{verbFilter}' is not supported on {format} {element}.");
+            return sb.ToString().TrimEnd('\r', '\n');
+        }
 
         if (isContainer)
             sb.AppendLine("Read-only container (never created or removed via CLI).");
@@ -90,11 +109,24 @@ internal static class SchemaHelpRenderer
             && props.ValueKind == JsonValueKind.Object)
         {
             sb.AppendLine();
-            sb.AppendLine("Properties:");
+            sb.AppendLine(verbFilter == null
+                ? "Properties:"
+                : $"Properties ({verbFilter}):");
+            int shown = 0;
             foreach (var prop in props.EnumerateObject())
             {
+                // When verb filter active, skip props that don't declare that verb.
+                if (verbFilter != null)
+                {
+                    if (!prop.Value.TryGetProperty(verbFilter, out var pv)
+                        || pv.ValueKind != JsonValueKind.True)
+                        continue;
+                }
                 RenderProperty(sb, prop, isContainer);
+                shown++;
             }
+            if (verbFilter != null && shown == 0)
+                sb.AppendLine($"  (no properties participate in '{verbFilter}' for this element)");
         }
 
         if (root.TryGetProperty("children", out var children)
