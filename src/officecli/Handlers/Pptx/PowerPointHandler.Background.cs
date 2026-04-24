@@ -653,6 +653,7 @@ public partial class PowerPointHandler
         string? focusPoint = null;
         int angle = 5400000; // default 90° = top→bottom
         bool angleStripped = false;
+        bool focusStripped = false;
 
         if (gradientType != null)
         {
@@ -662,6 +663,7 @@ public partial class PowerPointHandler
             {
                 focusPoint = last;
                 colorParts.RemoveAt(colorParts.Count - 1);
+                focusStripped = true;
             }
         }
         else
@@ -695,9 +697,9 @@ public partial class PowerPointHandler
         // hiding the fact that the user never specified a real second stop.
         if (colorParts.Count == 1)
         {
-            if (angleStripped)
+            if (angleStripped || focusStripped)
                 throw new ArgumentException(
-                    "gradient requires at least 2 colors, e.g. 'FF0000-0000FF-45'");
+                    "gradient requires at least 2 colors, e.g. 'FF0000-0000FF-45' or 'radial:FF0000-0000FF-tl'");
             colorParts.Add(colorParts[0]);
         }
 
