@@ -2313,18 +2313,21 @@ public partial class WordHandler
     {
         var mainPart = _doc.MainDocumentPart!;
         OpenXmlCompositeElement? container;
+        OpenXmlPart partRef;
 
         if (kind == "header")
         {
             var part = mainPart.HeaderParts.ElementAtOrDefault(index)
                 ?? throw new ArgumentException($"Header not found: /header[{index + 1}]");
             container = part.Header;
+            partRef = part;
         }
         else
         {
             var part = mainPart.FooterParts.ElementAtOrDefault(index)
                 ?? throw new ArgumentException($"Footer not found: /footer[{index + 1}]");
             container = part.Footer;
+            partRef = part;
         }
 
         if (container == null)
@@ -2369,6 +2372,55 @@ public partial class WordHandler
                     var markRPr = pProps.ParagraphMarkRunProperties ?? pProps.AppendChild(new ParagraphMarkRunProperties());
                     ApplyRunFormatting(markRPr, key, value);
                     break;
+                case "type":
+                {
+                    // Mutate the HeaderReference/FooterReference Type attribute
+                    // pointing at this part. Read side (WordHandler.Query.cs:660-666,
+                    // 717-723) only inspects body-level SectionProperties, so the
+                    // write side stays scoped to the same set for round-trip parity.
+                    var newType = value.ToLowerInvariant() switch
+                    {
+                        "first" => HeaderFooterValues.First,
+                        "even" => HeaderFooterValues.Even,
+                        "default" => HeaderFooterValues.Default,
+                        _ => throw new ArgumentException(
+                            $"Invalid {kind} type: '{value}'. Valid values: default, first, even.")
+                    };
+                    var partRid = mainPart.GetIdOfPart(partRef);
+                    var body = mainPart.Document?.Body
+                        ?? throw new InvalidOperationException("Document body not found");
+                    bool found = false;
+                    foreach (var sp in body.Elements<SectionProperties>())
+                    {
+                        if (kind == "header")
+                        {
+                            var ownRef = sp.Elements<HeaderReference>().FirstOrDefault(r => r.Id?.Value == partRid);
+                            if (ownRef == null) continue;
+                            if (ownRef.Type?.Value == newType) { found = true; continue; }
+                            if (sp.Elements<HeaderReference>().Any(r => r != ownRef && r.Type?.Value == newType))
+                                throw new ArgumentException(
+                                    $"Header of type '{value}' already exists in this section.");
+                            ownRef.Type = newType;
+                            found = true;
+                        }
+                        else
+                        {
+                            var ownRef = sp.Elements<FooterReference>().FirstOrDefault(r => r.Id?.Value == partRid);
+                            if (ownRef == null) continue;
+                            if (ownRef.Type?.Value == newType) { found = true; continue; }
+                            if (sp.Elements<FooterReference>().Any(r => r != ownRef && r.Type?.Value == newType))
+                                throw new ArgumentException(
+                                    $"Footer of type '{value}' already exists in this section.");
+                            ownRef.Type = newType;
+                            found = true;
+                        }
+                        // Mirrors AddHeader: Title-page header requires <w:titlePg/> on the section.
+                        if (newType == HeaderFooterValues.First && sp.GetFirstChild<TitlePage>() == null)
+                            sp.AddChild(new TitlePage(), throwOnError: false);
+                    }
+                    if (!found) unsupported.Add(key);
+                    break;
+                }
                 default:
                     unsupported.Add(key);
                     break;
