@@ -18,19 +18,28 @@
     "type": {
       "type": "enum",
       "description": "CF rule type.",
-      "values": ["cellIs", "colorScale", "dataBar", "iconSet", "containsText", "notContainsText", "beginsWith", "endsWith", "top", "topN", "topPercent", "bottom", "bottomN", "bottomPercent", "aboveAverage", "belowAverage", "duplicateValues", "uniqueValues", "containsBlanks", "containsErrors", "notContainsBlanks", "notContainsErrors", "formula", "dateOccurring", "today", "yesterday", "tomorrow", "thisWeek", "lastWeek", "nextWeek", "thisMonth", "lastMonth", "nextMonth"],
+      "values": ["cellIs", "colorScale", "dataBar", "iconSet", "containsText", "notContainsText", "beginsWith", "endsWith", "top", "topN", "top10", "topPercent", "bottom", "bottomN", "bottomPercent", "aboveAverage", "belowAverage", "duplicateValues", "uniqueValues", "containsBlanks", "containsErrors", "notContainsBlanks", "notContainsErrors", "formula", "dateOccurring", "today", "yesterday", "tomorrow", "thisWeek", "lastWeek", "nextWeek", "thisMonth", "lastMonth", "nextMonth"],
+      "aliases": ["rule"],
       "add": true, "set": true, "get": true,
-      "examples": ["--prop type=cellIs"],
+      "examples": ["--prop type=cellIs", "--prop rule=top10"],
       "readback": "rule type",
       "enforcement": "report"
     },
     "ref": {
       "type": "string",
       "description": "target cell range.",
-      "aliases": ["range"],
+      "aliases": ["range", "sqref"],
       "add": true, "set": true, "get": true,
-      "examples": ["--prop ref=A1:A10"],
+      "examples": ["--prop ref=A1:A10", "--prop sqref=A1:A10"],
       "readback": "cell range",
+      "enforcement": "report"
+    },
+    "fill": {
+      "type": "color",
+      "description": "fill (background) color for matched cells.",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop fill=FFFF00"],
+      "readback": "#-prefixed hex",
       "enforcement": "report"
     },
     "operator": {

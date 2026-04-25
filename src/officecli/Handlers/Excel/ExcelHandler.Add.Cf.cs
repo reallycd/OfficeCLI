@@ -499,13 +499,21 @@ public partial class ExcelHandler
         {
             case "topn":
             {
-                // Accept both `rank=` (OOXML attribute name) and `top=`
-                // (user-facing alias documented in the topn help).
+                // Accept `rank=` (OOXML attribute name), `top=`/`bottomN=` (legacy
+                // aliases), and `value=` (R26-1: matches the cellIs vocabulary so
+                // users don't have to learn separate names per CF subtype).
                 var rankStr = properties.GetValueOrDefault("rank")
                     ?? properties.GetValueOrDefault("top")
                     ?? properties.GetValueOrDefault("bottomN")
+                    ?? properties.GetValueOrDefault("value")
                     ?? "10";
-                var rank = uint.TryParse(rankStr, out var r) ? r : 10u;
+                if (!int.TryParse(rankStr, out var rankInt))
+                    throw new ArgumentException(
+                        $"top10 conditional formatting requires an integer rank (got '{rankStr}'). Use top=N or value=N.");
+                if (rankInt <= 0)
+                    throw new ArgumentException(
+                        $"top10 conditional formatting requires rank >= 1 (got {rankInt}).");
+                var rank = (uint)rankInt;
                 var percent = ParseHelpers.IsTruthy(properties.GetValueOrDefault("percent", "false"));
                 var bottom = ParseHelpers.IsTruthy(properties.GetValueOrDefault("bottom", "false"));
                 cfNewRule = new ConditionalFormattingRule
