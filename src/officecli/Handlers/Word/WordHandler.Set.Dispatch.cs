@@ -918,7 +918,24 @@ public partial class WordHandler
                 {
                     var pPrN = style.StyleParagraphProperties ?? EnsureStyleParagraphProperties(style);
                     var sNumPr = pPrN.NumberingProperties ?? (pPrN.NumberingProperties = new NumberingProperties());
-                    sNumPr.NumberingId = new NumberingId { Val = ParseHelpers.SafeParseInt(value, "numId") };
+                    var nid = ParseHelpers.SafeParseInt(value, "numId");
+                    if (nid < 0) throw new ArgumentException($"numId must be >= 0 (got {nid}).");
+                    // CONSISTENCY(numId-ref-check): mirror Add-side validation
+                    // in WordHandler.Add.Structure.cs (commit e85dfd3). Without
+                    // this, `set /styles/X --prop numId=99` bypasses the Add
+                    // check and leaves the style with a dangling reference,
+                    // which the HTML preview then renders as a bullet (R4 bt-4).
+                    if (nid > 0)
+                    {
+                        var numberingPart = _doc.MainDocumentPart?.NumberingDefinitionsPart?.Numbering;
+                        var numExists = numberingPart?.Elements<NumberingInstance>()
+                            .Any(n => n.NumberID?.Value == nid) ?? false;
+                        if (!numExists)
+                            throw new ArgumentException(
+                                $"numId={nid} not found in /numbering. " +
+                                "Create the num first (add /numbering --type num), or use numId=0 to remove numbering.");
+                    }
+                    sNumPr.NumberingId = new NumberingId { Val = nid };
                     break;
                 }
                 case "ilvl" or "numLevel" or "numlevel":
