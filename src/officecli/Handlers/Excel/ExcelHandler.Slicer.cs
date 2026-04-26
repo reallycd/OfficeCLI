@@ -245,6 +245,10 @@ public partial class ExcelHandler
         var rowHeight = properties.TryGetValue("rowHeight", out var rhStr)
             && uint.TryParse(rhStr, out var rh) ? rh : 225425U;
         var caption = properties.GetValueOrDefault("caption") ?? sourceName;
+        // Strip XML control chars (\x00-\x08, \x0B-\x0C, \x0E-\x1F) — OOXML
+        // rejects these in attribute values and Dispose() throws ArgumentException
+        // on serialization. Keep the rest of the string verbatim.
+        caption = StripXmlInvalidChars(caption);
         var slicerElement = new X14.Slicer
         {
             Name = slicerName,
@@ -833,5 +837,18 @@ public partial class ExcelHandler
         if (tabular?.TabularSlicerCacheItems != null)
             node.Format["itemCount"] = tabular.TabularSlicerCacheItems
                 .Elements<X14.TabularSlicerCacheItem>().Count();
+    }
+
+    // Drop XML 1.0 illegal characters (\x00-\x08, \x0B-\x0C, \x0E-\x1F)
+    // before assigning to OOXML attributes. Without this filter the value
+    // round-trips through DOM but throws ArgumentException at serialize time
+    // (Dispose), which surfaces as a confusing post-hoc crash.
+    private static string StripXmlInvalidChars(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return value;
+        var sb = new System.Text.StringBuilder(value.Length);
+        foreach (var ch in value)
+            if (System.Xml.XmlConvert.IsXmlChar(ch)) sb.Append(ch);
+        return sb.ToString();
     }
 }
