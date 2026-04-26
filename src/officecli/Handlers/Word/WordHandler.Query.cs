@@ -297,6 +297,9 @@ public partial class WordHandler
                 }
                 if (lvl.LevelJustification?.Val?.HasValue == true) lNode.Format["justification"] = lvl.LevelJustification.Val.InnerText;
                 if (lvl.LevelSuffix?.Val?.HasValue == true) lNode.Format["suff"] = lvl.LevelSuffix.Val.InnerText;
+                var lvlR = lvl.GetFirstChild<LevelRestart>();
+                if (lvlR?.Val?.Value != null) lNode.Format["lvlRestart"] = lvlR.Val.Value.ToString()!;
+                if (lvl.GetFirstChild<IsLegalNumberingStyle>() != null) lNode.Format["isLgl"] = true;
                 var ind = lvl.PreviousParagraphProperties?.Indentation;
                 if (ind?.Left?.Value != null) lNode.Format["indent"] = ind.Left.Value;
                 if (ind?.Hanging?.Value != null) lNode.Format["hanging"] = ind.Hanging.Value;

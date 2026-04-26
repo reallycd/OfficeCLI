@@ -991,6 +991,22 @@ public partial class WordHandler
         level.AppendChild(new StartNumberingValue { Val = start });
         level.AppendChild(new NumberingFormat { Val = numFmt });
 
+        // lvlRestart (optional). CT_Lvl schema order places lvlRestart after
+        // numFmt, before pStyle/isLgl/suff/lvlText.
+        if (properties.TryGetValue("lvlRestart", out var lvlRestartRaw) && !string.IsNullOrEmpty(lvlRestartRaw))
+        {
+            if (!int.TryParse(lvlRestartRaw, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var lrV))
+                throw new ArgumentException($"lvlRestart must be a 32-bit integer (got '{lvlRestartRaw}').");
+            level.AppendChild(new LevelRestart { Val = lrV });
+        }
+
+        // isLgl (optional). Schema order: after pStyle, before suff/lvlText.
+        if (properties.TryGetValue("isLgl", out var isLglRaw) && IsTruthy(isLglRaw))
+        {
+            level.AppendChild(new IsLegalNumberingStyle());
+        }
+
         // suff (optional)
         if (properties.TryGetValue("suff", out var suffRaw) && !string.IsNullOrEmpty(suffRaw))
         {

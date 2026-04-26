@@ -654,16 +654,21 @@ public partial class WordHandler
                         else rpItal.GetFirstChild<Italic>()?.Remove();
                         break;
                     case "lvlrestart":
+                        // CONSISTENCY(schema-order): CT_Lvl sequence is
+                        // start, numFmt, lvlRestart, pStyle, isLgl, suff, lvlText,
+                        // lvlPicBulletId, legacy, lvlJc, pPr, rPr. Insert before
+                        // the first existing sibling that comes later, otherwise
+                        // Word silently drops out-of-order children.
                         var lrV = ParseHelpers.SafeParseInt(value, "lvlRestart");
                         var lr = level.GetFirstChild<LevelRestart>();
-                        if (lr == null) level.AppendChild(new LevelRestart { Val = lrV });
+                        if (lr == null) InsertLevelChildInOrder(level, new LevelRestart { Val = lrV });
                         else lr.Val = lrV;
                         break;
                     case "islgl":
                         var lgl = level.GetFirstChild<IsLegalNumberingStyle>();
                         if (IsTruthy(value))
                         {
-                            if (lgl == null) level.AppendChild(new IsLegalNumberingStyle());
+                            if (lgl == null) InsertLevelChildInOrder(level, new IsLegalNumberingStyle());
                         }
                         else lgl?.Remove();
                         break;
@@ -740,6 +745,42 @@ public partial class WordHandler
 
         numbering.Save();
         return unsupported;
+    }
+
+    /// <summary>
+    /// Insert a new child into a &lt;w:lvl&gt; honoring the CT_Lvl schema order:
+    /// start, numFmt, lvlRestart, pStyle, isLgl, suff, lvlText, lvlPicBulletId,
+    /// legacy, lvlJc, pPr, rPr. Word silently drops out-of-order children, so
+    /// AppendChild is only safe when nothing later in the sequence is present.
+    /// CONSISTENCY(schema-order): mirrors AbstractNum InsertBefore-firstLevel pattern.
+    /// </summary>
+    private static int LvlChildOrder(OpenXmlElement e) => e switch
+    {
+        StartNumberingValue => 0,
+        NumberingFormat => 1,
+        LevelRestart => 2,
+        ParagraphStyleIdInLevel => 3,
+        IsLegalNumberingStyle => 4,
+        LevelSuffix => 5,
+        LevelText => 6,
+        LevelPictureBulletId => 7,
+        LegacyNumbering => 8,
+        LevelJustification => 9,
+        PreviousParagraphProperties => 10,
+        NumberingSymbolRunProperties => 11,
+        _ => int.MaxValue,
+    };
+
+    private static void InsertLevelChildInOrder(Level level, OpenXmlElement child)
+    {
+        var newOrd = LvlChildOrder(child);
+        OpenXmlElement? anchor = null;
+        foreach (var c in level.ChildElements)
+        {
+            if (LvlChildOrder(c) > newOrd) { anchor = c; break; }
+        }
+        if (anchor != null) level.InsertBefore(child, anchor);
+        else level.AppendChild(child);
     }
 
     /// <summary>
