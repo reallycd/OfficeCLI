@@ -199,18 +199,18 @@ public partial class ExcelHandler
     internal static uint? ExcelSchemeColorNameToThemeIndex(string s) =>
         s?.Trim().ToLowerInvariant() switch
         {
-            "lt1" or "bg1" => 0u,
-            "dk1" or "tx1" => 1u,
-            "lt2" or "bg2" => 2u,
-            "dk2" or "tx2" => 3u,
+            "lt1" or "bg1" or "light1" or "background1" => 0u,
+            "dk1" or "tx1" or "dark1" or "text1" => 1u,
+            "lt2" or "bg2" or "light2" or "background2" => 2u,
+            "dk2" or "tx2" or "dark2" or "text2" => 3u,
             "accent1" => 4u,
             "accent2" => 5u,
             "accent3" => 6u,
             "accent4" => 7u,
             "accent5" => 8u,
             "accent6" => 9u,
-            "hlink" => 10u,
-            "folhlink" => 11u,
+            "hlink" or "hyperlink" => 10u,
+            "folhlink" or "followedhyperlink" => 11u,
             _ => null
         };
 
@@ -2555,11 +2555,21 @@ public partial class ExcelHandler
     private static (int x, int y, int width, int height) ParseAnchorBounds(
         Dictionary<string, string> properties, string defX, string defY, string defW, string defH)
     {
+        // CONSISTENCY(shape-h-w-alias): mirror PPTX shape Add — accept `w` as
+        // alias for `width`, `h` as alias for `height`. Without this mapping,
+        // ParseAnchorDimension never sees the user value and the negative-
+        // number guard is silently bypassed (h=-100 left as default 3 cells).
+        var widthRaw = properties.GetValueOrDefault("width")
+            ?? properties.GetValueOrDefault("w")
+            ?? defW;
+        var heightRaw = properties.GetValueOrDefault("height")
+            ?? properties.GetValueOrDefault("h")
+            ?? defH;
         return (
             ParseHelpers.SafeParseInt(properties.GetValueOrDefault("x", defX) ?? defX, "x"),
             ParseHelpers.SafeParseInt(properties.GetValueOrDefault("y", defY) ?? defY, "y"),
-            ParseAnchorDimension(properties.GetValueOrDefault("width", defW) ?? defW, "width"),
-            ParseAnchorDimension(properties.GetValueOrDefault("height", defH) ?? defH, "height")
+            ParseAnchorDimension(widthRaw, "width"),
+            ParseAnchorDimension(heightRaw, "height")
         );
     }
 
