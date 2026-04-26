@@ -720,6 +720,18 @@ public partial class WordHandler
                         return sdtId?.ToString() == targetId;
                     });
             }
+            // CONSISTENCY(id-selectors): mirror @paraId/@commentId/@sdtId — accept @id= for
+            // numbering/abstractNum (w:abstractNumId@val) and numbering/num (w:num@numId).
+            else if (seg.StringIndex != null && seg.StringIndex.StartsWith("@id=", StringComparison.OrdinalIgnoreCase))
+            {
+                var targetId = seg.StringIndex["@id=".Length..];
+                next = childList.FirstOrDefault(e => e switch
+                {
+                    AbstractNum an => an.AbstractNumberId?.Value.ToString() == targetId,
+                    NumberingInstance ni => ni.NumberID?.Value.ToString() == targetId,
+                    _ => false,
+                });
+            }
             else
                 next = childList.FirstOrDefault();
 
