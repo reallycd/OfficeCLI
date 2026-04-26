@@ -541,6 +541,34 @@ public partial class ExcelHandler
                     if (altNv != null) altNv.Description = value;
                     break;
                 }
+                case "margin":
+                {
+                    // CONSISTENCY(shape-margin): mirror Add — margin is text-body
+                    // inset in points, applied to all four sides equally.
+                    var bodyPr = shape.TextBody?.GetFirstChild<Drawing.BodyProperties>();
+                    if (bodyPr != null)
+                    {
+                        var mEmu = (int)(ParseHelpers.SafeParseDouble(value, "margin") * 12700);
+                        bodyPr.LeftInset = mEmu;
+                        bodyPr.RightInset = mEmu;
+                        bodyPr.TopInset = mEmu;
+                        bodyPr.BottomInset = mEmu;
+                    }
+                    break;
+                }
+                case "preset" or "geometry":
+                {
+                    // CONSISTENCY(shape-preset): mirror Add — replace prstGeom on
+                    // ShapeProperties with the new preset token.
+                    var spPr = shape.ShapeProperties;
+                    if (spPr != null)
+                    {
+                        var newPreset = ParseExcelShapePreset(value);
+                        spPr.RemoveAllChildren<Drawing.PresetGeometry>();
+                        spPr.AppendChild(new Drawing.PresetGeometry(new Drawing.AdjustValueList()) { Preset = newPreset });
+                    }
+                    break;
+                }
                 default:
                     shpUnsupported.Add(key);
                     break;
