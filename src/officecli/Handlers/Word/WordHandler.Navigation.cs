@@ -877,6 +877,11 @@ public partial class WordHandler
                     var wcVal = pProps.WidowControl.Val;
                     node.Format["widowControl"] = wcVal == null || wcVal.Value;
                 }
+                if (pProps.ContextualSpacing != null)
+                {
+                    var csVal = pProps.ContextualSpacing.Val;
+                    node.Format["contextualSpacing"] = csVal == null || csVal.Value;
+                }
                 if (pProps.Shading != null)
                 {
                     // CONSISTENCY(canonical-keys): split shading into shading.val/.fill/.color sub-keys
