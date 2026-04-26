@@ -953,12 +953,18 @@ public partial class WordHandler
                         node.Format["numId"] = numIdVal.ToString();
                         var ilvlVal = numProps.NumberingLevelReference?.Val?.Value ?? 0;
                         node.Format["numLevel"] = ilvlVal.ToString();
-                        var numFmt = GetNumberingFormat(numIdVal, ilvlVal);
-                        node.Format["numFmt"] = numFmt;
-                        node.Format["listStyle"] = numFmt.ToLowerInvariant() == "bullet" ? "bullet" : "ordered";
-                        var start = GetStartValue(numIdVal, ilvlVal);
-                        if (start != null)
-                            node.Format["start"] = start.Value;
+                        // numId=0 is the OOXML "remove numbering" sentinel — the paragraph
+                        // explicitly opts out of any inherited list style. Skip numFmt /
+                        // listStyle / start lookup so Get does not falsely advertise a list.
+                        if (numIdVal != 0)
+                        {
+                            var numFmt = GetNumberingFormat(numIdVal, ilvlVal);
+                            node.Format["numFmt"] = numFmt;
+                            node.Format["listStyle"] = numFmt.ToLowerInvariant() == "bullet" ? "bullet" : "ordered";
+                            var start = GetStartValue(numIdVal, ilvlVal);
+                            if (start != null)
+                                node.Format["start"] = start.Value;
+                        }
                     }
                 }
 
