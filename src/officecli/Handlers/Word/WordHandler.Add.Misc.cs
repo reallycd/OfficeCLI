@@ -442,23 +442,30 @@ public partial class WordHandler
                 throw new ArgumentException("DOCPROPERTY requires a 'propertyName' property (e.g. --prop propertyName=Department).");
         }
 
+        // DATE/TIME `\@` format switch is opt-in: only emit when the user
+        // supplied --prop format=… so a vanilla `add field --prop fieldType=date`
+        // produces a bare `DATE` field that Word renders with the user's
+        // locale default rather than a hardcoded ISO format.
+        var dateFmtSwitch = properties.TryGetValue("format", out var dateFmtVal)
+            && !string.IsNullOrWhiteSpace(dateFmtVal)
+            ? $"\\@ \"{dateFmtVal}\" " : "";
         var fieldInstr = effectiveType switch
         {
             "pagenum" or "pagenumber" or "page" => " PAGE ",
             "numpages" => " NUMPAGES ",
             "sectionpages" => " SECTIONPAGES ",
             "section" => " SECTION ",
-            "date" => " DATE \\@ \"yyyy-MM-dd\" ",
-            "createdate" => " CREATEDATE \\@ \"yyyy-MM-dd\" ",
-            "savedate" => " SAVEDATE \\@ \"yyyy-MM-dd\" ",
-            "printdate" => " PRINTDATE \\@ \"yyyy-MM-dd\" ",
+            "date" => $" DATE {dateFmtSwitch}".TrimEnd() + " ",
+            "createdate" => $" CREATEDATE {dateFmtSwitch}".TrimEnd() + " ",
+            "savedate" => $" SAVEDATE {dateFmtSwitch}".TrimEnd() + " ",
+            "printdate" => $" PRINTDATE {dateFmtSwitch}".TrimEnd() + " ",
             "edittime" => " EDITTIME ",
             "author" => " AUTHOR ",
             "lastsavedby" => " LASTSAVEDBY ",
             "title" => " TITLE ",
             "subject" => " SUBJECT ",
             "filename" => " FILENAME ",
-            "time" => " TIME ",
+            "time" => $" TIME {dateFmtSwitch}".TrimEnd() + " ",
             "numwords" => " NUMWORDS ",
             "numchars" => " NUMCHARS ",
             "revnum" => " REVNUM ",
