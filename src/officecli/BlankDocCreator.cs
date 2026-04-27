@@ -45,6 +45,8 @@ public static class BlankDocCreator
             )
         );
         workbookPart.Workbook.Save();
+
+        OfficeCliMetadata.StampOnCreate(doc);
     }
 
     private static void CreateWord(string path)
@@ -105,6 +107,8 @@ public static class BlankDocCreator
         numberingPart.Numbering = new DocumentFormat.OpenXml.Wordprocessing.Numbering();
         numberingPart.Numbering.Save();
         mainPart.Document.Save();
+
+        OfficeCliMetadata.StampOnCreate(doc);
     }
 
     private static void CreatePowerPoint(string path)
@@ -310,6 +314,8 @@ public static class BlankDocCreator
             new NotesSize { Cx = SlideSizeDefaults.NotesPortraitCx, Cy = SlideSizeDefaults.NotesPortraitCy }
         );
         presentationPart.Presentation.Save();
+
+        OfficeCliMetadata.StampOnCreate(doc);
     }
 
     private static Shape CreateLayoutPlaceholder(uint id, string name, PlaceholderValues phType,
