@@ -226,6 +226,12 @@ internal static class GenericXmlQuery
             var bracketIdx = part.IndexOf('[');
             if (bracketIdx >= 0)
             {
+                // BUG-R36-01 fix: when ']' is missing (e.g. "slide[") the expression
+                // part[(bracketIdx+1)..^1] produces a negative-length range crash.
+                // Detect and reject unclosed brackets with a clean ArgumentException.
+                var closingIdx = part.IndexOf(']', bracketIdx + 1);
+                if (closingIdx < 0)
+                    throw new ArgumentException($"Malformed path segment '{part}'. Bracket '[' is not closed. Expected format: name[index] or name[@attr=value].");
                 var name = PathAliases.Resolve(part[..bracketIdx]);
                 var indexStr = part[(bracketIdx + 1)..^1];
                 if (!int.TryParse(indexStr, out var idx))
