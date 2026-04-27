@@ -2370,7 +2370,83 @@ public partial class WordHandler
             }
         }
 
+        // CONSISTENCY(word-headerfooter-recurse): paragraph/run selectors must
+        // also descend into header/footer parts (B12 — fuzzer-B). Without this,
+        // `query paragraph` and `query run` silently skip any paragraph/run
+        // that lives in a header or footer. Path prefix is /header[N] or
+        // /footer[N], indexed by 1-based encounter order in the rels.
+        if (isParagraphSelector || isRunSelector)
+        {
+            var mainPart = _doc.MainDocumentPart;
+            if (mainPart != null)
+            {
+                int hIdx = 0;
+                foreach (var hp in mainPart.HeaderParts)
+                {
+                    hIdx++;
+                    var hRoot = hp.Header;
+                    if (hRoot == null) continue;
+                    CollectParaRunInHeaderFooter(hRoot, $"/header[{hIdx}]", parsed, isParagraphSelector, isRunSelector, results);
+                }
+                int fIdx = 0;
+                foreach (var fp in mainPart.FooterParts)
+                {
+                    fIdx++;
+                    var fRoot = fp.Footer;
+                    if (fRoot == null) continue;
+                    CollectParaRunInHeaderFooter(fRoot, $"/footer[{fIdx}]", parsed, isParagraphSelector, isRunSelector, results);
+                }
+            }
+        }
+
         return results;
+    }
+
+    /// <summary>
+    /// Collect paragraphs/runs inside a header/footer root using positional
+    /// indexing matching the body convention (no table recursion yet — keep
+    /// the recurse minimal; mirrors Selection's known-positional limitation).
+    /// </summary>
+    private void CollectParaRunInHeaderFooter(
+        OpenXmlElement root, string pathPrefix, SelectorPart parsed,
+        bool isParagraphSelector, bool isRunSelector, List<DocumentNode> results)
+    {
+        int paraIdx = 0;
+        foreach (var element in root.ChildElements.OfType<Paragraph>())
+        {
+            paraIdx++;
+            if (isParagraphSelector)
+            {
+                var paraPath = $"{pathPrefix}/{BuildParaPathSegment(element, paraIdx)}";
+                var paraNode = ElementToNode(element, paraPath, 0);
+                if (parsed.ContainsText != null
+                    && !(paraNode.Text?.Contains(parsed.ContainsText, StringComparison.OrdinalIgnoreCase) ?? false))
+                    continue;
+                bool ok = true;
+                foreach (var (attrKey, rawVal) in parsed.Attributes)
+                {
+                    bool negate = rawVal.StartsWith("!");
+                    var aval = negate ? rawVal[1..] : rawVal;
+                    var has = paraNode.Format.TryGetValue(attrKey, out var fv);
+                    bool m = has && string.Equals(fv?.ToString(), aval, StringComparison.OrdinalIgnoreCase);
+                    if (negate ? m : !m) { ok = false; break; }
+                }
+                if (ok) results.Add(paraNode);
+            }
+            else if (isRunSelector)
+            {
+                int runIdx = 0;
+                foreach (var run in GetAllRuns(element))
+                {
+                    runIdx++;
+                    if (MatchesRunSelector(run, element, parsed))
+                    {
+                        results.Add(ElementToNode(run,
+                            $"{pathPrefix}/{BuildParaPathSegment(element, paraIdx)}/r[{runIdx}]", 0));
+                    }
+                }
+            }
+        }
     }
 
     /// <summary>
