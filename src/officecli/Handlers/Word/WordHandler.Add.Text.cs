@@ -141,6 +141,18 @@ public partial class WordHandler
             pProps.KeepLines = new KeepLines();
         if ((properties.TryGetValue("pagebreakbefore", out var addPBB) || properties.TryGetValue("pageBreakBefore", out addPBB)) && IsTruthy(addPBB))
             pProps.PageBreakBefore = new PageBreakBefore();
+        // fuzz-2: paragraph-context `break=newPage` alias → pageBreakBefore=true.
+        // Mirrors Set-side handling in WordHandler.Set.cs (case "break").
+        if (properties.TryGetValue("break", out var addBrk))
+        {
+            bool pbb = addBrk?.ToLowerInvariant() switch
+            {
+                "newpage" or "page" or "nextpage" or "pagebreak" => true,
+                "none" or "" or null => false,
+                _ => IsTruthy(addBrk)
+            };
+            if (pbb) pProps.PageBreakBefore = new PageBreakBefore();
+        }
         if (properties.TryGetValue("widowcontrol", out var addWC) || properties.TryGetValue("widowControl", out addWC))
         {
             if (IsTruthy(addWC))

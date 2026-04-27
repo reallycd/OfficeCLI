@@ -522,6 +522,20 @@ public partial class WordHandler
                 if (IsTruthy(value)) pProps.PageBreakBefore = new PageBreakBefore();
                 else pProps.PageBreakBefore = null;
                 return true;
+            // fuzz-2: 'break=newPage' is the natural paragraph-context spelling
+            // (mirrors section-context CONSISTENCY(section-type-alias) in
+            // WordHandler.Set.Dispatch.cs:387). For a paragraph this maps to
+            // pageBreakBefore=true; bare break=true also accepted.
+            case "break":
+                bool pbb = value.ToLowerInvariant() switch
+                {
+                    "newpage" or "page" or "nextpage" or "pagebreak" => true,
+                    "none" or "" => false,
+                    _ => IsTruthy(value)
+                };
+                if (pbb) pProps.PageBreakBefore = new PageBreakBefore();
+                else pProps.PageBreakBefore = null;
+                return true;
             case "widowcontrol" or "widoworphan":
                 if (IsTruthy(value)) pProps.WidowControl = new WidowControl();
                 else pProps.WidowControl = new WidowControl { Val = false };

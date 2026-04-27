@@ -323,9 +323,9 @@
     "pageBreakBefore": {
       "type": "bool",
       "description": "force a page break before this paragraph.",
-      "aliases": ["pagebreakbefore"],
+      "aliases": ["pagebreakbefore", "break"],
       "add": true, "set": true, "get": false,
-      "examples": ["--prop pageBreakBefore=true"],
+      "examples": ["--prop pageBreakBefore=true", "--prop break=newPage"],
       "enforcement": "report"
     },
     "widowControl": {
