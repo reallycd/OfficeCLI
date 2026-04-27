@@ -183,9 +183,13 @@ public partial class ExcelHandler
             // workbook-level Sheet element, not on the Worksheet.
             var wbSheet = GetWorkbook().GetFirstChild<Sheets>()?.Elements<Sheet>()
                 .FirstOrDefault(s => s.Name?.Value?.Equals(sheetNameFromPath, StringComparison.OrdinalIgnoreCase) == true);
-            if (wbSheet?.State?.Value is { } sheetState
-                && (sheetState == SheetStateValues.Hidden || sheetState == SheetStateValues.VeryHidden))
-                sheetNode.Format["hidden"] = true;
+            // bt-3: always emit the hidden key so users can distinguish
+            // "explicitly visible" from "never set". Other booleans (autoFilter,
+            // protect) follow the toggle-on/key-missing pattern, but for sheet
+            // visibility the user often round-trips Set hidden=true → Set
+            // hidden=false and needs the readback to confirm the toggle landed.
+            sheetNode.Format["hidden"] = wbSheet?.State?.Value is { } sheetState
+                && (sheetState == SheetStateValues.Hidden || sheetState == SheetStateValues.VeryHidden);
 
             // Sheet protection readback
             var sheetProtection = ws.GetFirstChild<SheetProtection>();
