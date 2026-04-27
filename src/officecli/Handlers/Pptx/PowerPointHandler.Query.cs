@@ -663,7 +663,10 @@ public partial class PowerPointHandler
             return GenericXmlQuery.ElementToNode(fbCurrent, path, depth);
         }
 
-        var slideIdx = int.Parse(match.Groups[1].Value);
+        // BUG-R36-02 fix: int.Parse throws OverflowException for values > int.MaxValue.
+        // Convert to ArgumentException to match the style of other handlers (Word/Excel).
+        if (!int.TryParse(match.Groups[1].Value, out var slideIdx))
+            throw new ArgumentException($"Invalid slide index '{match.Groups[1].Value}'. Must be a positive integer.");
         var slideParts = GetSlideParts().ToList();
         if (slideIdx < 1 || slideIdx > slideParts.Count)
             throw new ArgumentException($"Slide {slideIdx} not found (total: {slideParts.Count})");
