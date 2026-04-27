@@ -190,6 +190,25 @@ internal static partial class ChartHelper
         var valAxes = plotArea.Elements<C.ValueAxis>().ToList();
         if (valAxes.Count > 1) node.Format["secondaryAxis"] = "true";
 
+        // Axis label rotation (txPr/bodyPr/@rot in 60000ths of a degree)
+        var catAxisForRot = (OpenXmlElement?)plotArea.GetFirstChild<C.CategoryAxis>()
+            ?? plotArea.GetFirstChild<C.DateAxis>();
+        var catAxisTxPr = catAxisForRot?.GetFirstChild<C.TextProperties>();
+        var catAxisBodyPr = catAxisTxPr?.GetFirstChild<Drawing.BodyProperties>();
+        if (catAxisBodyPr?.Rotation?.HasValue == true)
+        {
+            var deg = catAxisBodyPr.Rotation.Value / 60000.0;
+            node.Format["xaxis.labelRotation"] = deg.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        }
+        var valAxisFirst = plotArea.GetFirstChild<C.ValueAxis>();
+        var valAxisTxPrRot = valAxisFirst?.GetFirstChild<C.TextProperties>();
+        var valAxisBodyPr = valAxisTxPrRot?.GetFirstChild<Drawing.BodyProperties>();
+        if (valAxisBodyPr?.Rotation?.HasValue == true)
+        {
+            var deg = valAxisBodyPr.Rotation.Value / 60000.0;
+            node.Format["yaxis.labelRotation"] = deg.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
         // Axis titles
         var valAxis = plotArea.GetFirstChild<C.ValueAxis>();
         var valAxisTitle = valAxis?.GetFirstChild<C.Title>()?.Descendants<Drawing.Text>().FirstOrDefault()?.Text;
