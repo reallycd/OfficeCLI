@@ -77,6 +77,42 @@ public partial class ExcelHandler
             ws.AppendChild(sp);
     }
 
+    /// <summary>
+    /// Parse a print-margin value into inches (PageMargins schema unit).
+    /// Accepts "1in", "2.5cm", "1.27cm", "72pt", "10mm", or a bare number (inches).
+    /// </summary>
+    internal static double ParseMarginInches(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException("Invalid margin: empty value.");
+        var v = value.Trim().ToLowerInvariant();
+        double num;
+        if (v.EndsWith("in"))
+        {
+            num = double.Parse(v[..^2].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            return num;
+        }
+        if (v.EndsWith("cm"))
+        {
+            num = double.Parse(v[..^2].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            return num / 2.54;
+        }
+        if (v.EndsWith("mm"))
+        {
+            num = double.Parse(v[..^2].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            return num / 25.4;
+        }
+        if (v.EndsWith("pt"))
+        {
+            num = double.Parse(v[..^2].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            return num / 72.0;
+        }
+        // Bare number = inches
+        if (!double.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out num))
+            throw new ArgumentException($"Invalid margin value: '{value}' (use 1in, 2cm, 10mm, 72pt, or bare inches)");
+        return num;
+    }
+
     internal static void ValidateSheetName(string name)
     {
         if (string.IsNullOrWhiteSpace(name))

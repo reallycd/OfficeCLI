@@ -238,6 +238,19 @@ public partial class ExcelHandler
                 sheetNode.Format["printArea"] = paText;
             }
 
+            // PageMargins readback
+            var pm = ws.GetFirstChild<PageMargins>();
+            if (pm != null)
+            {
+                static string Fmt(double v) => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "in";
+                if (pm.Top?.HasValue == true) sheetNode.Format["margin.top"] = Fmt(pm.Top.Value);
+                if (pm.Bottom?.HasValue == true) sheetNode.Format["margin.bottom"] = Fmt(pm.Bottom.Value);
+                if (pm.Left?.HasValue == true) sheetNode.Format["margin.left"] = Fmt(pm.Left.Value);
+                if (pm.Right?.HasValue == true) sheetNode.Format["margin.right"] = Fmt(pm.Right.Value);
+                if (pm.Header?.HasValue == true) sheetNode.Format["margin.header"] = Fmt(pm.Header.Value);
+                if (pm.Footer?.HasValue == true) sheetNode.Format["margin.footer"] = Fmt(pm.Footer.Value);
+            }
+
             // Header/Footer readback
             var headerFooter = ws.GetFirstChild<HeaderFooter>();
             if (headerFooter?.OddHeader?.Text != null)

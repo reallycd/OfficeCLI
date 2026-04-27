@@ -1316,6 +1316,37 @@ public partial class ExcelHandler
                     hf.OddFooter = new OddFooter(value);
                     break;
                 }
+                case "margin.top" or "margin.bottom" or "margin.left" or "margin.right" or "margin.header" or "margin.footer":
+                {
+                    var inches = ParseMarginInches(value);
+                    var pm = ws.GetFirstChild<PageMargins>();
+                    if (pm == null)
+                    {
+                        // PageMargins requires all 6 attributes; default per Excel.
+                        pm = new PageMargins
+                        {
+                            Top = 0.75, Bottom = 0.75,
+                            Left = 0.7, Right = 0.7,
+                            Header = 0.3, Footer = 0.3
+                        };
+                        // PageMargins must precede pageSetup, headerFooter, etc. but follow
+                        // sheetProtection/printOptions. Insert before pageSetup if present.
+                        var anchor = ws.GetFirstChild<PageSetup>() ?? (OpenXmlElement?)ws.GetFirstChild<HeaderFooter>();
+                        if (anchor != null) ws.InsertBefore(pm, anchor);
+                        else ws.AppendChild(pm);
+                    }
+                    var which = key.ToLowerInvariant().Substring("margin.".Length);
+                    switch (which)
+                    {
+                        case "top": pm.Top = inches; break;
+                        case "bottom": pm.Bottom = inches; break;
+                        case "left": pm.Left = inches; break;
+                        case "right": pm.Right = inches; break;
+                        case "header": pm.Header = inches; break;
+                        case "footer": pm.Footer = inches; break;
+                    }
+                    break;
+                }
 
                 // ==================== Sorting ====================
                 // CONSISTENCY(range-action): sort is a region action like merge.
@@ -1369,7 +1400,7 @@ public partial class ExcelHandler
 
                 default:
                     unsupported.Add(unsupported.Count == 0
-                        ? $"{key} (valid sheet props: name, freeze, zoom, showGridLines, showRowColHeaders, tabcolor, autofilter, hidden, merge, protect, password, printarea, orientation, papersize, fittopage, header, footer, sort, sortHeader)"
+                        ? $"{key} (valid sheet props: name, freeze, zoom, showGridLines, showRowColHeaders, tabcolor, autofilter, visibility, hidden, merge, protect, password, printarea, orientation, papersize, fittopage, header, footer, margin.top, margin.bottom, margin.left, margin.right, margin.header, margin.footer, sort, sortHeader)"
                         : key);
                     break;
             }
