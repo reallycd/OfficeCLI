@@ -66,6 +66,15 @@
       "examples": ["--prop color=#FF0000"],
       "readback": "#-prefixed uppercase hex (scheme colors pass through)",
       "enforcement": "report"
+    },
+    "cap": {
+      "type": "enum",
+      "values": ["none", "small", "all"],
+      "aliases": ["allCaps", "allcaps", "smallCaps", "smallcaps"],
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop cap=all", "--prop allCaps=true"],
+      "readback": "none | small | all",
+      "enforcement": "report"
     }
   }
 }

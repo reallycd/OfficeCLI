@@ -223,6 +223,16 @@
       "readback": "true | false",
       "enforcement": "report"
     },
+    "cap": {
+      "type": "enum",
+      "description": "letter-case rendering mode for shape text (rPr/cap).",
+      "values": ["none", "small", "all"],
+      "aliases": ["allCaps", "allcaps", "smallCaps", "smallcaps"],
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop cap=all", "--prop allCaps=true"],
+      "readback": "none | small | all",
+      "enforcement": "report"
+    },
     "valign": {
       "type": "enum",
       "description": "vertical alignment of text within shape.",

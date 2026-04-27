@@ -39,9 +39,13 @@ public partial class PowerPointHandler
 
                 var newShape = CreateTextShape(shapeId, shapeName, text, false);
 
+                // CONSISTENCY(font-dotted-alias): mirror Set's font.<attr> aliases
+                // (commit 80fb739e). Without these, `add shape --prop font.name=Arial`
+                // silently dropped while `set --prop font.name=Arial` succeeded.
                 if (properties.TryGetValue("size", out var sizeStr)
                     || properties.TryGetValue("fontSize", out sizeStr)
-                    || properties.TryGetValue("fontsize", out sizeStr))
+                    || properties.TryGetValue("fontsize", out sizeStr)
+                    || properties.TryGetValue("font.size", out sizeStr))
                 {
                     var sizeVal = (int)Math.Round(ParseFontSize(sizeStr) * 100);
                     foreach (var run in newShape.Descendants<Drawing.Run>())
@@ -50,7 +54,8 @@ public partial class PowerPointHandler
                         rProps.FontSize = sizeVal;
                     }
                 }
-                if (properties.TryGetValue("bold", out var boldStr))
+                if (properties.TryGetValue("bold", out var boldStr)
+                    || properties.TryGetValue("font.bold", out boldStr))
                 {
                     var isBold = IsTruthy(boldStr);
                     foreach (var run in newShape.Descendants<Drawing.Run>())
@@ -59,7 +64,8 @@ public partial class PowerPointHandler
                         rProps.Bold = isBold;
                     }
                 }
-                if (properties.TryGetValue("italic", out var italicStr))
+                if (properties.TryGetValue("italic", out var italicStr)
+                    || properties.TryGetValue("font.italic", out italicStr))
                 {
                     var isItalic = IsTruthy(italicStr);
                     foreach (var run in newShape.Descendants<Drawing.Run>())
@@ -68,7 +74,8 @@ public partial class PowerPointHandler
                         rProps.Italic = isItalic;
                     }
                 }
-                if (properties.TryGetValue("color", out var colorVal))
+                if (properties.TryGetValue("color", out var colorVal)
+                    || properties.TryGetValue("font.color", out colorVal))
                 {
                     foreach (var run in newShape.Descendants<Drawing.Run>())
                     {
@@ -88,7 +95,8 @@ public partial class PowerPointHandler
                 }
 
                 // Schema order: font (latin/ea) after fill
-                if (properties.TryGetValue("font", out var font))
+                if (properties.TryGetValue("font", out var font)
+                    || properties.TryGetValue("font.name", out font))
                 {
                     foreach (var run in newShape.Descendants<Drawing.Run>())
                     {
@@ -140,7 +148,8 @@ public partial class PowerPointHandler
                 }
 
                 // Underline
-                if (properties.TryGetValue("underline", out var ulVal))
+                if (properties.TryGetValue("underline", out var ulVal)
+                    || properties.TryGetValue("font.underline", out ulVal))
                 {
                     foreach (var run in newShape.Descendants<Drawing.Run>())
                     {
@@ -160,7 +169,10 @@ public partial class PowerPointHandler
                 }
 
                 // Strikethrough
-                if (properties.TryGetValue("strikethrough", out var stVal) || properties.TryGetValue("strike", out stVal))
+                if (properties.TryGetValue("strikethrough", out var stVal)
+                    || properties.TryGetValue("strike", out stVal)
+                    || properties.TryGetValue("font.strike", out stVal)
+                    || properties.TryGetValue("font.strikethrough", out stVal))
                 {
                     foreach (var run in newShape.Descendants<Drawing.Run>())
                     {
@@ -172,6 +184,29 @@ public partial class PowerPointHandler
                             "false" or "none" => Drawing.TextStrikeValues.NoStrike,
                             _ => throw new ArgumentException($"Invalid strikethrough value: '{stVal}'. Valid values: single, double, none.")
                         };
+                    }
+                }
+
+                // Caps (allCaps / smallCaps / cap=all|small|none)
+                // CONSISTENCY(allcaps-alias): mirror Word commit ccaed17a;
+                // accept allCaps/allcaps/smallCaps/smallcaps as run-level rPr cap.
+                {
+                    string? capValue = null;
+                    if (properties.TryGetValue("cap", out var rawCap)) capValue = rawCap;
+                    else if (properties.TryGetValue("allCaps", out var allCaps)
+                          || properties.TryGetValue("allcaps", out allCaps))
+                        capValue = (allCaps is "0" or "false" or "False" or "none") ? "none" : "all";
+                    else if (properties.TryGetValue("smallCaps", out var smallCaps)
+                          || properties.TryGetValue("smallcaps", out smallCaps))
+                        capValue = (smallCaps is "0" or "false" or "False" or "none") ? "none" : "small";
+
+                    if (capValue != null)
+                    {
+                        foreach (var run in newShape.Descendants<Drawing.Run>())
+                        {
+                            var rProps = run.RunProperties ?? (run.RunProperties = new Drawing.RunProperties());
+                            rProps.SetAttribute(new OpenXmlAttribute("", "cap", "", capValue));
+                        }
                     }
                 }
 

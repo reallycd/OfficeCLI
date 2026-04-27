@@ -89,6 +89,34 @@ public partial class PowerPointHandler
     {
         var unsupported = new List<string>();
 
+        // CONSISTENCY(allcaps-alias): map allCaps/smallCaps onto OOXML's `cap`
+        // attribute so users mirroring CSS / Word vocabulary don't see UNSUPPORTED.
+        // Mirrors WordHandler.Helpers.cs allcaps→Caps fix (commit ccaed17a).
+        // Boolean-truthy → "all" / "small" ; explicit "none"/"false" → cap="none".
+        if (!properties.ContainsKey("cap"))
+        {
+            string? capsKey = properties.Keys.FirstOrDefault(k =>
+                k.Equals("allCaps", StringComparison.OrdinalIgnoreCase)
+                || k.Equals("allcaps", StringComparison.OrdinalIgnoreCase));
+            if (capsKey != null)
+            {
+                var v = properties[capsKey];
+                properties = new Dictionary<string, string>(properties, properties.Comparer);
+                properties.Remove(capsKey);
+                properties["cap"] = (v is "0" or "false" or "False" or "none") ? "none" : "all";
+            }
+            string? smallCapsKey = properties.Keys.FirstOrDefault(k =>
+                k.Equals("smallCaps", StringComparison.OrdinalIgnoreCase)
+                || k.Equals("smallcaps", StringComparison.OrdinalIgnoreCase));
+            if (smallCapsKey != null && !properties.ContainsKey("cap"))
+            {
+                var v = properties[smallCapsKey];
+                properties = new Dictionary<string, string>(properties, properties.Comparer);
+                properties.Remove(smallCapsKey);
+                properties["cap"] = (v is "0" or "false" or "False" or "none") ? "none" : "small";
+            }
+        }
+
         // CONSISTENCY(prop-order): fill carriers (fill/gradient/pattern) must run
         // before modifier props (opacity attaches alpha to the resulting solidFill);
         // otherwise opacity auto-creates a white fill that fill= then overwrites.
@@ -107,6 +135,22 @@ public partial class PowerPointHandler
             if (value is null) { unsupported.Add(key); continue; }
             switch (key.ToLowerInvariant())
             {
+                case "cap":
+                {
+                    // Apply rPr/cap to every run in the shape (or to runs when in run context).
+                    if (!DrawingCapsEnum.Contains(value))
+                    {
+                        unsupported.Add($"cap (value '{value}' must be one of: none, small, all)");
+                        break;
+                    }
+                    var targetRuns = runs.Count > 0 ? runs : shape.Descendants<Drawing.Run>().ToList();
+                    foreach (var run in targetRuns)
+                    {
+                        var rPr = run.RunProperties ?? (run.RunProperties = new Drawing.RunProperties());
+                        rPr.SetAttribute(new OpenXmlAttribute("", "cap", "", value));
+                    }
+                    break;
+                }
                 case "text":
                 {
                     var textLines = value.Replace("\\n", "\n").Split('\n');
