@@ -430,6 +430,88 @@ public partial class WordHandler
         return string.Concat(run.Elements<Text>().Select(t => t.Text));
     }
 
+    // CONSISTENCY(run-special-content): canonical parsers for the run-internal
+    // structural types (ptab / fldChar / break) shared by Add and Set.
+    // Lowercase XML attribute values are the canonical input; legacy
+    // synonyms (`line`→TextWrapping) are accepted for ergonomics.
+    private static EnumValue<AbsolutePositionTabAlignmentValues> ParsePtabAlignment(string s)
+    {
+        return (s ?? "").Trim().ToLowerInvariant() switch
+        {
+            "left" => AbsolutePositionTabAlignmentValues.Left,
+            "center" => AbsolutePositionTabAlignmentValues.Center,
+            "right" => AbsolutePositionTabAlignmentValues.Right,
+            _ => throw new ArgumentException(
+                $"Invalid ptab alignment '{s}'. Valid: left, center, right.")
+        };
+    }
+
+    private static EnumValue<AbsolutePositionTabPositioningBaseValues> ParsePtabRelativeTo(string s)
+    {
+        return (s ?? "").Trim().ToLowerInvariant() switch
+        {
+            "margin" => AbsolutePositionTabPositioningBaseValues.Margin,
+            "indent" => AbsolutePositionTabPositioningBaseValues.Indent,
+            _ => throw new ArgumentException(
+                $"Invalid ptab relativeTo '{s}'. Valid: margin, indent.")
+        };
+    }
+
+    private static EnumValue<AbsolutePositionTabLeaderCharValues> ParsePtabLeader(string s)
+    {
+        return (s ?? "").Trim().ToLowerInvariant() switch
+        {
+            "none" => AbsolutePositionTabLeaderCharValues.None,
+            "dot" => AbsolutePositionTabLeaderCharValues.Dot,
+            "hyphen" => AbsolutePositionTabLeaderCharValues.Hyphen,
+            "middledot" => AbsolutePositionTabLeaderCharValues.MiddleDot,
+            "underscore" => AbsolutePositionTabLeaderCharValues.Underscore,
+            _ => throw new ArgumentException(
+                $"Invalid ptab leader '{s}'. Valid: none, dot, hyphen, middleDot, underscore.")
+        };
+    }
+
+    private static EnumValue<FieldCharValues> ParseFieldCharType(string s)
+    {
+        return (s ?? "").Trim().ToLowerInvariant() switch
+        {
+            "begin" => FieldCharValues.Begin,
+            "separate" => FieldCharValues.Separate,
+            "end" => FieldCharValues.End,
+            _ => throw new ArgumentException(
+                $"Invalid fieldCharType '{s}'. Valid: begin, separate, end.")
+        };
+    }
+
+    // CONSISTENCY(para-path-canonical): replace the last `/p[...]` segment
+    // in <paramref name="path"/> with paraId-form (`/p[@paraId=X]`) when the
+    // paragraph carries a w14:paraId. Used by Add helpers whose `parentPath`
+    // already targets the paragraph itself (so re-appending /p[N] would
+    // double the segment) — the result mirrors what Get later surfaces, so
+    // the returned path round-trips through subsequent Get/Set calls
+    // without rewriting.
+    private static string ReplaceTrailingParaSegment(string path, Paragraph para)
+    {
+        if (para.ParagraphId?.Value == null) return path;
+        var idx = path.LastIndexOf("/p[", StringComparison.Ordinal);
+        if (idx < 0) return path;
+        var endIdx = path.IndexOf(']', idx);
+        if (endIdx < 0) return path;
+        return path[..idx] + $"/p[@paraId={para.ParagraphId.Value}]" + path[(endIdx + 1)..];
+    }
+
+    private static EnumValue<BreakValues> ParseBreakType(string s)
+    {
+        return (s ?? "").Trim().ToLowerInvariant() switch
+        {
+            "page" => BreakValues.Page,
+            "column" => BreakValues.Column,
+            "textwrapping" or "line" => BreakValues.TextWrapping,
+            _ => throw new ArgumentException(
+                $"Invalid break type '{s}'. Valid: page, column, line, textwrapping.")
+        };
+    }
+
     private string GetStyleName(Paragraph para)
     {
         var styleId = para.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
@@ -2447,7 +2529,13 @@ public partial class WordHandler
 
         _usedParaIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Collect all paragraphs from body + headers + footers
+        // CONSISTENCY(paraid-global-uniqueness): paraId is allocated from a
+        // single _nextParaId counter shared across the entire handler, so
+        // EVERY part that can hold paragraphs must contribute to the
+        // collision set. Body + headers + footers were already covered;
+        // footnotes/endnotes/comments were missed, letting newly generated
+        // paraIds collide with paraIds Word had already written into those
+        // parts (rare in practice but a real correctness gap).
         var allParagraphs = mainPart.Document.Body.Descendants<Paragraph>().AsEnumerable();
         foreach (var headerPart in mainPart.HeaderParts)
             if (headerPart.Header != null)
@@ -2455,6 +2543,12 @@ public partial class WordHandler
         foreach (var footerPart in mainPart.FooterParts)
             if (footerPart.Footer != null)
                 allParagraphs = allParagraphs.Concat(footerPart.Footer.Descendants<Paragraph>());
+        if (mainPart.FootnotesPart?.Footnotes != null)
+            allParagraphs = allParagraphs.Concat(mainPart.FootnotesPart.Footnotes.Descendants<Paragraph>());
+        if (mainPart.EndnotesPart?.Endnotes != null)
+            allParagraphs = allParagraphs.Concat(mainPart.EndnotesPart.Endnotes.Descendants<Paragraph>());
+        if (mainPart.WordprocessingCommentsPart?.Comments != null)
+            allParagraphs = allParagraphs.Concat(mainPart.WordprocessingCommentsPart.Comments.Descendants<Paragraph>());
 
         var paragraphs = allParagraphs.ToList();
 

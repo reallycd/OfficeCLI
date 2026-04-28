@@ -299,7 +299,8 @@ public partial class WordHandler
             }
             imgPara = existingPara;
             var imgRunIdx = existingPara.Elements<Run>().ToList().IndexOf(imgRun) + 1;
-            resultPath = $"{parentPath}/r[{imgRunIdx}]";
+            // CONSISTENCY(para-path-canonical): canonicalize to paraId-form.
+            resultPath = $"{ReplaceTrailingParaSegment(parentPath, existingPara)}/r[{imgRunIdx}]";
         }
         else if (parent is TableCell imgCell)
         {
@@ -544,7 +545,11 @@ public partial class WordHandler
             {
                 var runs = GetAllRuns(parentParaInline);
                 var runIdxInline = runs.IndexOf(oleRun) + 1;
-                return $"{parentPath}/r[{runIdxInline}]";
+                // CONSISTENCY(para-path-canonical): canonicalize when the
+                // SDT lives directly inside a paragraph (parentPath ends in
+                // /p[...]); otherwise (SDT in a cell) parentPath does not
+                // end in /p[...] and ReplaceTrailingParaSegment is a no-op.
+                return $"{ReplaceTrailingParaSegment(parentPath, parentParaInline)}/r[{runIdxInline}]";
             }
             return parentPath + "/r[1]";
         }
@@ -580,7 +585,8 @@ public partial class WordHandler
                 olePIdx++;
             }
             var oleRunIdx = existingPara.Elements<Run>().ToList().IndexOf(oleRun) + 1;
-            resultPath = $"{parentPath}/r[{oleRunIdx}]";
+            // CONSISTENCY(para-path-canonical): canonicalize to paraId-form.
+            resultPath = $"{ReplaceTrailingParaSegment(parentPath, existingPara)}/r[{oleRunIdx}]";
         }
         else if (parent is TableCell oleCell)
         {

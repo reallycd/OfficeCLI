@@ -167,6 +167,22 @@ public partial class WordHandler
     private List<string> SetElementRun(Run run, Dictionary<string, string> properties)
     {
         var unsupported = new List<string>();
+
+        // CONSISTENCY(run-special-content): mirror Get's per-kind type
+        // upgrade in WordHandler.Navigation.cs. When a run carries inline
+        // structure (ptab/fldChar/instrText/break) instead of <w:t>,
+        // expose its settable surface — alignment / fieldCharType / instr
+        // / breakType — so audit→fix workflows can correct PAGE→DATE
+        // field codes, flip header alignment regions, etc., without
+        // dropping to raw-set XML.
+        var ptabEl = run.GetFirstChild<PositionalTab>();
+        var fldCharEl = run.GetFirstChild<FieldChar>();
+        var instrEl = run.GetFirstChild<FieldCode>();
+        var breakElInline = run.GetFirstChild<Break>();
+        var hasText = run.GetFirstChild<Text>() != null;
+        bool isSpecialRun = ptabEl != null || fldCharEl != null || instrEl != null
+                            || (breakElInline != null && !hasText);
+
         foreach (var (key, value) in properties)
         {
             // CONSISTENCY(run-prop-helper): rPr-only props delegate to
@@ -178,7 +194,35 @@ public partial class WordHandler
                 continue;
             switch (key.ToLowerInvariant())
             {
+                // === run-special-content writes ===
+                case "alignment" when ptabEl != null:
+                    ptabEl.Alignment = ParsePtabAlignment(value);
+                    break;
+                case "relativeto" when ptabEl != null:
+                    ptabEl.RelativeTo = ParsePtabRelativeTo(value);
+                    break;
+                case "leader" when ptabEl != null:
+                    ptabEl.Leader = ParsePtabLeader(value);
+                    break;
+                case "fieldchartype" when fldCharEl != null:
+                    fldCharEl.FieldCharType = ParseFieldCharType(value);
+                    break;
+                case "instr" when instrEl != null:
+                    instrEl.Text = value;
+                    break;
+                case "breaktype" when breakElInline != null:
+                    breakElInline.Type = ParseBreakType(value);
+                    break;
                 case "text":
+                    // Special-content runs have no <w:t> payload — silently
+                    // injecting text would corrupt the OOXML structure
+                    // (e.g. <w:t> next to <w:instrText> breaks PAGE field
+                    // rendering). Reject so the caller sees `unsupported`.
+                    if (isSpecialRun)
+                    {
+                        unsupported.Add(key);
+                        break;
+                    }
                     var textEl = run.GetFirstChild<Text>();
                     if (textEl != null) textEl.Text = value;
                     break;

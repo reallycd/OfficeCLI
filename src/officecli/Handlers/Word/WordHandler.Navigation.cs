@@ -942,7 +942,18 @@ public partial class WordHandler
             if (pProps != null)
             {
                 if (pProps.ParagraphStyleId?.Val?.Value != null)
+                {
+                    // CONSISTENCY(style-dual-key): `style` carries the OOXML
+                    // styleId (canonical handle used by basedOn/pStyle/rStyle).
+                    // `styleName` carries the user-facing display name. Both
+                    // are emitted so query selectors can pick precision
+                    // (styleId=/styleName=) or convenience (style=, lenient).
                     node.Format["style"] = pProps.ParagraphStyleId.Val.Value;
+                    node.Format["styleId"] = pProps.ParagraphStyleId.Val.Value;
+                    var displayName = GetStyleName(para);
+                    if (!string.IsNullOrEmpty(displayName))
+                        node.Format["styleName"] = displayName;
+                }
                 if (pProps.Justification?.Val != null)
                 {
                     var alignText = pProps.Justification.Val.InnerText;
@@ -1284,6 +1295,57 @@ public partial class WordHandler
                 if (!string.IsNullOrEmpty(oleNode.Text))
                     node.Text = oleNode.Text;
             }
+            // CONSISTENCY(run-special-content): runs that primarily carry inline
+            // structure (ptab, fldChar, instrText, tab, break) instead of a
+            // <w:t> payload were previously surfaced as opaque
+            // {type:"run", text:""} placeholders — six of these in a row in
+            // header/footer paragraphs (PAGE field begin/instr/separate/end +
+            // ptab anchors), all indistinguishable. Upgrade the node.Type so
+            // callers walking paragraph.children can rebuild left/center/right
+            // alignment regions and detect field markers without reparsing the
+            // raw OOXML themselves. Mirrors the type=picture / type=ole
+            // pattern above.
+            var ptabEl = run.GetFirstChild<PositionalTab>();
+            if (ptabEl != null)
+            {
+                node.Type = "ptab";
+                // Open XML SDK v3 enum .ToString() returns "FooValues { }"
+                // — use .InnerText to get the actual XML attribute value
+                // ("center", "right", "begin", etc.). Same trap as the
+                // LineSpacingRuleValues note in WordHandler CLAUDE.md.
+                if (ptabEl.Alignment?.HasValue == true)
+                    node.Format["alignment"] = ptabEl.Alignment.InnerText;
+                if (ptabEl.RelativeTo?.HasValue == true)
+                    node.Format["relativeTo"] = ptabEl.RelativeTo.InnerText;
+                if (ptabEl.Leader?.HasValue == true)
+                    node.Format["leader"] = ptabEl.Leader.InnerText;
+            }
+            var fldCharEl = run.GetFirstChild<FieldChar>();
+            if (fldCharEl != null)
+            {
+                node.Type = "fieldChar";
+                if (fldCharEl.FieldCharType?.HasValue == true)
+                    node.Format["fieldCharType"] = fldCharEl.FieldCharType.InnerText;
+            }
+            var instrEl = run.GetFirstChild<FieldCode>();
+            if (instrEl != null)
+            {
+                node.Type = "instrText";
+                node.Format["instr"] = instrEl.Text ?? "";
+            }
+            var tabEl = run.GetFirstChild<TabChar>();
+            if (tabEl != null && string.IsNullOrEmpty(node.Text))
+            {
+                node.Type = "tab";
+            }
+            var breakEl = run.GetFirstChild<Break>();
+            if (breakEl != null && string.IsNullOrEmpty(node.Text))
+            {
+                node.Type = "break";
+                if (breakEl.Type?.HasValue == true)
+                    node.Format["breakType"] = breakEl.Type.InnerText;
+            }
+
             if (run.Parent is Hyperlink hlParent && hlParent.Id?.Value != null)
             {
                 try

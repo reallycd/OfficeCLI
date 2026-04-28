@@ -561,6 +561,11 @@ public partial class WordHandler
         string resultPath;
         if (parent is Paragraph fieldPara)
         {
+            // CONSISTENCY(para-path-canonical): canonicalize parentPath to
+            // paraId-form so the returned path mirrors what Get later
+            // surfaces (paraId is globally unique, works in body / header /
+            // footer / cell alike).
+            var fieldParaPath = ReplaceTrailingParaSegment(parentPath, fieldPara);
             // index is a childElement-index (ResolveAnchorPosition counts pPr too).
             // Route the 5 field runs through the pPr-aware multi-insert helper
             // so index 0 clamps forward past ParagraphProperties and they stay
@@ -572,7 +577,7 @@ public partial class WordHandler
                     new OpenXmlElement[] { fieldRunBegin, fieldRunInstr, fieldRunSep, fieldRunResult, fieldRunEnd },
                     index);
                 var runIdxAfterInsert = fieldPara.Elements<Run>().TakeWhile(r => r != fieldRunResult).Count();
-                resultPath = $"{parentPath}/r[{runIdxAfterInsert + 1}]";
+                resultPath = $"{fieldParaPath}/r[{runIdxAfterInsert + 1}]";
             }
             else
             {
@@ -588,7 +593,7 @@ public partial class WordHandler
                 // above, which correctly resolves to Result.
                 var runs = GetAllRuns(fieldPara);
                 var runIdx = runs.IndexOf(fieldRunResult) + 1;
-                resultPath = $"{parentPath}/r[{runIdx}]";
+                resultPath = $"{fieldParaPath}/r[{runIdx}]";
             }
         }
         else
@@ -604,10 +609,14 @@ public partial class WordHandler
             fNewPara.AppendChild(fieldRunSep);
             fNewPara.AppendChild(fieldRunResult);
             fNewPara.AppendChild(fieldRunEnd);
+            // CONSISTENCY(paraid-global-uniqueness): newly-created paragraphs
+            // get a paraId from the global counter so they remain addressable
+            // by paraId regardless of which container they land in.
+            AssignParaId(fNewPara);
             InsertAtIndexOrAppend(parent, fNewPara, index);
-            // CONSISTENCY(add-get-symmetry): when the field paragraph lands in
-            // a header/footer/cell, return a path rooted at the actual parent
-            // so Get can resolve it. Mirrors AddBreak (line ~640).
+            // CONSISTENCY(para-path-canonical): paraId-form path works in
+            // every container (body / header / footer / cell). Same shape
+            // as AddBreak's new-paragraph branch.
             if (parent is Body)
             {
                 var fIdx2 = body.Elements<Paragraph>().TakeWhile(p => p != fNewPara).Count();
@@ -616,7 +625,7 @@ public partial class WordHandler
             else
             {
                 var fIdx2 = parent.Elements<Paragraph>().TakeWhile(p => p != fNewPara).Count();
-                resultPath = $"{parentPath}/p[{fIdx2 + 1}]";
+                resultPath = $"{parentPath}/{BuildParaPathSegment(fNewPara, fIdx2 + 1)}";
             }
         }
         return resultPath;
@@ -665,9 +674,16 @@ public partial class WordHandler
             // index is a childElement-index (ResolveAnchorPosition counts pPr).
             // pPr-aware insert keeps pPr as the first child of <w:p>.
             InsertIntoParagraph(brkPara, brkRun, index);
-            var brkParaIdx = body.Elements<Paragraph>().TakeWhile(p => p != brkPara).Count();
             var brkRunIdx = brkPara.Elements<Run>().TakeWhile(r => r != brkRun).Count() + 1;
-            resultPath = $"/body/{BuildParaPathSegment(brkPara, brkParaIdx + 1)}/r[{brkRunIdx}]";
+            // CONSISTENCY(para-path-canonical): parentPath already targets
+            // the paragraph; replacing its trailing /p[...] segment with
+            // paraId-form yields a path that mirrors what Get later
+            // surfaces and works regardless of which container the
+            // paragraph lives in (body / header / footer / cell). The
+            // previous /body/-hardcoded path produced wrong prefixes for
+            // breaks added inside header/footer paragraphs.
+            var canonicalParaPath = ReplaceTrailingParaSegment(parentPath, brkPara);
+            resultPath = $"{canonicalParaPath}/r[{brkRunIdx}]";
         }
         else
         {
@@ -676,10 +692,18 @@ public partial class WordHandler
             // table cells, etc. receive the new paragraph. /styles is blocked
             // earlier by ValidateParentChild.
             var brkNewPara = new Paragraph(brkRun);
+            // CONSISTENCY(paraid-global-uniqueness): every newly-created
+            // paragraph gets a paraId so it remains addressable by paraId
+            // across containers (body / headers / footers / cells); the
+            // global counter guarantees uniqueness so the same path form
+            // works everywhere.
+            AssignParaId(brkNewPara);
             InsertAtIndexOrAppend(parent, brkNewPara, index);
-            // Build a navigable path based on the actual container. Only /body
-            // has the @paraId indexer; other containers (headers/footers/cells)
-            // use positional paths rooted at parentPath.
+            // CONSISTENCY(para-path-canonical): paraId-form is valid in
+            // every container (the paraId is globally unique and Navigation
+            // resolves it inside header/footer/cell parts as well as body).
+            // Use the same BuildParaPathSegment helper everywhere instead
+            // of a body-only specialization.
             if (parent is Body)
             {
                 var brkIdx = body.Elements<Paragraph>().TakeWhile(p => p != brkNewPara).Count();
@@ -688,7 +712,7 @@ public partial class WordHandler
             else
             {
                 var brkIdx = parent.Elements<Paragraph>().TakeWhile(p => p != brkNewPara).Count();
-                resultPath = $"{parentPath}/p[{brkIdx + 1}]";
+                resultPath = $"{parentPath}/{BuildParaPathSegment(brkNewPara, brkIdx + 1)}";
             }
         }
         return resultPath;

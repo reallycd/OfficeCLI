@@ -129,6 +129,7 @@ public partial class WordHandler
             "row" or "tr" => AddRow(parent, parentPath, index, properties),
             "cell" or "tc" => AddCell(parent, parentPath, index, properties),
             "tab" or "tabstop" => AddTab(parent, parentPath, index, properties),
+            "ptab" or "positionaltab" => AddPtab(parent, parentPath, index, properties),
             "chart" => AddChart(parent, parentPath, index, properties),
             "picture" or "image" or "img" => AddPicture(parent, parentPath, index, properties),
             "ole" or "oleobject" or "object" or "embed" => AddOle(parent, parentPath, index, properties),

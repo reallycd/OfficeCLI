@@ -681,13 +681,14 @@ public partial class WordHandler
                 targetPara.InsertBefore(newRun, refElement);
             }
             var runPosIdx = targetPara.Elements<Run>().ToList().IndexOf(newRun) + 1;
-            resultPath = $"{parentPath}/r[{runPosIdx}]";
+            // CONSISTENCY(para-path-canonical): canonicalize to paraId-form.
+            resultPath = $"{ReplaceTrailingParaSegment(parentPath, targetPara)}/r[{runPosIdx}]";
         }
         else
         {
             targetPara.AppendChild(newRun);
             var runCount = targetPara.Elements<Run>().Count();
-            resultPath = $"{parentPath}/r[{runCount}]";
+            resultPath = $"{ReplaceTrailingParaSegment(parentPath, targetPara)}/r[{runCount}]";
         }
 
         // Refresh textId since paragraph content changed
@@ -800,5 +801,42 @@ public partial class WordHandler
 
         var newIdx = tabs.Elements<TabStop>().ToList().IndexOf(tabStop) + 1;
         return $"{parentPath}/tab[{newIdx}]";
+    }
+
+    // CONSISTENCY(run-special-content): inline `<w:ptab>` (positional tab,
+    // Word 2007+) wrapped in `<w:r>`. Used in headers/footers to anchor
+    // left/center/right alignment regions. Mirrors AddBreak's "wrap an
+    // inline structure in a Run, insert into paragraph" pattern.
+    private string AddPtab(OpenXmlElement parent, string parentPath, int? index, Dictionary<string, string> properties)
+    {
+        if (!properties.TryGetValue("alignment", out var alignment) || string.IsNullOrWhiteSpace(alignment))
+            throw new ArgumentException("ptab requires 'alignment' property (left, center, or right).");
+
+        var ptab = new PositionalTab { Alignment = ParsePtabAlignment(alignment) };
+        if (properties.TryGetValue("relativeTo", out var relTo)
+            || properties.TryGetValue("relativeto", out relTo))
+            ptab.RelativeTo = ParsePtabRelativeTo(relTo);
+        else
+            ptab.RelativeTo = AbsolutePositionTabPositioningBaseValues.Margin;
+        if (properties.TryGetValue("leader", out var leader) && !string.IsNullOrWhiteSpace(leader))
+            ptab.Leader = ParsePtabLeader(leader);
+        else
+            ptab.Leader = AbsolutePositionTabLeaderCharValues.None;
+
+        var ptabRun = new Run(ptab);
+
+        if (parent is Paragraph para)
+        {
+            InsertIntoParagraph(para, ptabRun, index);
+            var runIdx = para.Elements<Run>().TakeWhile(r => r != ptabRun).Count() + 1;
+            // CONSISTENCY(para-path-canonical): when parent is itself a
+            // paragraph, parentPath already points at it — appending another
+            // /p[N] would yield an illegal /p[1]/p[1]/r[N] path. Replace the
+            // trailing /p[...] segment with paraId-form so the returned
+            // path round-trips through Get unchanged.
+            var canonicalParaPath = ReplaceTrailingParaSegment(parentPath, para);
+            return $"{canonicalParaPath}/r[{runIdx}]";
+        }
+        throw new ArgumentException("ptab parent must be a paragraph (got " + parent.GetType().Name + ").");
     }
 }
