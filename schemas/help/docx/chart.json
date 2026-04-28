@@ -122,7 +122,6 @@
     "gradient":       { "type": "string", "aliases": ["gradientfill"], "add": true, "set": true, "get": false },
     "gradients":      { "type": "string", "add": true, "set": true, "get": false },
     "view3d":         { "type": "string", "aliases": ["camera", "perspective"], "add": true, "set": true, "get": false },
-    "rotation":       { "type": "string", "add": true, "set": true, "get": false },
 
     "smooth":         { "type": "bool",   "add": true, "set": true, "get": false },
     "trendline":      { "type": "string", "add": true, "set": true, "get": false },
