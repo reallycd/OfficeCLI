@@ -126,11 +126,85 @@ internal static partial class ChartHelper
                     break;
 
                 case "min":
-                    translated["axismin"] = value;
+                    // CONSISTENCY(chart/axis-role-write): the legacy `axismin` key
+                    // always targets the primary value axis. For role=value2 we must
+                    // write to the secondary axis directly to mirror BuildAxisNode's
+                    // Skip(1) read path. Same for max/crosses/crossesat below.
+                    if (normalizedRole == "value2" && targetAxis is OpenXmlCompositeElement minAx2)
+                    {
+                        var scaling = minAx2.GetFirstChild<C.Scaling>();
+                        if (scaling != null)
+                        {
+                            scaling.RemoveAllChildren<C.MinAxisValue>();
+                            scaling.AppendChild(new C.MinAxisValue { Val = ParseHelpers.SafeParseDouble(value, "min") });
+                        }
+                        directlyHandled.Add(key);
+                    }
+                    else
+                    {
+                        translated["axismin"] = value;
+                    }
                     break;
 
                 case "max":
-                    translated["axismax"] = value;
+                    if (normalizedRole == "value2" && targetAxis is OpenXmlCompositeElement maxAx2)
+                    {
+                        var scaling = maxAx2.GetFirstChild<C.Scaling>();
+                        if (scaling != null)
+                        {
+                            scaling.RemoveAllChildren<C.MaxAxisValue>();
+                            var maxEl = new C.MaxAxisValue { Val = ParseHelpers.SafeParseDouble(value, "max") };
+                            // Schema order: logBase?, orientation, max?, min? — insert max after orientation
+                            var orient = scaling.GetFirstChild<C.Orientation>();
+                            if (orient != null) orient.InsertAfterSelf(maxEl);
+                            else scaling.PrependChild(maxEl);
+                        }
+                        directlyHandled.Add(key);
+                    }
+                    else
+                    {
+                        translated["axismax"] = value;
+                    }
+                    break;
+
+                case "crosses":
+                    if (normalizedRole == "value2" && targetAxis is OpenXmlCompositeElement crsAx2)
+                    {
+                        crsAx2.RemoveAllChildren<C.Crosses>();
+                        crsAx2.RemoveAllChildren<C.CrossesAt>();
+                        var crossVal = value.ToLowerInvariant() switch
+                        {
+                            "max" => C.CrossesValues.Maximum,
+                            "min" => C.CrossesValues.Minimum,
+                            _ => C.CrossesValues.AutoZero
+                        };
+                        var newCrosses = new C.Crosses { Val = crossVal };
+                        var cbBefore = crsAx2.GetFirstChild<C.CrossBetween>();
+                        if (cbBefore != null) crsAx2.InsertBefore(newCrosses, cbBefore);
+                        else crsAx2.AppendChild(newCrosses);
+                        directlyHandled.Add(key);
+                    }
+                    else
+                    {
+                        translated["crosses"] = value;
+                    }
+                    break;
+
+                case "crossesat":
+                    if (normalizedRole == "value2" && targetAxis is OpenXmlCompositeElement crsAtAx2)
+                    {
+                        crsAtAx2.RemoveAllChildren<C.Crosses>();
+                        crsAtAx2.RemoveAllChildren<C.CrossesAt>();
+                        var newCrossesAt = new C.CrossesAt { Val = ParseHelpers.SafeParseDouble(value, "crossesAt") };
+                        var cbBefore2 = crsAtAx2.GetFirstChild<C.CrossBetween>();
+                        if (cbBefore2 != null) crsAtAx2.InsertBefore(newCrossesAt, cbBefore2);
+                        else crsAtAx2.AppendChild(newCrossesAt);
+                        directlyHandled.Add(key);
+                    }
+                    else
+                    {
+                        translated["crossesat"] = value;
+                    }
                     break;
 
                 case "labelrotation":
