@@ -761,18 +761,35 @@ internal static partial class ChartHelper
 
                 case "view3d" or "camera" or "perspective":
                 {
-                    // Format: "rotX,rotY,perspective" e.g. "15,20,30" or just "20" for perspective
+                    // Format: "rotX,rotY,perspective" e.g. "15,20,30" or just "20" for perspective.
+                    // Reject named-key form (e.g. "rotX=20,rotY=30") — would silently parse as 0,0,0.
+                    if (value.Contains('='))
+                    {
+                        unsupported.Add(key);
+                        break;
+                    }
                     var v3dParts = value.Split(',');
                     chart.RemoveAllChildren<C.View3D>();
                     var view3d = new C.View3D();
-                    if (v3dParts.Length >= 1 && int.TryParse(v3dParts[0], out var rx))
-                        view3d.AppendChild(new C.RotateX { Val = (sbyte)rx });
-                    if (v3dParts.Length >= 2 && int.TryParse(v3dParts[1], out var ry))
-                        view3d.AppendChild(new C.RotateY { Val = (ushort)ry });
-                    if (v3dParts.Length >= 3 && int.TryParse(v3dParts[2], out var persp))
-                        view3d.AppendChild(new C.Perspective { Val = (byte)persp });
-                    else if (v3dParts.Length == 1 && int.TryParse(v3dParts[0], out var p))
+                    if (v3dParts.Length == 1)
+                    {
+                        // Single value → perspective only (per documented behavior).
+                        if (!int.TryParse(v3dParts[0], out var p))
+                        {
+                            unsupported.Add(key);
+                            break;
+                        }
                         view3d.AppendChild(new C.Perspective { Val = (byte)p });
+                    }
+                    else
+                    {
+                        if (v3dParts.Length >= 1 && int.TryParse(v3dParts[0], out var rx))
+                            view3d.AppendChild(new C.RotateX { Val = (sbyte)rx });
+                        if (v3dParts.Length >= 2 && int.TryParse(v3dParts[1], out var ry))
+                            view3d.AppendChild(new C.RotateY { Val = (ushort)ry });
+                        if (v3dParts.Length >= 3 && int.TryParse(v3dParts[2], out var persp))
+                            view3d.AppendChild(new C.Perspective { Val = (byte)persp });
+                    }
                     // Schema order: title, autoTitleDeleted, pivotFmts, view3D, ..., plotArea
                     var v3dPlotArea = chart.GetFirstChild<C.PlotArea>();
                     if (v3dPlotArea != null) chart.InsertBefore(view3d, v3dPlotArea);
