@@ -1715,6 +1715,35 @@ public partial class ExcelHandler
         return (p[0], p[1]);
     }
 
+    // CONSISTENCY(merge-precision): list every existing <mergeCell> whose
+    // ref lies entirely inside `outerRange` (inclusive rectangle containment).
+    // Used by range-level unmerge to surface precise refs when the caller's
+    // range covers sub-merges but does not equal one — see ExcelHandler.Set
+    // SetRange merge=false branch.
+    private static List<string> FindMergesContainedIn(MergeCells mergeCells, string outerRange)
+    {
+        var hits = new List<string>();
+        var (o1, o2) = SplitRange(outerRange);
+        var (oSc, oSr) = ParseCellReference(o1);
+        var (oEc, oEr) = ParseCellReference(o2);
+        int oSci = ColumnNameToIndex(oSc), oEci = ColumnNameToIndex(oEc);
+        if (oSci > oEci) (oSci, oEci) = (oEci, oSci);
+        if (oSr > oEr) (oSr, oEr) = (oEr, oSr);
+        foreach (var mc in mergeCells.Elements<MergeCell>())
+        {
+            if (mc.Reference?.Value is not string r) continue;
+            var (m1, m2) = SplitRange(r.ToUpperInvariant());
+            var (mSc, mSr) = ParseCellReference(m1);
+            var (mEc, mEr) = ParseCellReference(m2);
+            int mSci = ColumnNameToIndex(mSc), mEci = ColumnNameToIndex(mEc);
+            if (mSci > mEci) (mSci, mEci) = (mEci, mSci);
+            if (mSr > mEr) (mSr, mEr) = (mEr, mSr);
+            if (mSci >= oSci && mEci <= oEci && mSr >= oSr && mEr <= oEr)
+                hits.Add(r);
+        }
+        return hits;
+    }
+
     // CONSISTENCY(merge-overlap): centralize the "insert one MergeCell"
     // policy. Excel rejects overlapping <mergeCell> entries with a
     // "found a problem" repair dialog, but the OOXML SDK happily

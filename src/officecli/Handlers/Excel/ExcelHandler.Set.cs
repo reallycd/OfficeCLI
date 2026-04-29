@@ -1519,6 +1519,7 @@ public partial class ExcelHandler
                 {
                     bool doMerge = value.Equals("true", StringComparison.OrdinalIgnoreCase)
                         || value == "1" || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+                    bool doSweep = value.Equals("sweep", StringComparison.OrdinalIgnoreCase);
 
                     if (doMerge)
                     {
@@ -1532,15 +1533,57 @@ public partial class ExcelHandler
                         InsertMergeCellChecked(mergeCells, rangeRef);
                         mergeCells.Count = (uint)mergeCells.Elements<MergeCell>().Count();
                     }
+                    else if (doSweep)
+                    {
+                        // Explicit "I know this is destructive": clear every merge whose ref
+                        // lies entirely inside this range. Idempotent no-op when none.
+                        var mergeCells = ws.GetFirstChild<MergeCells>();
+                        if (mergeCells != null)
+                        {
+                            var contained = FindMergesContainedIn(mergeCells, rangeRef);
+                            foreach (var refStr in contained)
+                            {
+                                var mc = mergeCells.Elements<MergeCell>()
+                                    .FirstOrDefault(m => m.Reference?.Value == refStr);
+                                mc?.Remove();
+                            }
+                            if (!mergeCells.HasChildren) mergeCells.Remove();
+                            else mergeCells.Count = (uint)mergeCells.Elements<MergeCell>().Count();
+                        }
+                    }
                     else
                     {
-                        // Unmerge: remove the MergeCell for this range
+                        // Unmerge: remove the MergeCell whose ref exactly matches this range.
+                        // CONSISTENCY(merge-precision): exact-match only. If the range covers
+                        // sub-merges but does not equal one, fail with the precise refs the
+                        // caller should use, rather than silently sweeping or no-op'ing.
+                        // Pass merge=sweep to clear all sub-merges at once.
                         var mergeCells = ws.GetFirstChild<MergeCells>();
                         if (mergeCells != null)
                         {
                             var mc = mergeCells.Elements<MergeCell>()
                                 .FirstOrDefault(m => m.Reference?.Value?.Equals(rangeRef, StringComparison.OrdinalIgnoreCase) == true);
-                            mc?.Remove();
+                            if (mc != null)
+                            {
+                                mc.Remove();
+                            }
+                            else
+                            {
+                                var contained = FindMergesContainedIn(mergeCells, rangeRef);
+                                if (contained.Count > 0)
+                                {
+                                    throw new CliException(
+                                        $"Range {rangeRef} does not match an existing merge but contains {contained.Count} merge(s): " +
+                                        string.Join(", ", contained) + ".")
+                                    {
+                                        Code = "merge_not_exact",
+                                        Suggestion = $"Call merge=false on each precise range (e.g. /SheetName/{contained[0]} --prop merge=false), " +
+                                                     $"or pass merge=sweep to clear all sub-merges in {rangeRef} at once.",
+                                        ValidValues = contained.ToArray(),
+                                    };
+                                }
+                                // else: nothing to unmerge anywhere in the range — idempotent no-op.
+                            }
 
                             // Remove empty MergeCells element
                             if (!mergeCells.HasChildren)

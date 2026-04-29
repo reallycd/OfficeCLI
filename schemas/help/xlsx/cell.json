@@ -138,9 +138,9 @@
     },
     "merge": {
       "type": "string",
-      "description": "merge range applied post-cell-creation (parity with `set`). Accepts a single A1 range (A1:C3) or comma-separated ranges (A1:B1,A2:B2).",
+      "description": "merge range applied post-cell-creation (parity with `set`). Accepts a single A1 range (A1:C3) or comma-separated ranges (A1:B1,A2:B2). Use merge=false to clear an existing merge anchored at this cell (aliases: unmerge, none, empty).",
       "add": true, "set": true, "get": false,
-      "examples": ["--prop merge=A1:C3"],
+      "examples": ["--prop merge=A1:C3", "--prop merge=false"],
       "enforcement": "report"
     },
     "ref": {
