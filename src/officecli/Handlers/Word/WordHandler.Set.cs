@@ -722,6 +722,26 @@ public partial class WordHandler
             "ideographdigital" => NumberFormatValues.IdeographDigital,
             "ideographtraditional" => NumberFormatValues.IdeographTraditional,
             "ideographzodiac" => NumberFormatValues.IdeographZodiac,
+            "ideographenclosedcircle" => NumberFormatValues.IdeographEnclosedCircle,
+            // Hebrew / Thai / Korean / English text and ordinal forms (ECMA-376
+            // §17.18.59 ST_NumberFormat). Previously rejected — required for
+            // Hebrew (hebrew1/2), Thai (bahtText), Japanese iroha ordering,
+            // Korean ganada ordering, and English-language ordinal lists.
+            "hebrew1" => NumberFormatValues.Hebrew1,
+            "hebrew2" => NumberFormatValues.Hebrew2,
+            "bahttext" => NumberFormatValues.BahtText,
+            "dollartext" => NumberFormatValues.DollarText,
+            "iroha" => NumberFormatValues.Iroha,
+            "irohafullwidth" => NumberFormatValues.IrohaFullWidth,
+            "ganada" => NumberFormatValues.Ganada,
+            "ordinal" => NumberFormatValues.Ordinal,
+            "cardinaltext" => NumberFormatValues.CardinalText,
+            "ordinaltext" => NumberFormatValues.OrdinalText,
+            "bullet" => NumberFormatValues.Bullet,
+            "decimalenclosedcircle" => NumberFormatValues.DecimalEnclosedCircle,
+            "decimalenclosedcirclechinese" => NumberFormatValues.DecimalEnclosedCircleChinese,
+            "decimalenclosedfullstop" => NumberFormatValues.DecimalEnclosedFullstop,
+            "decimalenclosedparen" => NumberFormatValues.DecimalEnclosedParen,
             "none" => NumberFormatValues.None,
             _ => throw new ArgumentException(
                 $"Invalid pageNumFmt: '{value}'. Common values: decimal, lowerRoman, upperRoman, "
