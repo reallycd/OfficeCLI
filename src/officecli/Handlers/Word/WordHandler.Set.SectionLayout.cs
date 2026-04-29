@@ -80,6 +80,33 @@ public partial class WordHandler
                 pgNum.Format = ParseNumberFormat(value);
                 return true;
             }
+            case "pgborders" or "pageborders":
+            {
+                // R9-5: shorthand to materialize all four sides on a sectPr.
+                // Accepts:
+                //   "none"        — strip pgBorders entirely
+                //   "box"         — single 4pt thin solid on top/left/bottom/right
+                // Borders are emitted in CT_PageBorders schema order
+                // (top, left, bottom, right) so consumers picking up the section
+                // see the standard 4-sided layout.
+                var sectPr = EnsureSectionProperties();
+                sectPr.RemoveAllChildren<PageBorders>();
+                var lower = value.ToLowerInvariant().Trim();
+                if (lower == "none" || lower == "off" || lower == "false")
+                    return true;
+                if (lower != "box")
+                    throw new ArgumentException(
+                        $"Invalid pgBorders value: '{value}'. Valid: box, none.");
+                var pb = new PageBorders
+                {
+                    TopBorder    = new TopBorder    { Val = BorderValues.Single, Size = 4U, Color = "auto", Space = 24U },
+                    LeftBorder   = new LeftBorder   { Val = BorderValues.Single, Size = 4U, Color = "auto", Space = 24U },
+                    BottomBorder = new BottomBorder { Val = BorderValues.Single, Size = 4U, Color = "auto", Space = 24U },
+                    RightBorder  = new RightBorder  { Val = BorderValues.Single, Size = 4U, Color = "auto", Space = 24U },
+                };
+                InsertSectPrChildInOrder(sectPr, pb);
+                return true;
+            }
             case "direction" or "dir" or "bidi":
             {
                 // CONSISTENCY(section-layout-fallback): mirrors the per-section
