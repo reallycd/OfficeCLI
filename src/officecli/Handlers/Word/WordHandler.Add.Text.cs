@@ -46,6 +46,32 @@ public partial class WordHandler
             var markRPr = pProps.ParagraphMarkRunProperties ?? pProps.AppendChild(new ParagraphMarkRunProperties());
             ApplyRunFormatting(markRPr, "rtl", paraRtl.Value ? "true" : "false");
         }
+        // Complex-script run flags (bCs/iCs/szCs) hoisted above the text
+        // block so an `add p --prop bold.cs=true` without explicit text
+        // still records the flag on the paragraph mark rPr — matches how
+        // bare bold round-trips via the generic TypedAttributeFallback
+        // path. Without this, schema-strict round-trip tests for
+        // bold.cs/italic.cs/size.cs lose the flag (no run carrier exists
+        // when text is absent, and TypedAttributeFallback can't synthesise
+        // <w:bCs/> / <w:iCs/> / <w:szCs/> child elements from a key).
+        if ((properties.TryGetValue("bold.cs", out var paraBoldCs)
+                || properties.TryGetValue("font.bold.cs", out paraBoldCs)))
+        {
+            var markRPr = pProps.ParagraphMarkRunProperties ?? pProps.AppendChild(new ParagraphMarkRunProperties());
+            ApplyRunFormatting(markRPr, "bold.cs", paraBoldCs);
+        }
+        if ((properties.TryGetValue("italic.cs", out var paraItalicCs)
+                || properties.TryGetValue("font.italic.cs", out paraItalicCs)))
+        {
+            var markRPr = pProps.ParagraphMarkRunProperties ?? pProps.AppendChild(new ParagraphMarkRunProperties());
+            ApplyRunFormatting(markRPr, "italic.cs", paraItalicCs);
+        }
+        if (properties.TryGetValue("size.cs", out var paraSizeCs)
+            || properties.TryGetValue("font.size.cs", out paraSizeCs))
+        {
+            var markRPr = pProps.ParagraphMarkRunProperties ?? pProps.AppendChild(new ParagraphMarkRunProperties());
+            ApplyRunFormatting(markRPr, "size.cs", paraSizeCs);
+        }
         if (properties.TryGetValue("firstlineindent", out var indent) || properties.TryGetValue("firstLineIndent", out indent))
         {
             // Lenient input: accept "2cm", "0.5in", "18pt", or bare twips (backward compat).
@@ -563,8 +589,21 @@ public partial class WordHandler
             newRProps.AppendChild(new FontSize { Val = ((int)Math.Round(ParseFontSize(rSize) * 2, MidpointRounding.AwayFromZero)).ToString() });
         if ((properties.TryGetValue("bold", out var rBold) || properties.TryGetValue("font.bold", out rBold)) && IsTruthy(rBold))
             newRProps.Bold = new Bold();
+        if ((properties.TryGetValue("bold.cs", out var rBoldCs) || properties.TryGetValue("font.bold.cs", out rBoldCs))
+            && IsTruthy(rBoldCs))
+            newRProps.BoldComplexScript = new BoldComplexScript();
         if ((properties.TryGetValue("italic", out var rItalic) || properties.TryGetValue("font.italic", out rItalic)) && IsTruthy(rItalic))
             newRProps.Italic = new Italic();
+        if ((properties.TryGetValue("italic.cs", out var rItalicCs) || properties.TryGetValue("font.italic.cs", out rItalicCs))
+            && IsTruthy(rItalicCs))
+            newRProps.ItalicComplexScript = new ItalicComplexScript();
+        if (properties.TryGetValue("size.cs", out var rSizeCs) || properties.TryGetValue("font.size.cs", out rSizeCs))
+        {
+            newRProps.FontSizeComplexScript = new FontSizeComplexScript
+            {
+                Val = ((int)Math.Round(ParseFontSize(rSizeCs) * 2, MidpointRounding.AwayFromZero)).ToString()
+            };
+        }
         if (properties.TryGetValue("color", out var rColor) || properties.TryGetValue("font.color", out rColor))
             newRProps.Color = new Color { Val = SanitizeHex(rColor) };
         if (properties.TryGetValue("underline", out var rUnderline) || properties.TryGetValue("font.underline", out rUnderline))
