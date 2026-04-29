@@ -630,6 +630,32 @@ public partial class WordHandler
                 // Wrap m:oMathPara in w:p for schema validity
                 var wrapPara = new Paragraph(mathPara);
                 AssignParaId(wrapPara);
+
+                // CONSISTENCY(rtl-cascade): inherit pPr/bidi and paragraph-mark
+                // rPr/rtl from the host paragraph so the wrapper preserves the
+                // surrounding RTL flow. Without this, an equation inserted
+                // into an Arabic paragraph silently breaks document direction
+                // (mark anchors LTR, page side flips).
+                if (parent is Paragraph parentParaForBidi
+                    && parentParaForBidi.ParagraphProperties is { } parentPPr)
+                {
+                    var parentBidi = parentPPr.GetFirstChild<BiDi>();
+                    var parentMarkRtl = parentPPr.ParagraphMarkRunProperties?
+                        .GetFirstChild<RightToLeftText>();
+                    if (parentBidi != null || parentMarkRtl != null)
+                    {
+                        var wrapPPr = wrapPara.ParagraphProperties ??= new ParagraphProperties();
+                        if (parentBidi != null && wrapPPr.GetFirstChild<BiDi>() == null)
+                            wrapPPr.PrependChild(new BiDi());
+                        if (parentMarkRtl != null)
+                        {
+                            var markRPr = wrapPPr.ParagraphMarkRunProperties
+                                ?? wrapPPr.AppendChild(new ParagraphMarkRunProperties());
+                            if (markRPr.GetFirstChild<RightToLeftText>() == null)
+                                markRPr.AppendChild(new RightToLeftText());
+                        }
+                    }
+                }
                 if (insertAfter != null)
                 {
                     insertTarget.InsertAfter(wrapPara, insertAfter);
