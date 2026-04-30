@@ -967,6 +967,8 @@ public partial class WordHandler
                     SetListStartValue(para, ParseHelpers.SafeParseInt(value, "start"));
                     break;
                 case "size" or "font" or "bold" or "italic" or "color" or "highlight" or "underline" or "strike"
+                  or "font.latin" or "font.ea" or "font.eastasia" or "font.eastasian"
+                  or "font.cs" or "font.complexscript" or "font.complex"
                   or "bold.cs" or "italic.cs" or "size.cs"
                   or "font.bold.cs" or "font.italic.cs" or "font.size.cs":
                     // Apply run-level formatting to all runs in the paragraph

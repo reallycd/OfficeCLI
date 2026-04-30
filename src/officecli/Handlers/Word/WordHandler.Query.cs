@@ -622,6 +622,26 @@ public partial class WordHandler
                 // CONSISTENCY(underline-color): underline.color not yet exposed by paragraph/run Get; backfill there too.
                 if (rPr.Underline?.Color?.Value != null) styleNode.Format["underline.color"] = ParseHelpers.FormatHexColor(rPr.Underline.Color.Value);
                 if (rPr.Strike != null) styleNode.Format["strike"] = true;
+                // Schema-driven readback for the rest of the rPr surface
+                // (CONSISTENCY: schema-contract — schemas/help/docx/style.json
+                // declares these get:true).
+                if (rPr.GetFirstChild<DoubleStrike>() != null) styleNode.Format["dstrike"] = true;
+                if (rPr.GetFirstChild<Caps>() != null) styleNode.Format["caps"] = true;
+                if (rPr.GetFirstChild<SmallCaps>() != null) styleNode.Format["smallCaps"] = true;
+                if (rPr.GetFirstChild<Vanish>() != null) styleNode.Format["vanish"] = true;
+                if (rPr.GetFirstChild<RightToLeftText>() != null) styleNode.Format["rtl"] = true;
+                var hl = rPr.GetFirstChild<Highlight>();
+                if (hl?.Val != null) styleNode.Format["highlight"] = hl.Val.InnerText;
+                var shd = rPr.GetFirstChild<Shading>();
+                if (shd?.Fill?.Value != null) styleNode.Format["shading"] = ParseHelpers.FormatHexColor(shd.Fill.Value);
+                var vAlign = rPr.GetFirstChild<VerticalTextAlignment>();
+                if (vAlign?.Val != null) styleNode.Format["vertAlign"] = vAlign.Val.InnerText;
+                // <w:spacing w:val="N"/> stores character spacing in twentieths
+                // of a point — convert back to a unit-qualified "Npt" string
+                // matching the input format accepted by ApplyRunFormatting.
+                var charSp = rPr.GetFirstChild<Spacing>();
+                if (charSp?.Val?.Value is int charSpVal)
+                    styleNode.Format["charSpacing"] = $"{charSpVal / 20.0:0.##}pt";
             }
 
             // Read paragraph properties
@@ -631,7 +651,13 @@ public partial class WordHandler
                 if (pPr.Justification?.Val?.Value != null) styleNode.Format["alignment"] = pPr.Justification.Val.InnerText;
                 // direction: <w:bidi/> on style pPr maps to canonical
                 // direction=rtl. Mirrors paragraph readback canonical key.
-                if (pPr.BiDi != null) styleNode.Format["direction"] = "rtl";
+                // Also expose under schema-canonical `bidi` (CONSISTENCY:
+                // schema-contract — schemas/help/docx/style.json `bidi`).
+                if (pPr.BiDi != null)
+                {
+                    styleNode.Format["direction"] = "rtl";
+                    styleNode.Format["bidi"] = true;
+                }
                 if (pPr.SpacingBetweenLines != null)
                 {
                     var sp = pPr.SpacingBetweenLines;
