@@ -119,6 +119,7 @@
     },
     "color": {
       "type": "color",
+      "description": "font color. Accepts #RRGGBB, RRGGBB, named colors (red, blue…), rgb(r,g,b), or 3-char shorthand (F00).",
       "add": true, "set": true, "get": true,
       "examples": ["--prop color=#FF0000"],
       "readback": "#-prefixed uppercase hex",
