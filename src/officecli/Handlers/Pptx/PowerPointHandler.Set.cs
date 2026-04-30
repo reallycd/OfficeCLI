@@ -180,16 +180,21 @@ public partial class PowerPointHandler
         var animSetMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/animation\[(\d+)\]$");
         if (animSetMatch.Success) return SetShapeAnimationByPath(animSetMatch, properties);
 
+        // CONSISTENCY(path-aliases): PPT accepts both long-form (`/run[N]`,
+        // `/paragraph[N]`) and short-form (`/r[N]`, `/p[N]`) so callers
+        // coming from Word don't need to remember two path vocabularies.
+        // Long form is the canonical written by handler/Get; short form is
+        // accepted-only on input.
         // Try run-level path: /slide[N]/shape[M]/run[K]
-        var runMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/run\[(\d+)\]$");
+        var runMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/(?:run|r)\[(\d+)\]$");
         if (runMatch.Success) return SetShapeRunByPath(runMatch, properties);
 
         // Try paragraph/run path: /slide[N]/shape[M]/paragraph[P]/run[K]
-        var paraRunMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/paragraph\[(\d+)\]/run\[(\d+)\]$");
+        var paraRunMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/(?:paragraph|p)\[(\d+)\]/(?:run|r)\[(\d+)\]$");
         if (paraRunMatch.Success) return SetParagraphRunByPath(paraRunMatch, properties);
 
         // Try paragraph-level path: /slide[N]/shape[M]/paragraph[P]
-        var paraMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/paragraph\[(\d+)\]$");
+        var paraMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/(?:paragraph|p)\[(\d+)\]$");
         if (paraMatch.Success) return SetParagraphByPath(paraMatch, properties);
 
         // Try chart axis-by-role sub-path: /slide[N]/chart[M]/axis[@role=ROLE].

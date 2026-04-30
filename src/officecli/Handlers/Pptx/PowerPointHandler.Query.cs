@@ -241,7 +241,10 @@ public partial class PowerPointHandler
         }
 
         // Try paragraph/run paths: /slide[N]/shape[M]/paragraph[P] or .../run[K] or .../paragraph[P]/run[K]
-        var runPathMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/run\[(\d+)\]$");
+        // CONSISTENCY(path-aliases): see PowerPointHandler.Set.cs runMatch — PPT
+        // accepts Word-style `/r[N]` / `/p[N]` short forms in addition to the
+        // canonical `/run[N]` / `/paragraph[N]`.
+        var runPathMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/(?:run|r)\[(\d+)\]$");
         if (runPathMatch.Success)
         {
             var sIdx = int.Parse(runPathMatch.Groups[1].Value);
@@ -255,7 +258,7 @@ public partial class PowerPointHandler
             return RunToNode(allRuns[rIdx - 1], $"/slide[{sIdx}]/{shapePathSeg}/run[{rIdx}]", runSlidePart);
         }
 
-        var paraPathMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/paragraph\[(\d+)\](?:/run\[(\d+)\])?$");
+        var paraPathMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/(?:paragraph|p)\[(\d+)\](?:/(?:run|r)\[(\d+)\])?$");
         if (paraPathMatch.Success)
         {
             var sIdx = int.Parse(paraPathMatch.Groups[1].Value);

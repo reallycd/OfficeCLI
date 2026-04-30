@@ -1103,8 +1103,14 @@ public partial class PowerPointHandler
                     {
                         if (!IsValidDrawingRunAttrValue(key, value))
                         {
-                            unsupported.Add($"{key} (value '{value}' is not valid for OOXML rPr/{key} type)");
-                            break;
+                            // Invalid value for a typed OOXML rPr attribute (kern=abc,
+                            // u=GARBAGE, b=2, etc.) — throw rather than collecting
+                            // into `unsupported`, which is reserved for unknown keys
+                            // (handler-doesn't-implement). Invalid values silently
+                            // accepted would corrupt the document and fail strict
+                            // OOXML validation downstream.
+                            throw new ArgumentException(
+                                $"Invalid value for OOXML rPr/{key}: '{value}'.");
                         }
                         handledByRun = true;
                         // CONSISTENCY(lang-clear): empty lang/altLang clears the

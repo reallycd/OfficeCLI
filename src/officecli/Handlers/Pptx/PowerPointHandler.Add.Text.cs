@@ -292,7 +292,8 @@ public partial class PowerPointHandler
     private string AddRun(string parentPath, int? index, Dictionary<string, string> properties)
     {
                 // Add a run to a paragraph: /slide[N]/shape[M]/paragraph[P] or /slide[N]/shape[M]
-                var runParaMatch = Regex.Match(parentPath, @"^/slide\[(\d+)\]/shape\[(\d+)\](?:/paragraph\[(\d+)\])?$");
+                // CONSISTENCY(path-aliases): accept short-form `/p[N]` alongside `/paragraph[N]`.
+                var runParaMatch = Regex.Match(parentPath, @"^/slide\[(\d+)\]/shape\[(\d+)\](?:/(?:paragraph|p)\[(\d+)\])?$");
                 if (!runParaMatch.Success)
                     throw new ArgumentException("Runs must be added to a shape or paragraph: /slide[N]/shape[M] or /slide[N]/shape[M]/paragraph[P]");
 
