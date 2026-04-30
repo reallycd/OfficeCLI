@@ -958,6 +958,12 @@ public partial class WordHandler
             node.Text = GetFootnoteText(fnEl);
             if (fnEl.Id?.Value != null) node.Format["id"] = fnEl.Id.Value;
             if (fnEl.Type?.Value != null) node.Format["type"] = fnEl.Type.InnerText;
+            // R20-wbt-1: surface direction from the first content paragraph's
+            // pPr.BiDi so the cascade (already applied by ApplyFootnoteEndnoteFormatKeys)
+            // round-trips through Get. Mirrors the paragraph readback below.
+            var fnBidi = fnEl.Descendants<Paragraph>().FirstOrDefault()?.ParagraphProperties?.GetFirstChild<BiDi>();
+            if (fnBidi != null)
+                node.Format["direction"] = TryReadOnOff(fnBidi.Val) == true ? "rtl" : "ltr";
             return node;
         }
 
@@ -967,6 +973,9 @@ public partial class WordHandler
             node.Text = GetFootnoteText(enEl);
             if (enEl.Id?.Value != null) node.Format["id"] = enEl.Id.Value;
             if (enEl.Type?.Value != null) node.Format["type"] = enEl.Type.InnerText;
+            var enBidi = enEl.Descendants<Paragraph>().FirstOrDefault()?.ParagraphProperties?.GetFirstChild<BiDi>();
+            if (enBidi != null)
+                node.Format["direction"] = TryReadOnOff(enBidi.Val) == true ? "rtl" : "ltr";
             return node;
         }
 

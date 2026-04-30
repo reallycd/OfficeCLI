@@ -401,6 +401,12 @@ public partial class WordHandler
             var fnNode = new DocumentNode { Path = $"/footnote[@footnoteId={fnId}]", Type = "footnote" };
             fnNode.Text = GetFootnoteText(fn);
             if (fn.Id?.Value != null) fnNode.Format["id"] = fn.Id.Value;
+            if (fn.Type?.Value != null) fnNode.Format["type"] = fn.Type.InnerText;
+            // R20-wbt-1: surface direction from the first content paragraph's
+            // pPr.BiDi so direction=rtl applied via Add/Set round-trips through Get.
+            var fnBidi = fn.Descendants<Paragraph>().FirstOrDefault()?.ParagraphProperties?.GetFirstChild<BiDi>();
+            if (fnBidi != null)
+                fnNode.Format["direction"] = TryReadOnOff(fnBidi.Val) == true ? "rtl" : "ltr";
             return fnNode;
         }
         var enMatch = System.Text.RegularExpressions.Regex.Match(path, @"^/endnote\[(?:@endnoteId=)?(\d+)\]$",
@@ -415,6 +421,10 @@ public partial class WordHandler
             var enNode = new DocumentNode { Path = $"/endnote[@endnoteId={enId}]", Type = "endnote" };
             enNode.Text = GetFootnoteText(en);
             if (en.Id?.Value != null) enNode.Format["id"] = en.Id.Value;
+            if (en.Type?.Value != null) enNode.Format["type"] = en.Type.InnerText;
+            var enBidi = en.Descendants<Paragraph>().FirstOrDefault()?.ParagraphProperties?.GetFirstChild<BiDi>();
+            if (enBidi != null)
+                enNode.Format["direction"] = TryReadOnOff(enBidi.Val) == true ? "rtl" : "ltr";
             return enNode;
         }
 
