@@ -321,6 +321,17 @@ public partial class WordHandler
                 var ind = lvl.PreviousParagraphProperties?.Indentation;
                 if (ind?.Left?.Value != null) lNode.Format["indent"] = ind.Left.Value;
                 if (ind?.Hanging?.Value != null) lNode.Format["hanging"] = ind.Hanging.Value;
+                // R19-wbt-1: surface lvl pPr.bidi as canonical direction key.
+                // CONSISTENCY(canonical): rtl emitted; ltr suppressed (default)
+                // matches paragraph/section/style readback semantics.
+                var lvlBidi = lvl.PreviousParagraphProperties?.GetFirstChild<BiDi>();
+                if (lvlBidi != null)
+                {
+                    var on = TryReadOnOff(lvlBidi.Val);
+                    if (on != true) on = on ?? true; // <w:bidi/> defaults true
+                    if (on == true) lNode.Format["direction"] = "rtl";
+                    else lNode.Format["direction"] = "ltr";
+                }
                 var rpr = lvl.NumberingSymbolRunProperties;
                 if (rpr != null)
                 {

@@ -1150,12 +1150,37 @@ public partial class WordHandler
                 throw new ArgumentException($"hanging must be an integer in twips (got '{hangRaw}').");
             hanging = hv;
         }
-        if (leftIndent.HasValue || hanging.HasValue)
+        // direction/dir/bidi: paragraph-level RTL on the level's pPr.
+        // CONSISTENCY(canonical): same vocabulary as paragraph/section direction.
+        // Only `rtl` writes <w:bidi/>; `ltr` is the canonical clear (no element)
+        // — mirrors WordHandler.Helpers.cs:1220-1222 and section/paragraph add
+        // semantics. Lvl pPr has no inheritance source above it (lvl is a leaf),
+        // so explicit ltr never needs <w:bidi w:val=0/>.
+        bool? lvlBidiOn = null;
+        if (properties.TryGetValue("direction", out var dirRaw) ||
+            properties.TryGetValue("dir", out dirRaw) ||
+            properties.TryGetValue("bidi", out dirRaw))
         {
-            var ind = new Indentation();
-            if (leftIndent.HasValue) ind.Left = leftIndent.Value.ToString();
-            if (hanging.HasValue) ind.Hanging = hanging.Value.ToString();
-            level.AppendChild(new PreviousParagraphProperties(ind));
+            lvlBidiOn = (dirRaw ?? string.Empty).ToLowerInvariant() switch
+            {
+                "rtl" or "righttoleft" or "right-to-left" or "true" or "1" => true,
+                "ltr" or "lefttoright" or "left-to-right" or "false" or "0" or "" => false,
+                _ => throw new ArgumentException($"Invalid direction value: '{dirRaw}'. Valid values: rtl, ltr.")
+            };
+        }
+
+        if (leftIndent.HasValue || hanging.HasValue || lvlBidiOn == true)
+        {
+            var pPr = new PreviousParagraphProperties();
+            if (lvlBidiOn == true) pPr.AppendChild(new BiDi());
+            if (leftIndent.HasValue || hanging.HasValue)
+            {
+                var ind = new Indentation();
+                if (leftIndent.HasValue) ind.Left = leftIndent.Value.ToString();
+                if (hanging.HasValue) ind.Hanging = hanging.Value.ToString();
+                pPr.AppendChild(ind);
+            }
+            level.AppendChild(pPr);
         }
 
         // CRITICAL: AppendChild — NOT AddChild. Schema-aware AddChild treats

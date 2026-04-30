@@ -1043,6 +1043,33 @@ public partial class WordHandler
                         }
                         else lgl?.Remove();
                         break;
+                    case "direction" or "dir" or "bidi":
+                        // CONSISTENCY(canonical): same vocabulary as paragraph/section/style
+                        // direction. `rtl` writes pPr.<w:bidi/>; `ltr` clears it. Lvl pPr
+                        // has no inheritance source above it, so explicit ltr never needs
+                        // <w:bidi w:val=0/> — straight removal is sufficient.
+                        var dirOn = value.ToLowerInvariant() switch
+                        {
+                            "rtl" or "righttoleft" or "right-to-left" or "true" or "1" => true,
+                            "ltr" or "lefttoright" or "left-to-right" or "false" or "0" or "" => false,
+                            _ => throw new ArgumentException($"Invalid direction value: '{value}'. Valid values: rtl, ltr.")
+                        };
+                        if (dirOn)
+                        {
+                            var pprDir = level.PreviousParagraphProperties;
+                            if (pprDir == null)
+                            {
+                                pprDir = new PreviousParagraphProperties();
+                                InsertLevelChildInOrder(level, pprDir);
+                            }
+                            if (pprDir.GetFirstChild<BiDi>() == null)
+                                pprDir.PrependChild(new BiDi());
+                        }
+                        else
+                        {
+                            level.PreviousParagraphProperties?.RemoveAllChildren<BiDi>();
+                        }
+                        break;
                     default:
                         unsupported.Add(key);
                         break;
