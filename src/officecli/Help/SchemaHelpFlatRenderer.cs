@@ -12,31 +12,23 @@ namespace OfficeCli.Help;
 /// grep / awk / fzf can match against the full record without context loss.
 /// Two row tags: ELEM (element summary) and PROP (property detail).
 ///
-/// Default (lean): name/type/ops/aliases/enum-values only — ~80 chars/line.
-/// Verbose: adds description and first example — ~200 chars/line.
+/// Each PROP row carries name/type/ops/aliases/enum-values plus description
+/// and first example, so semantic grep ("indent level", "force recalculation")
+/// works against the same dump as name/alias grep.
 ///
 /// Example:
 ///   docx paragraph     ELEM  ops:[asgqr]  paths:/body/p[@paraId=ID];/body/p[N]
-///   docx paragraph     PROP  alignment    enum    ops:[asg]  values:left|center|...  aliases:halign,align
+///   docx paragraph     PROP  alignment    enum    ops:[asg]  values:left|center|...  aliases:halign,align  one of values  ex:--prop alignment=center
 /// </summary>
 internal static class SchemaHelpFlatRenderer
 {
     private static readonly string[] Verbs = { "add", "set", "get", "query", "remove" };
 
-    internal static string RenderAll(bool verbose = false)
+    internal static string RenderAll()
     {
         var sb = new StringBuilder();
-        if (verbose)
-        {
-            sb.AppendLine("# officecli help all verbose — grep-friendly schema dump (full descriptions)");
-            sb.AppendLine("# Columns: <format> <element> <ELEM|PROP> <name> <type> ops:[asgqr] <details> <description> ex:<example>");
-        }
-        else
-        {
-            sb.AppendLine("# officecli help all — grep-friendly schema dump");
-            sb.AppendLine("# Columns: <format> <element> <ELEM|PROP> <name> <type> ops:[asgqr] <details>");
-            sb.AppendLine("# For full descriptions and examples: officecli help all verbose");
-        }
+        sb.AppendLine("# officecli help all — grep-friendly schema dump");
+        sb.AppendLine("# Columns: <format> <element> <ELEM|PROP> <name> <type> ops:[asgqr] <details> <description> ex:<example>");
         sb.AppendLine("# ops letters: a=add s=set g=get q=query r=remove (- = not supported)");
         // Use placeholder tokens (<PROP>, <ELEM>) instead of bare PROP/ELEM
         // so this Tips comment does not match `grep " PROP "` / `grep " ELEM "`
@@ -55,7 +47,7 @@ internal static class SchemaHelpFlatRenderer
                 using (doc)
                 {
                     AppendElementRow(sb, format, element, doc);
-                    AppendPropertyRows(sb, format, element, doc, verbose);
+                    AppendPropertyRows(sb, format, element, doc);
                 }
             }
         }
@@ -77,7 +69,7 @@ internal static class SchemaHelpFlatRenderer
         sb.AppendLine();
     }
 
-    private static void AppendPropertyRows(StringBuilder sb, string format, string element, JsonDocument doc, bool verbose = false)
+    private static void AppendPropertyRows(StringBuilder sb, string format, string element, JsonDocument doc)
     {
         if (!doc.RootElement.TryGetProperty("properties", out var props)
             || props.ValueKind != JsonValueKind.Object) return;
@@ -125,27 +117,26 @@ internal static class SchemaHelpFlatRenderer
                 }
             }
 
-            if (verbose)
+            // description (truncated, single-line) or readback as fallback —
+            // these are the targets of semantic grep ("indent level",
+            // "force recalculation"), not just decoration.
+            var desc = TryGetString(prop.Value, "description")
+                       ?? TryGetString(prop.Value, "readback");
+            if (!string.IsNullOrEmpty(desc))
             {
-                // description (truncated, single-line) or readback as fallback
-                var desc = TryGetString(prop.Value, "description")
-                           ?? TryGetString(prop.Value, "readback");
-                if (!string.IsNullOrEmpty(desc))
-                {
-                    sb.Append("  ");
-                    sb.Append(SingleLine(desc!, 120));
-                }
+                sb.Append("  ");
+                sb.Append(SingleLine(desc!, 120));
+            }
 
-                // first example (also a high-value search target)
-                if (prop.Value.TryGetProperty("examples", out var examples)
-                    && examples.ValueKind == JsonValueKind.Array)
+            // first example
+            if (prop.Value.TryGetProperty("examples", out var examples)
+                && examples.ValueKind == JsonValueKind.Array)
+            {
+                var first = examples.EnumerateArray().FirstOrDefault();
+                if (first.ValueKind == JsonValueKind.String)
                 {
-                    var first = examples.EnumerateArray().FirstOrDefault();
-                    if (first.ValueKind == JsonValueKind.String)
-                    {
-                        sb.Append("  ex:");
-                        sb.Append(SingleLine(first.GetString()!, 80));
-                    }
+                    sb.Append("  ex:");
+                    sb.Append(SingleLine(first.GetString()!, 80));
                 }
             }
 

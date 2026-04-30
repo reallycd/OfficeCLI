@@ -185,19 +185,15 @@ static partial class CommandBuilder
         // element, property) row across the schema corpus. One self-contained
         // line per record so `officecli help all | grep <term>` returns
         // intelligible matches without context loss.
-        if (string.Equals(format, "all", StringComparison.OrdinalIgnoreCase) && verb == null)
+        if (string.Equals(format, "all", StringComparison.OrdinalIgnoreCase))
         {
-            // Second arg "verbose" is not a CRUD verb, so the disambiguation
-            // upstream lands it in `element`. Accept it from either slot so
-            // both `help all verbose` and `help all` work.
-            bool verbose = string.Equals(element, "verbose", StringComparison.OrdinalIgnoreCase);
-            if (!verbose && element != null)
+            if (verb != null || element != null)
             {
                 Console.Error.WriteLine(
-                    $"error: unknown modifier '{element}' for 'help all'. Did you mean 'verbose'?");
+                    "error: 'help all' takes no further arguments. Pipe to grep to filter.");
                 return 1;
             }
-            Console.Write(SchemaHelpFlatRenderer.RenderAll(verbose));
+            Console.Write(SchemaHelpFlatRenderer.RenderAll());
             return 0;
         }
 
@@ -220,8 +216,7 @@ static partial class CommandBuilder
             Console.WriteLine("  officecli help <format> <element>               Full element detail");
             Console.WriteLine("  officecli help <format> <verb> <element>        Verb-filtered element detail");
             Console.WriteLine("  officecli help <format> <element> --json        Raw schema JSON");
-            Console.WriteLine("  officecli help all                              Lean flat dump (name/type/ops/aliases/values) — pipe to grep");
-            Console.WriteLine("  officecli help all verbose                      Full dump with descriptions and examples");
+            Console.WriteLine("  officecli help all                              Flat dump of every (format,element,property) — pipe to grep");
             Console.WriteLine();
             Console.Write("  Formats: ");
             Console.WriteLine(string.Join(", ", SchemaHelpLoader.ListFormats()));
