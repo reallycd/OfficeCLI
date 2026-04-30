@@ -55,7 +55,7 @@
       "type": "enum",
       "values": ["rtl", "ltr"],
       "aliases": ["dir", "bidi"],
-      "description": "Reading direction. 'rtl' writes <w:bidi/> on the header paragraph and cascades <w:rtl/> to the paragraph mark so later runs inherit RTL.",
+      "description": "Reading direction. 'rtl' writes <w:bidi/> on the header paragraph, <w:rtl/> on the paragraph mark, and <w:rtl/> on every run (text + field runs alike) so Arabic / Hebrew character order reverses end-to-end. 'ltr' clears all three.",
       "add": true, "set": true, "get": false,
       "examples": ["--prop direction=rtl"],
       "enforcement": "strict"

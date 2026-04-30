@@ -158,7 +158,7 @@
       "type": "enum",
       "values": ["rtl", "ltr"],
       "aliases": ["dir", "bidi"],
-      "description": "Reading direction (Arabic / Hebrew). 'rtl' writes <w:bidi/> on the cell paragraph and cascades <w:rtl/> to runs. Distinct from textDirection (which controls vertical/horizontal text flow inside the cell).",
+      "description": "Reading direction (Arabic / Hebrew). 'rtl' writes <w:bidi/> on every cell paragraph, <w:rtl/> on each paragraph mark, and <w:rtl/> on every run; 'ltr' clears all three. Distinct from textDirection (which controls vertical/horizontal text flow inside the cell).",
       "add": true, "set": true, "get": true,
       "examples": ["--prop direction=rtl"],
       "readback": "rtl when set, key absent otherwise",

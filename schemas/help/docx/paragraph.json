@@ -276,7 +276,7 @@
     "direction": {
       "type": "enum",
       "values": ["ltr", "rtl"],
-      "description": "paragraph reading direction. 'rtl' enables <w:bidi/> for Arabic / Hebrew layouts; 'ltr' clears it.",
+      "description": "paragraph reading direction. 'rtl' writes <w:bidi/> on pPr, <w:rtl/> on the paragraph mark, and <w:rtl/> on every run (so Arabic / Hebrew character order reverses inside runs, not just page-side layout). 'ltr' clears all three.",
       "aliases": ["dir", "bidi"],
       "add": true, "set": true, "get": true,
       "examples": ["--prop direction=rtl"],
