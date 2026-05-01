@@ -20,7 +20,7 @@
       "aliases": ["text"],
       "add": true, "set": true, "get": true,
       "examples": ["--prop formula=\"x^2 + y^2 = z^2\""],
-      "readback": "source formula when round-trippable",
+      "readback": "source formula text — surfaces on DocumentNode.Text rather than Format[\"formula\"]",
       "enforcement": "report"
     },
     "x": {

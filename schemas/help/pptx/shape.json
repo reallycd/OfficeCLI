@@ -294,10 +294,10 @@
     },
     "kern": {
       "type": "number",
-      "description": "minimum kerning size in 1/100 pt (drawingML rPr/@kern).",
-      "add": true, "set": true, "get": true,
+      "description": "minimum kerning size in 1/100 pt (drawingML rPr/@kern). Add/Set only — Get does not surface this back today.",
+      "add": true, "set": true, "get": false,
       "examples": ["--prop kern=1200"],
-      "readback": "integer",
+      "readback": "n/a",
       "enforcement": "report"
     },
     "valign": {
@@ -516,6 +516,12 @@
       "add": false, "set": false, "get": true,
       "readback": "1-based integer (1 = back)",
       "enforcement": "report"
-    }
+    },
+    "bevel":       { "type":"string", "add":false, "set":false, "get":true, "description":"3-D top bevel descriptor (preset[:width:height], e.g. `circle:6:6`). Surfaces when sp3d.bevelT is present.", "readback":"`preset:width:height` token", "enforcement":"report" },
+    "bevelBottom": { "type":"string", "add":false, "set":false, "get":true, "description":"3-D bottom bevel descriptor (sp3d.bevelB).", "readback":"`preset:width:height` token", "enforcement":"report" },
+    "depth":       { "type":"length", "add":false, "set":false, "get":true, "description":"3-D extrusion height (sp3d @extrusionH) in points.", "readback":"unit-qualified pt length", "enforcement":"report" },
+    "lighting":    { "type":"string", "add":false, "set":false, "get":true, "description":"3-D scene lighting rig name (e.g. threePt, balanced, soft).", "readback":"OOXML preset light rig token", "enforcement":"report" },
+    "material":    { "type":"string", "add":false, "set":false, "get":true, "description":"3-D preset material (e.g. metal, plastic, matte).", "readback":"OOXML preset material token", "enforcement":"report" },
+    "lineOpacity": { "type":"number", "add":false, "set":false, "get":true, "description":"shape outline alpha as fraction (0..1). Surfaces when the outline carries an a:alpha child.", "readback":"fraction 0..1", "enforcement":"report" }
   }
 }

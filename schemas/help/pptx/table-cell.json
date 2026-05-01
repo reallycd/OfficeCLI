@@ -75,19 +75,23 @@
     },
     "border.tl2br": {
       "type": "string",
-      "description": "diagonal from top-left to bottom-right (a:lnTlToBr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient.",
-      "add": true, "set": true, "get": true,
+      "description": "diagonal from top-left to bottom-right (a:lnTlToBr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient. Add/Set only — Get does not surface diagonal borders today.",
+      "add": true, "set": true, "get": false,
       "examples": ["--prop border.tl2br=\"1pt solid FF0000\""],
-      "readback": "WIDTH DASH COLOR",
+      "readback": "n/a",
       "enforcement": "report"
     },
     "border.tr2bl": {
       "type": "string",
-      "description": "diagonal from top-right to bottom-left (a:lnBlToTr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient.",
-      "add": true, "set": true, "get": true,
+      "description": "diagonal from top-right to bottom-left (a:lnBlToTr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient. Add/Set only — Get does not surface diagonal borders today.",
+      "add": true, "set": true, "get": false,
       "examples": ["--prop border.tr2bl=\"1pt solid FF0000\""],
-      "readback": "WIDTH DASH COLOR",
+      "readback": "n/a",
       "enforcement": "report"
-    }
+    },
+    "baseline":    { "type":"number", "add":false, "set":false, "get":true, "description":"first run baseline offset for the cell text (percent units; positive=raised).", "readback":"percent (e.g. 30)", "enforcement":"report" },
+    "gridSpan":    { "type":"number", "add":false, "set":false, "get":true, "description":"horizontal merge span — number of grid columns this cell spans (>=2 means merged across).", "readback":"integer span", "enforcement":"report" },
+    "hmerge":      { "type":"bool",   "add":false, "set":false, "get":true, "description":"true on cells continued from a horizontal merge anchor (CT_TableCell @hMerge).", "readback":"true on continuation cells", "enforcement":"report" },
+    "image.relId": { "type":"string", "add":false, "set":false, "get":true, "description":"relationship id of an embedded image used as the cell's blip fill.", "readback":"relationship id token", "enforcement":"report" }
   }
 }

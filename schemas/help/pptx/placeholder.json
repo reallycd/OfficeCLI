@@ -83,6 +83,8 @@
       "add": false, "set": false, "get": true,
       "readback": "true/false",
       "enforcement": "report"
-    }
+    },
+    "isTitle": { "type":"bool", "add":false, "set":false, "get":true, "description":"true when the shape is the title placeholder (phType=title or ctrTitle).", "readback":"true on title placeholders", "enforcement":"report" },
+    "inheritedFrom": { "type":"string", "add":false, "set":false, "get":true, "description":"placeholder inheritance source — `layout` when the placeholder definition lives on the parent slide layout (not the slide itself).", "readback":"`layout` when inherited", "enforcement":"report" }
   }
 }

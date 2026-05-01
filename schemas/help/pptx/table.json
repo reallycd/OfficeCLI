@@ -179,7 +179,13 @@
       "add": false, "set": false, "get": true,
       "readback": "integer shape id",
       "enforcement": "report"
-    }
+    },
+    "firstRow":  { "type":"bool", "add":false, "set":false, "get":true, "description":"tblPr @firstRow flag — header-row styling enabled.", "readback":"true|false", "enforcement":"report" },
+    "lastRow":   { "type":"bool", "add":false, "set":false, "get":true, "description":"tblPr @lastRow flag — total-row styling enabled.", "readback":"true|false", "enforcement":"report" },
+    "firstCol":  { "type":"bool", "add":false, "set":false, "get":true, "description":"tblPr @firstCol flag — first-column styling enabled.", "readback":"true|false", "enforcement":"report" },
+    "lastCol":   { "type":"bool", "add":false, "set":false, "get":true, "description":"tblPr @lastCol flag — last-column styling enabled.", "readback":"true|false", "enforcement":"report" },
+    "bandedRows":{ "type":"bool", "add":false, "set":false, "get":true, "description":"tblPr @bandRow flag — alternating row banding from the table style.", "readback":"true|false", "enforcement":"report" },
+    "bandedCols":{ "type":"bool", "add":false, "set":false, "get":true, "description":"tblPr @bandCol flag — alternating column banding from the table style.", "readback":"true|false", "enforcement":"report" }
   },
   "children": [
     { "element": "row",    "pathSegment": "tr",  "cardinality": "1..n" },

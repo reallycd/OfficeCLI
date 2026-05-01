@@ -18,9 +18,9 @@
     "url": {
       "type": "string",
       "aliases": ["href"],
-      "add": true, "set": true, "get": true,
+      "add": true, "set": true, "get": false,
       "examples": ["--prop url=https://example.com"],
-      "readback": "target URL",
+      "readback": "n/a — hyperlink targets are surfaced on the parent shape/run as `link`",
       "enforcement": "report"
     },
     "slide": {
@@ -34,9 +34,9 @@
     "tooltip": {
       "type": "string",
       "description": "hover tooltip.",
-      "add": true, "set": true, "get": true,
+      "add": true, "set": true, "get": false,
       "examples": ["--prop tooltip=\"Next section\""],
-      "readback": "tooltip text",
+      "readback": "n/a — tooltip is not surfaced back today",
       "enforcement": "report"
     }
   }

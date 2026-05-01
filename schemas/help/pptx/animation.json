@@ -72,6 +72,9 @@
       "description": "raw OOXML preset id for the animation effect. Emitted when the effect has a recognized preset.",
       "readback": "integer",
       "enforcement": "report"
-    }
+    },
+    "easein":     { "type":"number", "add":false, "set":false, "get":true, "description":"acceleration percentage (0..100) — fraction of the duration spent ramping up.", "readback":"integer percent", "enforcement":"report" },
+    "easeout":    { "type":"number", "add":false, "set":false, "get":true, "description":"deceleration percentage (0..100) — fraction of the duration spent ramping down.", "readback":"integer percent", "enforcement":"report" },
+    "motionPath": { "type":"string", "add":false, "set":false, "get":true, "description":"motion-path SVG-like path string (animMotion @path) for path animations.", "readback":"OOXML animMotion path string", "enforcement":"report" }
   }
 }

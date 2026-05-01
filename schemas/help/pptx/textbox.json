@@ -178,12 +178,13 @@
       "readback": "true/false",
       "enforcement": "report"
     },
-    "autofit": {
+    "autoFit": {
       "type": "enum",
-      "description": "auto-fit mode for the textbox text body.",
+      "description": "auto-fit mode for the textbox text body. Alias: autofit.",
       "values": ["none", "normal", "shape", "noAutofit", "spAutoFit"],
+      "aliases": ["autofit"],
       "add": true, "set": true, "get": true,
-      "examples": ["--prop autofit=shape"],
+      "examples": ["--prop autoFit=shape"],
       "readback": "one of: none | normal | shape",
       "enforcement": "report"
     },

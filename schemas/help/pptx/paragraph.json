@@ -48,7 +48,10 @@
       "examples": ["--prop lineSpacing=1.5x"],
       "readback": "'<N>x' or '<N>pt'",
       "enforcement": "report"
-    }
+    },
+    "indent":      { "type":"length", "add":false, "set":false, "get":true, "description":"first-line indent (CT_TextParagraphProperties @indent) — unit-qualified length readback.", "readback":"unit-qualified EMU length (e.g. `0.25in`)", "enforcement":"report" },
+    "marginLeft":  { "type":"length", "add":false, "set":false, "get":true, "description":"left text margin (CT_TextParagraphProperties @marL).", "readback":"unit-qualified EMU length", "enforcement":"report" },
+    "marginRight": { "type":"length", "add":false, "set":false, "get":true, "description":"right text margin (CT_TextParagraphProperties @marR).", "readback":"unit-qualified EMU length", "enforcement":"report" }
   },
   "children": [
     { "element": "run", "pathSegment": "r", "cardinality": "0..n" }

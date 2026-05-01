@@ -145,7 +145,12 @@
     "extended.characters":         { "type":"number", "add":false, "set":false, "get":true, "description":"docProps/app.xml Characters count.", "readback":"integer", "enforcement":"report" },
     "extended.lines":              { "type":"number", "add":false, "set":false, "get":true, "description":"docProps/app.xml Lines count.", "readback":"integer", "enforcement":"report" },
     "extended.paragraphs":         { "type":"number", "add":false, "set":false, "get":true, "description":"docProps/app.xml Paragraphs count.", "readback":"integer", "enforcement":"report" },
-    "extended.totalTime":          { "type":"number", "add":false, "set":false, "get":true, "description":"docProps/app.xml TotalTime field (minutes).", "readback":"integer minutes", "enforcement":"report" }
+    "extended.totalTime":          { "type":"number", "add":false, "set":false, "get":true, "description":"docProps/app.xml TotalTime field (minutes).", "readback":"integer minutes", "enforcement":"report" },
+    "compatMode":          { "type":"bool",   "add":false, "set":false, "get":true, "description":"presentation @compatMode flag — true when the file is in legacy-compatibility mode.", "readback":"true when compat mode is on", "enforcement":"report" },
+    "firstSlideNum":       { "type":"number", "add":false, "set":false, "get":true, "description":"presentation @firstSlideNum — slide number of the first slide (default 1).", "readback":"integer", "enforcement":"report" },
+    "print.colorMode":     { "type":"string", "add":false, "set":false, "get":true, "description":"PrintingProperties color mode (e.g. clr | gray | bw).", "readback":"color mode token", "enforcement":"report" },
+    "print.frameSlides":   { "type":"bool",   "add":false, "set":false, "get":true, "description":"PrintingProperties FrameSlides flag — print a thin border around each slide.", "readback":"true when set", "enforcement":"report" },
+    "print.hiddenSlides":  { "type":"bool",   "add":false, "set":false, "get":true, "description":"PrintingProperties HiddenSlides flag — include hidden slides in printed output.", "readback":"true when set", "enforcement":"report" }
   },
   "children": [
     { "element": "slide",       "pathSegment": "slide",       "cardinality": "0..n" },
