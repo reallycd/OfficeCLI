@@ -13,7 +13,7 @@
     "stable":     ["/slide[N]/chart[@id=ID]/series[@id=ID]"],
     "positional": ["/slide[N]/chart[N]/series[N]"]
   },
-  "note": "At Add time, series are usually passed as properties of the parent `chart` element using dotted keys (series1.name, series1.values, series1.color, series1.categories). This element represents per-series Set/Get after the chart exists. Combo charts (mixed chartType per series, or secondary axis) are not supported. Create a separate chart for each chart type.",
+  "note": "At Add time, series are usually passed as properties of the parent `chart` element using dotted keys (series1.name, series1.values, series1.color, series1.categories). This element represents per-series Set/Get after the chart exists. Combo charts (mixed chartType per series, or secondary axis) are not supported. Create a separate chart for each chart type. lineWidth (line width in pt) and lineDash (solid/dash/dot/dashDot/longDash) are available on line/scatter series; `lineStyle` is not a recognized key (rejected as UNSUPPORTED — use lineWidth/lineDash instead).",
   "properties": {
     "name": {
       "type": "string",
@@ -57,6 +57,22 @@
       "examples": ["--prop smooth=true"],
       "readback": "true | false",
       "enforcement": "strict"
+    },
+    "marker": {
+      "type": "string",
+      "set": true, "get": true,
+      "description": "per-series marker symbol. Values: circle, dash, diamond, dot, picture, plus, square, star, triangle, x, none. Supports 'symbol:size:COLOR' compound form (e.g. 'circle:8:FF0000'). Applies to line/scatter/radar series.",
+      "examples": ["--prop marker=circle", "--prop marker=\"circle:8:FF0000\""],
+      "readback": "marker symbol name",
+      "enforcement": "report"
+    },
+    "markerSize": {
+      "type": "number",
+      "set": true, "get": true,
+      "description": "marker size in points (2–72). Applies when marker is not 'none'.",
+      "examples": ["--prop markerSize=8"],
+      "readback": "integer",
+      "enforcement": "report"
     }
   }
 }
