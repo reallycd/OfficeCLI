@@ -44,10 +44,12 @@ internal static class SchemaHelpFlatRenderer
         }
         sb.AppendLine("# Columns: <format> <element> <ELEM|PROP> <name> <type> ops:[asgqr] <details> <description> ex:<example>");
         sb.AppendLine("# ops letters: a=add s=set g=get q=query r=remove (- = not supported)");
-        // Use placeholder tokens (<PROP>, <ELEM>) instead of bare PROP/ELEM
-        // so this Tips comment does not match `grep " PROP "` / `grep " ELEM "`
-        // alongside the real data rows.
-        sb.AppendLine("# Tips: grep '^docx paragraph'  |  grep ' <PROP> '  |  grep alignment  |  grep aliases:halign");
+        sb.AppendLine("# Add/Set form: officecli <fmt> add <path> --type <element> --prop key=value [--prop ...]");
+        sb.AppendLine("#   (the <element> token here is the value in column 2; the per-row ex:--prop ... shows one valid --prop for that row)");
+        // Tips below intentionally use the literal column tokens (PROP / ELEM)
+        // so users can copy-paste them. The leading '#' makes them easy to
+        // strip with `grep -v '^#'` if the self-match line is unwanted.
+        sb.AppendLine("# Tips: grep '^docx paragraph'  |  grep ' PROP '  |  grep alignment  |  grep aliases:halign");
         sb.AppendLine();
 
         foreach (var format in SchemaHelpLoader.ListFormats())
