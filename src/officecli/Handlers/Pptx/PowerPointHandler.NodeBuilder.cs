@@ -138,16 +138,10 @@ public partial class PowerPointHandler
         if (!string.IsNullOrEmpty(tableStyleId))
         {
             var styleName = TableStyleGuidToName(tableStyleId);
-            node.Format["tableStyleId"] = styleName ?? tableStyleId;
-            if (styleName != null)
-            {
-                node.Format["tableStyle"] = styleName;
-                node.Format["style"] = styleName;
-            }
-            else
-            {
-                node.Format["tableStyle"] = tableStyleId;
-            }
+            // CONSISTENCY(canonical-key): emit only canonical 'style'; schema lists
+            // 'tableStyle' and 'tableStyleId' as input aliases (Set side) — Get
+            // normalizes to canonical (style = resolved name when known, else GUID).
+            node.Format["style"] = styleName ?? tableStyleId;
         }
 
         // TableLook flags
