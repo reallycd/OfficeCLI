@@ -44,12 +44,6 @@ officecli help pptx <element> --json        # Machine-readable schema
 
 Help reflects the installed CLI version. When skill and help disagree, **help is authoritative**. Triggers to run help immediately: `UNSUPPORTED props:` warning, unknown animation preset, `connector.shape=` enum drifts, prop-vs-alias (`lineWidth` vs `line.width`, `color` vs `font.color`).
 
-## Mental Model & Inheritance
-
-**Mental model.** A `.pptx` is a ZIP of XML parts (`ppt/slides/*.xml`, `slideLayouts/`, `slideMasters/`, `theme*.xml`, `charts/`, `media/`, `notesSlides/`). `officecli` gives you a semantic-path API (`/slide[N]/shape[M]`, `/slide[N]/shape[@name=X]`) over it. Raw XML only via `raw-set`.
-
-**Slides are consumed at ~3 seconds per slide in a live room.** Scanned, not read. Every design decision below serves that constraint.
-
 ## Shell & Execution Discipline
 
 **Shell quoting (zsh / bash).** ALWAYS quote element paths (`"/slide[1]/..."`). Single-quote values containing `$`. Never hand-write `\$` / `\t` / `\n` — CLI does not interpret them. Full rules in "Shell escape — three layers" below.
@@ -839,7 +833,6 @@ Sanity-check cheatsheet — what breaks on the first try. Design + shell traps.
 | Unquoted `[N]` in zsh/bash | Always quote paths: `"/slide[1]"`. zsh globs unquoted `[1]` → `no matches found` — #1 first-use stumble |
 | `--name "foo"` | All attributes go through `--prop`: `--prop name="foo"` |
 | Guessing a prop name | `officecli help pptx <element>` — don't improvise |
-| Theme colors | Use `accent1..accent6`, `dk1`, `dk2`, `lt1`, `lt2` when you want theme inheritance; hex (`#FF0000` or `FF0000`, both accepted) for fixed colors |
 | `/shape[myname]` (bare name in brackets) | Use `@name=` selector: `/shape[@name=myname]` or `/shape[@id=10007]` |
 | Positional `/shape[3]` after z-order / remove | Positions drift. Use `@name=` / `@id=` for any repeated reference |
 | `[last]` without parens | Must be `[last()]`: `/slide[last()]/shape[1]` |
