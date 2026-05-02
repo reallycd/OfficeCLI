@@ -366,7 +366,7 @@ officecli add "$FILE" /slide[3] --type chart --prop chartType=column \
   --prop x=2cm --prop y=4cm --prop width=20cm --prop height=10cm
 ```
 
-Gotchas: (1) series cannot be added after creation — include all series at `add` time or `remove` + re-add. (2) `gap` / `gapwidth` are ignored at `add` — `set` after creation. (3) chart titles with `()`, `[]`, `TBD` ship as literal text — replace before delivery. (4) some viewers normalize chart colors to theme defaults — verify in the target presentation viewer.
+Gotchas: (1) series cannot be added after creation — include all series at `add` time or `remove` + re-add. (2) chart titles with `()`, `[]`, `TBD` ship as literal text — replace before delivery. (3) some viewers normalize chart colors to theme defaults — verify in the target presentation viewer.
 
 ### Pictures
 
@@ -745,25 +745,6 @@ REJECT the delivery if ANY of the above is present; list every instance with its
 ## Known Issues & Pitfalls
 
 When something looks broken, attribute it first: **[AGENT-ERROR]** (deck itself is wrong — fix the deck), **[RENDERER-BUG]** (deck is correct; a specific viewer renders it differently — don't chase), or **[SKILL gap]** (rule missing — open an issue).
-
-### Renderer honesty
-
-`officecli view html` = structural QA (overflow, placeholders, hierarchy) — Read the returned HTML path. Some features are runtime-only or viewer-specific and only render faithfully in a live presentation viewer: chart series colors (some viewers normalize to theme defaults), font substitution, animation, zoom, shadow / glow / soft fill, slide-number fields. **Ground-truth layering:** `view html` for officecli-layer structure, then open in the user's target presentation viewer for runtime / color fidelity.
-
-### Schema-invalid on current CLI — disabled APIs + working forms
-
-Props that exit 0 at write time but produce bad XML on close.
-
-| Disabled | Working form |
-|---|---|
-| `add paragraph --prop bold=/size=/color=/font=` | `add paragraph --prop text=` then `set paragraph[K] --prop ...` — or `add run` |
-| `set slide --prop showHeader=true` | Use `showFooter/showSlideNumber/showDate`; or a shape at `y=0.3cm` |
-| `--prop geometry="M 0,0 L 50,50 Z"` | Named preset (`rect`, `roundRect`, `ellipse`, ...); or raw-set `a:custGeom` |
-| Connector `--prop line=/lineWidth=/lineDash=` | `--prop color=` + `shape=elbow\|straight\|curve` + `tailEnd=triangle` (CLI-native); raw-set `a:ln` only for custom stroke — see connector section + Recipe (c)/(f) |
-| Picture `--prop geometry=ellipse` / `shape=roundRect` | Overlay a `preset=ellipse` shape `fill=none`; or raw-set `p:pic` |
-| Chart `--prop gap=/gapwidth=` on `add` | `set /slide[N]/chart[M] --prop gap=80` after creation |
-
-Grep disabled forms in your command log: `grep -nE '(add.*paragraph.*--prop (bold|size|color|font)=|showHeader=true|geometry="M|connector.*(line|lineWidth|lineDash)=)' commands.log`.
 
 ## Common Pitfalls
 
