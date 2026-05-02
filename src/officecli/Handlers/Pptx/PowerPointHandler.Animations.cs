@@ -857,6 +857,65 @@ public partial class PowerPointHandler
         effectChildList.AppendChild(anim);
     }
 
+    /// <summary>
+    /// Remove the Kth entrance/exit/emphasis animation from the given shape,
+    /// matching the same indexing model as <see cref="EnumerateShapeAnimationCTns"/>.
+    /// Walks up from the effect CTn to its top-level click-group par (mirrors
+    /// <see cref="RemoveShapeAnimations"/>'s walk-up) and removes that par.
+    /// Also removes the BuildList entry for the shape if no animations remain.
+    /// </summary>
+    private void RemoveSingleShapeAnimation(SlidePart slidePart, Shape shape, int kIndex)
+    {
+        var ctns = EnumerateShapeAnimationCTns(slidePart, shape);
+        if (kIndex < 1 || kIndex > ctns.Count)
+            throw new ArgumentException($"Animation {kIndex} not found (total: {ctns.Count})");
+
+        var targetCTn = ctns[kIndex - 1];
+
+        // Walk up to find the top-level click-group par inside mainSeq childTnLst
+        OpenXmlElement? node = targetCTn;
+        OpenXmlElement? clickGroupPar = null;
+        while (node?.Parent != null)
+        {
+            if (node.Parent is ChildTimeNodeList ctl &&
+                ctl.Parent is CommonTimeNode ctn &&
+                ctn.NodeType?.Value == TimeNodeValues.MainSequence)
+            {
+                clickGroupPar = node;
+                break;
+            }
+            node = node.Parent;
+        }
+
+        if (clickGroupPar == null)
+        {
+            // Fallback: just remove the effect CTn's nearest par ancestor.
+            targetCTn.Ancestors<ParallelTimeNode>().FirstOrDefault()?.Remove();
+        }
+        else
+        {
+            clickGroupPar.Remove();
+        }
+
+        // If no animations remain for this shape, drop its BuildList entry.
+        var slide = slidePart.Slide ?? throw new InvalidOperationException("Corrupt file");
+        var shapeId = shape.NonVisualShapeProperties?.NonVisualDrawingProperties?.Id?.Value;
+        if (shapeId.HasValue)
+        {
+            var remaining = EnumerateShapeAnimationCTns(slidePart, shape);
+            if (remaining.Count == 0)
+            {
+                var bldLst = slide.GetFirstChild<Timing>()?.BuildList;
+                if (bldLst != null)
+                {
+                    foreach (var bp in bldLst.Elements<BuildParagraph>()
+                        .Where(b => b.ShapeId?.Value == shapeId.Value.ToString()).ToList())
+                        bp.Remove();
+                }
+            }
+        }
+    }
+
     private static void RemoveShapeAnimations(Slide slide, uint shapeId)
     {
         var timing = slide.GetFirstChild<Timing>();

@@ -119,6 +119,21 @@ public partial class PowerPointHandler
             return null;
         }
 
+        // BUG C-P-4: /slide[N]/shape[M]/animation[K] removal. Mirrors the
+        // enumeration model used by AddAnimation/Get/Set (EnumerateShape-
+        // AnimationCTns) so Add/Get/Set/Remove all share the same indexing.
+        var animRemoveMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/animation\[(\d+)\]$");
+        if (animRemoveMatch.Success)
+        {
+            var animSlideIdx = int.Parse(animRemoveMatch.Groups[1].Value);
+            var animShapeIdx = int.Parse(animRemoveMatch.Groups[2].Value);
+            var animKIdx = int.Parse(animRemoveMatch.Groups[3].Value);
+            var (animSlidePart, animShape) = ResolveShape(animSlideIdx, animShapeIdx);
+            RemoveSingleShapeAnimation(animSlidePart, animShape, animKIdx);
+            GetSlide(animSlidePart).Save();
+            return null;
+        }
+
         var slideMatch = Regex.Match(path, @"^/slide\[(\d+)\](?:/(\w+)\[(\d+)\])?$");
         if (!slideMatch.Success)
             throw new ArgumentException($"Invalid path: {path}. Expected format: /slide[N] or /slide[N]/element[M] (e.g. /slide[1], /slide[1]/shape[2])");
