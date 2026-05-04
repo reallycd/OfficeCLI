@@ -654,6 +654,25 @@ public partial class WordHandler
                 ?? pProps.AppendChild(new ParagraphMarkRunProperties());
             if (Core.TypedAttributeFallback.TrySet(paraMarkRPr, key, value)) continue;
             if (paraMarkRPr.ChildElements.Count == 0) paraMarkRPr.Remove();
+            // BUG-R5-04 / BUG-R5-05: bare-key val-leaves (textboxTightWrap,
+            // divId, …) had no fallback path on Add — only TypedAttributeFallback,
+            // which requires dotted keys. dump→batch round-trip emits these
+            // as bare keys on `add p`, so they were silently dropped. Try
+            // TryCreateTypedChild on pPr first (paragraph-scope leaves like
+            // textboxTightWrap, divId), then on the run rPr / paragraph-mark
+            // rPr for run-scope leaves (webHidden — BUG-R5-06: dump misplaces
+            // it onto the paragraph, but accepting it on either container
+            // here lets dump→replay succeed without losing the property).
+            if (!key.Contains('.'))
+            {
+                if (Core.GenericXmlQuery.TryCreateTypedChild(pProps, key, value)) continue;
+                if (rPropsForFallback != null
+                    && Core.GenericXmlQuery.TryCreateTypedChild(rPropsForFallback, key, value)) continue;
+                var fallbackMarkRPr = pProps.GetFirstChild<ParagraphMarkRunProperties>()
+                    ?? pProps.AppendChild(new ParagraphMarkRunProperties());
+                if (Core.GenericXmlQuery.TryCreateTypedChild(fallbackMarkRPr, key, value)) continue;
+                if (fallbackMarkRPr.ChildElements.Count == 0) fallbackMarkRPr.Remove();
+            }
             LastAddUnsupportedProps.Add(key);
         }
 
