@@ -1130,13 +1130,34 @@ public partial class WordHandler
             || properties.TryGetValue("font.complexscript", out rfCs)
             || properties.TryGetValue("font.complex", out rfCs))
         { nrCs = rfCs; }
-        if (nrAscii != null || nrHAnsi != null || nrEa != null || nrCs != null)
+        // BUG-DUMP24-01: theme-font slot support — bind a run to a theme
+        // major/minor font (rFonts/@*Theme) instead of a literal face.
+        // Mirrors AddParagraph text-bearing block.
+        string? nrAsciiTheme = null, nrHAnsiTheme = null, nrEaTheme = null, nrCsTheme = null;
+        if (properties.TryGetValue("font.asciiTheme", out var rfAT) || properties.TryGetValue("font.asciitheme", out rfAT))
+            nrAsciiTheme = rfAT;
+        if (properties.TryGetValue("font.hAnsiTheme", out var rfHAT) || properties.TryGetValue("font.hansitheme", out rfHAT))
+            nrHAnsiTheme = rfHAT;
+        if (properties.TryGetValue("font.eaTheme", out var rfEAT) || properties.TryGetValue("font.eatheme", out rfEAT) || properties.TryGetValue("font.eastasiatheme", out rfEAT))
+            nrEaTheme = rfEAT;
+        if (properties.TryGetValue("font.csTheme", out var rfCST) || properties.TryGetValue("font.cstheme", out rfCST))
+            nrCsTheme = rfCST;
+        if (nrAscii != null || nrHAnsi != null || nrEa != null || nrCs != null
+            || nrAsciiTheme != null || nrHAnsiTheme != null || nrEaTheme != null || nrCsTheme != null)
         {
             var nrFonts = new RunFonts();
             if (nrAscii != null) nrFonts.Ascii = nrAscii;
             if (nrHAnsi != null) nrFonts.HighAnsi = nrHAnsi;
             if (nrEa != null) nrFonts.EastAsia = nrEa;
             if (nrCs != null) nrFonts.ComplexScript = nrCs;
+            if (nrAsciiTheme != null)
+                nrFonts.AsciiTheme = new EnumValue<ThemeFontValues>(new ThemeFontValues(nrAsciiTheme));
+            if (nrHAnsiTheme != null)
+                nrFonts.HighAnsiTheme = new EnumValue<ThemeFontValues>(new ThemeFontValues(nrHAnsiTheme));
+            if (nrEaTheme != null)
+                nrFonts.EastAsiaTheme = new EnumValue<ThemeFontValues>(new ThemeFontValues(nrEaTheme));
+            if (nrCsTheme != null)
+                nrFonts.ComplexScriptTheme = new EnumValue<ThemeFontValues>(new ThemeFontValues(nrCsTheme));
             newRProps.AppendChild(nrFonts);
         }
         if (properties.TryGetValue("size", out var rSize) || properties.TryGetValue("font.size", out rSize) || properties.TryGetValue("fontsize", out rSize))
@@ -1458,6 +1479,15 @@ public partial class WordHandler
                 case "font.cs":
                 case "font.complexscript":
                 case "font.complex":
+                // BUG-DUMP24-01: theme-font slots consumed up-front by the
+                // RunFonts theme block above (font.asciiTheme/hAnsiTheme/
+                // eaTheme/csTheme); skip the typed-attr fallback so they
+                // don't get re-flagged as UNSUPPORTED.
+                case "font.asciitheme":
+                case "font.hansitheme":
+                case "font.eatheme":
+                case "font.eastasiatheme":
+                case "font.cstheme":
                 // CS run flags (<w:bCs/> / <w:iCs/> / <w:szCs/>) — the
                 // run-add block above writes them through ApplyRunFormatting;
                 // dotted-fallback can't resolve the dotted name into the
