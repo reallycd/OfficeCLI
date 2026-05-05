@@ -1404,6 +1404,28 @@ public partial class WordHandler
                     if (inlineSectPr.GetFirstChild<TitlePage>() != null)
                         node.Format["sectionBreak.titlePage"] = true;
 
+                    // BUG-DUMP9-06: Columns / VerticalTextAlignmentOnPage on
+                    // an inline sectPr carrier were silently dropped — only
+                    // the root sectPr reader handled them. Surface as
+                    // sectionBreak.columns / sectionBreak.vAlign so dump
+                    // round-trips the carrier sectPr.
+                    var sbCols = inlineSectPr.GetFirstChild<Columns>();
+                    if (sbCols != null)
+                    {
+                        if (sbCols.ColumnCount?.Value != null)
+                            node.Format["sectionBreak.columns"] = (int)sbCols.ColumnCount.Value;
+                        if (sbCols.Space?.Value != null && uint.TryParse(sbCols.Space.Value, out var sbColSpaceTwips))
+                            node.Format["sectionBreak.columnSpace"] = FormatTwipsToCm(sbColSpaceTwips);
+                        if (sbCols.EqualWidth?.Value != null)
+                            node.Format["sectionBreak.columns.equalWidth"] = sbCols.EqualWidth.Value;
+                        if (sbCols.Separator?.Value == true)
+                            node.Format["sectionBreak.columns.separator"] = true;
+                    }
+
+                    var sbVAlign = inlineSectPr.GetFirstChild<VerticalTextAlignmentOnPage>();
+                    if (sbVAlign?.Val != null)
+                        node.Format["sectionBreak.vAlign"] = sbVAlign.Val.InnerText;
+
                     var lnNum = inlineSectPr.GetFirstChild<LineNumberType>();
                     if (lnNum != null)
                     {
