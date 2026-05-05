@@ -166,6 +166,37 @@ public partial class WordHandler
                     cm.BottomMargin = new BottomMargin { Width = tv, Type = TableWidthUnitValues.Dxa };
                     cm.TableCellRightMargin = new TableCellRightMargin { Width = (short)Math.Min(paddingVal, short.MaxValue), Type = TableWidthValues.Dxa };
                     break;
+                // BUG-DUMP13-04: per-side default cell margins. BatchEmitter
+                // passes asymmetric padding.* keys through unfolded when sides
+                // differ; without these cases AddTable warned UNSUPPORTED and
+                // the values became zero on round-trip. Mirrors the per-cell
+                // tcMar handling in Set.Element.cs.
+                case "padding.top":
+                    {
+                        var cmt = tblProps.TableCellMarginDefault ?? tblProps.AppendChild(new TableCellMarginDefault());
+                        cmt.TopMargin = new TopMargin { Width = tv, Type = TableWidthUnitValues.Dxa };
+                    }
+                    break;
+                case "padding.bottom":
+                    {
+                        var cmb = tblProps.TableCellMarginDefault ?? tblProps.AppendChild(new TableCellMarginDefault());
+                        cmb.BottomMargin = new BottomMargin { Width = tv, Type = TableWidthUnitValues.Dxa };
+                    }
+                    break;
+                case "padding.left":
+                    {
+                        var cml = tblProps.TableCellMarginDefault ?? tblProps.AppendChild(new TableCellMarginDefault());
+                        var lv = ParseHelpers.SafeParseInt(tv, "padding.left");
+                        cml.TableCellLeftMargin = new TableCellLeftMargin { Width = (short)Math.Min(lv, short.MaxValue), Type = TableWidthValues.Dxa };
+                    }
+                    break;
+                case "padding.right":
+                    {
+                        var cmr = tblProps.TableCellMarginDefault ?? tblProps.AppendChild(new TableCellMarginDefault());
+                        var rv = ParseHelpers.SafeParseInt(tv, "padding.right");
+                        cmr.TableCellRightMargin = new TableCellRightMargin { Width = (short)Math.Min(rv, short.MaxValue), Type = TableWidthValues.Dxa };
+                    }
+                    break;
                 case "style":
                     tblProps.TableStyle = new TableStyle { Val = tv };
                     // Add TableLook so built-in styles apply banding correctly
