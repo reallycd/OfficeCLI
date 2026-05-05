@@ -615,6 +615,13 @@ public partial class WordHandler
                 styleNode.Format["basedOn.path"] = $"/styles/{style.BasedOn.Val.Value}";
             }
             if (style.NextParagraphStyle?.Val?.Value != null) styleNode.Format["next"] = style.NextParagraphStyle.Val.Value;
+            // BUG-DUMP11-05: top-level Style children — autoRedefine (Word
+            // updates the style definition when the user reformats a
+            // paragraph using it) and StyleHidden (style hidden from UI
+            // gallery). FillUnknownChildProps covers only rPr/pPr children,
+            // so these Style-level bare flags were silently lost on dump.
+            if (style.GetFirstChild<AutoRedefine>() != null) styleNode.Format["autoRedefine"] = true;
+            if (style.GetFirstChild<StyleHidden>() != null) styleNode.Format["hidden"] = true;
 
             // Read run properties
             var rPr = style.StyleRunProperties;

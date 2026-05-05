@@ -564,6 +564,19 @@ public partial class WordHandler
             newStyle.AppendChild(new BasedOn { Val = basedOn });
         if (properties.TryGetValue("next", out var nextStyle))
             newStyle.AppendChild(new NextParagraphStyle { Val = nextStyle });
+        // BUG-DUMP11-05: top-level Style flags — autoRedefine + hidden.
+        // Schema order: after `next`, before pPr/rPr. Toggle elements; only
+        // emit when truthy. ParseHelpers.IsTruthy throws on unrecognized
+        // values to match the rest of the Word handler's strict-bool intake.
+        if (properties.TryGetValue("autoRedefine", out var sAutoRedef)
+            || properties.TryGetValue("autoredefine", out sAutoRedef))
+        {
+            if (IsTruthy(sAutoRedef)) newStyle.AppendChild(new AutoRedefine());
+        }
+        if (properties.TryGetValue("hidden", out var sHidden))
+        {
+            if (IsTruthy(sHidden)) newStyle.AppendChild(new StyleHidden());
+        }
 
         // Style paragraph properties
         var stylePPr = new StyleParagraphProperties();
@@ -780,6 +793,11 @@ public partial class WordHandler
             "id", "styleId", "styleid",
             "name", "styleName", "stylename",
             "type", "basedon", "basedOn", "next",
+            // BUG-DUMP11-05: top-level Style flags consumed in the explicit
+            // dispatch above; without listing them here, the per-key fallback
+            // loop would route `hidden` to ApplyRunFormatting (vanish alias)
+            // and double-stamp it on rPr.
+            "autoRedefine", "autoredefine", "hidden",
             "align", "alignment", "spacebefore", "spaceBefore",
             "spaceafter", "spaceAfter", "linespacing", "lineSpacing",
             "font", "size", "bold", "italic", "color",
