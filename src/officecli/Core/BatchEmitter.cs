@@ -1525,27 +1525,6 @@ public static class BatchEmitter
         // downgrade to Exact (which clips tall glyphs).
     };
 
-    // Serialize the tabs list (List<Dictionary<string,object?>>) to the
-    // semicolon-separated form Add/Set's tab parser accepts:
-    //   "pos=2160 val=left leader=dot;pos=4320 val=center"
-    // ApplyTabsString in WordHandler.Helpers parses both space- and
-    // comma-delimited fields per stop. Without this projection, the raw
-    // .NET List<Dict> rendered as "System.Collections.Generic.List`1[…]"
-    // and tab stops were silently lost on round-trip (BUG-R2-01).
-    private static string SerializeTabsList(IEnumerable<Dictionary<string, object?>> tabs)
-    {
-        var stops = new List<string>();
-        foreach (var t in tabs)
-        {
-            var parts = new List<string>();
-            if (t.TryGetValue("pos", out var p) && p != null) parts.Add($"pos={p}");
-            if (t.TryGetValue("val", out var v) && v != null) parts.Add($"val={v}");
-            if (t.TryGetValue("leader", out var l) && l != null) parts.Add($"leader={l}");
-            if (parts.Count > 0) stops.Add(string.Join(" ", parts));
-        }
-        return string.Join(";", stops);
-    }
-
     private static Dictionary<string, string> FilterEmittableProps(Dictionary<string, object?> raw)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

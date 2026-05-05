@@ -53,9 +53,6 @@ static partial class CommandBuilder
             // combination loudly. (Detect stdin via Console.IsInputRedirected
             // to avoid spurious failures from interactive terminals.)
             bool stdinHasInput = Console.IsInputRedirected;
-            int sourceCount = (inlineCommands != null ? 1 : 0)
-                            + (inputFile != null ? 1 : 0)
-                            + ((inlineCommands == null && inputFile == null && stdinHasInput) ? 1 : 0);
             if (inlineCommands != null && inputFile != null)
                 throw new ArgumentException(
                     "batch: --commands and --input are mutually exclusive. Pick one source.");
@@ -114,7 +111,7 @@ static partial class CommandBuilder
                                 unknown.Add(prop.Name);
                         }
                         if (unknown.Count > 0)
-                            throw new ArgumentException($"batch item[{ri}]: unknown field(s) {string.Join(", ", unknown.Select(f => $"\"{f}\""))}. Valid fields: command, parent, path, type, from, index, to, props, selector, text, mode, depth, part, xpath, action, xml");
+                            throw new ArgumentException($"batch item[{ri}]: unknown field(s) {string.Join(", ", unknown.Select(f => $"\"{f}\""))}. Valid fields: {string.Join(", ", BatchItem.KnownFields)}");
                     }
                     ri++;
                 }
