@@ -530,13 +530,18 @@ public partial class WordHandler
         if(b>contentH)contentH=b;
       });
       if(contentH<=availH+2)continue;
-      // Find first child that overflows available space
+      // Find first child that overflows available space. Use the same +2px
+      // tolerance the outer check uses — Chrome rounds line-box height to
+      // logical pixels at dsf>=2, accumulating ~0.13pt/line of drift, so
+      // a paragraph straddling the boundary by <2px shouldn't get pushed
+      // to the next page when the outer overflow check already accepted
+      // the page.
       var children=Array.from(body.children);
       var splitIdx=-1;
       for(var ci=0;ci<children.length;ci++){
         if(children[ci].classList.contains('footnotes'))continue;
         var bot=children[ci].offsetTop+children[ci].offsetHeight-body.offsetTop;
-        if(bot>availH){splitIdx=ci;break;}
+        if(bot>availH+2){splitIdx=ci;break;}
       }
       if(splitIdx<0)continue;
       // #7b00: when the overflowing child is a <table>, split it at the
@@ -574,6 +579,69 @@ public partial class WordHandler
           // Insert continuation as new sibling after the source table so
           // the split-point logic below moves it to a new page.
           table.parentNode.insertBefore(cont,table.nextSibling);
+          children=Array.from(body.children);
+          splitIdx=children.indexOf(cont);
+        }
+      }
+      // Mirror the table case for <ol>/<ul>: split at the first <li>
+      // that overflows so partial lists carry to the next page rather
+      // than the whole list moving as one atomic unit. Multi-level
+      // numbering is rendered via nested <ol>/<ul> wrapped inside the
+      // parent <li>; recurse through that nesting to find the
+      // shallowest list whose splitting keeps as much content on this
+      // page as possible. Cumulative left-padding from the parent
+      // chain is folded into the promoted continuation list so the
+      // continuation keeps its visual indent on the new page.
+      if(firstOverflow&&(firstOverflow.tagName==='OL'||firstOverflow.tagName==='UL')){
+        var findListSplit=function(lst,parents){
+          var lis=Array.from(lst.children).filter(function(c){return c.tagName==='LI';});
+          for(var li=0;li<lis.length;li++){
+            var liBot=lis[li].offsetTop+lis[li].offsetHeight-body.offsetTop;
+            if(liBot>availH+2){
+              if(li>0)return {parents:parents,list:lst,splitAt:li,moveAll:false};
+              var nested=Array.from(lis[li].children).find(function(c){return c.tagName==='OL'||c.tagName==='UL';});
+              if(nested){
+                var nestedTop=nested.offsetTop-body.offsetTop;
+                if(nestedTop<=availH+2){
+                  var newParents=parents.concat([{list:lst,li:lis[li]}]);
+                  var inner=findListSplit(nested,newParents);
+                  if(inner)return inner;
+                  return {parents:newParents,list:nested,splitAt:0,moveAll:true};
+                }
+              }
+              return null;
+            }
+          }
+          return null;
+        };
+        var sp=findListSplit(firstOverflow,[]);
+        if(sp){
+          var srcLis=Array.from(sp.list.children).filter(function(c){return c.tagName==='LI';});
+          var cont=sp.list.cloneNode(false);
+          for(var lj=sp.splitAt;lj<srcLis.length;lj++){
+            cont.appendChild(srcLis[lj]);
+          }
+          // Promote `cont` to a body-level sibling. Each parent <li>
+          // would have contributed its own list's padding-left, so
+          // sum the live padding-left of every list in the parent
+          // chain (plus the split list itself) and apply that to the
+          // promoted wrapper. Reading getComputedStyle keeps us in
+          // sync with whatever the renderer emits per-level — no
+          // assumed indent constant.
+          if(sp.parents.length>0){
+            var cumPadPx=0;
+            for(var pi2=0;pi2<sp.parents.length;pi2++){
+              cumPadPx+=parseFloat(getComputedStyle(sp.parents[pi2].list).paddingLeft)||0;
+            }
+            cumPadPx+=parseFloat(getComputedStyle(sp.list).paddingLeft)||0;
+            cont.style.paddingLeft=cumPadPx+'px';
+            // If the split list is now empty (moveAll case), drop it
+            // so the source page doesn't render an empty bullet gutter.
+            if(sp.moveAll&&sp.list.children.length===0){
+              sp.list.parentNode.removeChild(sp.list);
+            }
+          }
+          firstOverflow.parentNode.insertBefore(cont,firstOverflow.nextSibling);
           children=Array.from(body.children);
           splitIdx=children.indexOf(cont);
         }
@@ -1096,12 +1164,9 @@ public partial class WordHandler
             sizePt = hp / 2.0;
         if (sizePt == 0 && defaultRPr?.FontSize?.Val?.Value is string nsz && int.TryParse(nsz, out var nhp))
             sizePt = nhp / 2.0;
-        // OOXML §17.7.4.5 says default is 20 half-points (10pt) but Word ignores
-        // the spec when neither rPrDefault nor Normal carries a size — it pulls
-        // from Normal.dotm's Calibri 11pt baseline. Mirror Word so docs without
-        // an explicit size (typical of synthetic / minimal docs) don't render
-        // ~9% smaller and shift every line height.
-        if (sizePt == 0) sizePt = 11.0;
+        // OOXML §17.7.4.5 default: 20 half-points = 10pt when neither
+        // rPrDefault nor Normal carries a size.
+        if (sizePt == 0) sizePt = 10.0;
 
         // Line spacing: docDefaults pPrDefault → Normal style pPr → fallback
         double lineH = 0;
@@ -1871,6 +1936,22 @@ public partial class WordHandler
                     // a custom list-style-type string when applicable.
                     sb.Append($" class=\"marker-{numId}-{ilvl}\"");
                     var paraStyle = GetParagraphInlineCss(para, isListItem: true);
+                    // ul markers render via ::marker pseudo, which sits outside
+                    // the line box and can't inflate it. ol markers render via
+                    // an inline-block <span> that already contributes its full
+                    // height — the precise line-height there is enough.
+                    if (tag == "ul")
+                    {
+                        var liLh = GetListItemLineHeightOverride(numId, ilvl, para);
+                        if (liLh.HasValue)
+                        {
+                            var rx = new System.Text.RegularExpressions.Regex(@"line-height:[^;]+");
+                            var replacement = $"line-height:{liLh.Value:0.##}pt";
+                            paraStyle = rx.IsMatch(paraStyle)
+                                ? rx.Replace(paraStyle, replacement)
+                                : (string.IsNullOrEmpty(paraStyle) ? replacement : paraStyle + ";" + replacement);
+                        }
+                    }
                     if (!string.IsNullOrEmpty(paraStyle))
                         sb.Append($" style=\"{paraStyle}\"");
                     sb.Append(">");
@@ -1900,7 +1981,7 @@ public partial class WordHandler
                         // for ul ::marker. Word lets per-level rPr restyle markers
                         // independent of the body run; mirroring that here keeps
                         // sections like "red bold 1." parallel between ol/ul.
-                        var inlineMarkerCss = GetMarkerInlineCss(numId, ilvl);
+                        var inlineMarkerCss = GetMarkerInlineCss(numId, ilvl, para);
                         var markerStyle = $"display:inline-block;min-width:{markerWidth};padding-right:{markerPadding};text-align:{align}";
                         if (!string.IsNullOrEmpty(inlineMarkerCss))
                             markerStyle = inlineMarkerCss + ";" + markerStyle;
