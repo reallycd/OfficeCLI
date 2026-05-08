@@ -118,6 +118,12 @@ internal static class TypedAttributeFallback
         {
             var escapedVal = System.Security.SecurityElement.Escape(value);
             var temp = parent.CloneNode(false);
+            // CONSISTENCY(ooxml-attr-namespace): qualified `{prefix}:{attr}=` is
+            // correct for WordprocessingML (attributeFormDefault="qualified"),
+            // which is the only schema this fallback is wired to today. If
+            // extended to xlsx/pptx, copy the probe-and-retry shape from
+            // GenericXmlQuery.ProbeTypedValChild — those schemas use
+            // attributeFormDefault="unqualified" and reject prefixed val.
             temp.InnerXml = $"<{prefix}:{elementLocal} xmlns:{prefix}=\"{nsUri}\" {prefix}:{attrLocal}=\"{escapedVal}\"/>";
             // Clone (true) detaches the parsed element from its temporary
             // parent so it can be appended into the real tree later. Without
@@ -218,6 +224,7 @@ internal static class TypedAttributeFallback
         {
             var escapedVal = System.Security.SecurityElement.Escape(value);
             var temp = leafContainer.CloneNode(false);
+            // CONSISTENCY(ooxml-attr-namespace): see note in TrySetSingleLevel.
             temp.InnerXml = $"<{prefix}:{cur.LocalName} xmlns:{prefix}=\"{nsUri}\" {prefix}:{attrLocal}=\"{escapedVal}\"/>";
             var first = temp.FirstChild?.CloneNode(true);
             if (first is null or OpenXmlUnknownElement) return false;

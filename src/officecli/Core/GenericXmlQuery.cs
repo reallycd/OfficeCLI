@@ -330,20 +330,18 @@ internal static class GenericXmlQuery
         try
         {
             var escapedVal = System.Security.SecurityElement.Escape(value);
-            var tempElement = parent.CloneNode(false);
-            tempElement.InnerXml = $"<{prefix}:{key} xmlns:{prefix}=\"{nsUri}\" {prefix}:val=\"{escapedVal}\"/>";
-
-            var newChild = tempElement.FirstChild?.CloneNode(true);
-            if (newChild == null || newChild is OpenXmlUnknownElement)
-                return false;
-
-            // Schema check: only accept "scalar val" typed elements — those that
-            // expose a typed Val property on their generated SDK class. Composite
-            // types (w:tabs, w:rFonts, w:ind, w:spacing, w:numPr, ...) have no
-            // Val property; they'd otherwise accept the fabricated val= as an
-            // unknown extension attribute and silently produce invalid XML
-            // (e.g. <w:tabs w:val="9360:right"/> instead of nested <w:tab>).
-            if (newChild.GetType().GetProperty("Val") == null)
+            // OOXML attribute namespace handling differs by schema:
+            //   - WordprocessingML: attributeFormDefault="qualified" → w:val
+            //   - SpreadsheetML / DrawingML / PresentationML:
+            //     attributeFormDefault="unqualified" → plain val (no prefix)
+            // Writing prefix:val to an unqualified-attribute schema produces a
+            // foreign extension attribute that schema validation rejects
+            // ("attribute 'x:val' is not declared", "required attribute 'val'
+            // is missing"). Probe unqualified first; if the SDK didn't bind it
+            // to the typed Val property (Word case), retry with the prefix.
+            var newChild = ProbeTypedValChild(parent, prefix, nsUri, key, escapedVal, qualifiedVal: false)
+                ?? ProbeTypedValChild(parent, prefix, nsUri, key, escapedVal, qualifiedVal: true);
+            if (newChild == null)
                 return false;
 
             // Schema-aware AddChild rejects elements that don't belong in this
@@ -373,6 +371,40 @@ internal static class GenericXmlQuery
         {
             return false;
         }
+    }
+
+    // Build a candidate child via SDK InnerXml parse, return it only if the
+    // SDK recognized the element AND populated its typed Val property (i.e.
+    // bound the val attribute to the schema). A non-null Val proves the
+    // attribute namespace matched the schema; null means SDK kept val as a
+    // foreign extension attribute, which would later fail schema validation.
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075",
+        Justification = "Probing for SDK-generated 'Val' property by name. Same justification as TryCreateTypedChild.")]
+    private static OpenXmlElement? ProbeTypedValChild(OpenXmlElement parent, string prefix, string nsUri,
+        string key, string escapedVal, bool qualifiedVal)
+    {
+        var valAttr = qualifiedVal ? $"{prefix}:val" : "val";
+        var tempElement = parent.CloneNode(false);
+        tempElement.InnerXml = $"<{prefix}:{key} xmlns:{prefix}=\"{nsUri}\" {valAttr}=\"{escapedVal}\"/>";
+        var newChild = tempElement.FirstChild?.CloneNode(true);
+        if (newChild == null || newChild is OpenXmlUnknownElement)
+            return null;
+        // Schema check: only accept "scalar val" typed elements — those that
+        // expose a typed Val property. Composite types (w:tabs, w:rFonts,
+        // w:ind, w:spacing, w:numPr, ...) have no Val property; they'd
+        // otherwise accept the fabricated val= as an unknown extension
+        // attribute and silently produce invalid XML.
+        var valProp = newChild.GetType().GetProperty("Val");
+        if (valProp == null)
+            return null;
+        // Reject if SDK did not bind val to the typed property — either the
+        // attribute landed in the wrong namespace for this schema, or the
+        // value failed enum/format parsing. Either way, the caller's retry
+        // (or fall-through) is preferable to writing a child whose val will
+        // be serialized as a foreign attribute and rejected by validation.
+        if (valProp.GetValue(newChild) == null)
+            return null;
+        return newChild;
     }
 
     /// <summary>
