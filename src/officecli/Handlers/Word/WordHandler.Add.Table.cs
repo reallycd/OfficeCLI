@@ -388,6 +388,88 @@ public partial class WordHandler
         return $"{parentPath}/tr[{rowIdx}]";
     }
 
+    /// <summary>
+    /// Insert a new virtual column into a Word table. OOXML has no <w:col>
+    /// element, so this synthesizes one by inserting a <w:gridCol> in
+    /// <w:tblGrid> and a fresh <w:tc> at the same positional index in every
+    /// existing <w:tr>. Rejects when any affected row carries gridSpan or
+    /// vMerge in that column slot — those merge directives reference column
+    /// positions and would silently break.
+    /// </summary>
+    private string AddTableColumn(OpenXmlElement parent, string parentPath, int? index, Dictionary<string, string> properties)
+    {
+        if (parent is not Table targetTable)
+            throw new ArgumentException("Columns can only be added to a table: /body/tbl[N]");
+
+        var grid = targetTable.GetFirstChild<TableGrid>()
+            ?? targetTable.PrependChild(new TableGrid());
+        var existingGridCols = grid.Elements<GridColumn>().ToList();
+        var insertIdx = index.HasValue && index.Value >= 0 && index.Value < existingGridCols.Count
+            ? index.Value
+            : existingGridCols.Count; // append by default
+
+        // Reject if any row at insertIdx straddles the boundary via merge.
+        foreach (var row in targetTable.Elements<TableRow>())
+        {
+            var cells = row.Elements<TableCell>().ToList();
+            // Check the cell currently occupying slot `insertIdx` (the one
+            // that will be pushed right). gridSpan or vMerge here means
+            // re-indexing the column slot would split a merged region.
+            if (insertIdx < cells.Count && CellHasMerge(cells[insertIdx]))
+                throw new ArgumentException(
+                    $"Cannot insert column at index {insertIdx} of {parentPath}: " +
+                    $"a row contains a merged cell straddling that boundary (gridSpan/vMerge). " +
+                    "Unmerge first or pick a different position.");
+        }
+
+        // Width: explicit, or average of existing cols, or default 2400 twips
+        long defaultWidthTwips = 2400;
+        long newWidth = properties.TryGetValue("width", out var wVal)
+            ? ParseTwips(wVal)
+            : (existingGridCols.Count > 0
+                ? (long)existingGridCols.Average(gc => long.TryParse(gc.Width?.Value, out var w) ? w : defaultWidthTwips)
+                : defaultWidthTwips);
+
+        var newGridCol = new GridColumn { Width = newWidth.ToString() };
+        if (insertIdx < existingGridCols.Count)
+            grid.InsertBefore(newGridCol, existingGridCols[insertIdx]);
+        else
+            grid.AppendChild(newGridCol);
+
+        var cellText = properties.GetValueOrDefault("text", "");
+        foreach (var row in targetTable.Elements<TableRow>())
+        {
+            var newPara = new Paragraph();
+            AssignParaId(newPara);
+            if (!string.IsNullOrEmpty(cellText))
+                newPara.AppendChild(new Run(new Text(cellText) { Space = SpaceProcessingModeValues.Preserve }));
+            var newCell = new TableCell(newPara);
+
+            var cells = row.Elements<TableCell>().ToList();
+            if (insertIdx < cells.Count)
+                row.InsertBefore(newCell, cells[insertIdx]);
+            else
+                row.AppendChild(newCell);
+        }
+
+        var newColIdx = grid.Elements<GridColumn>().ToList().IndexOf(newGridCol) + 1;
+        return $"{parentPath}/col[{newColIdx}]";
+    }
+
+    /// <summary>
+    /// True if the cell carries gridSpan > 1 (horizontal merge) or any
+    /// vMerge directive (vertical merge — restart or continue).
+    /// </summary>
+    private static bool CellHasMerge(TableCell cell)
+    {
+        var tcPr = cell.GetFirstChild<TableCellProperties>();
+        if (tcPr == null) return false;
+        var span = tcPr.GetFirstChild<GridSpan>()?.Val?.Value ?? 1;
+        if (span > 1) return true;
+        if (tcPr.GetFirstChild<VerticalMerge>() != null) return true;
+        return false;
+    }
+
     private string AddCell(OpenXmlElement parent, string parentPath, int? index, Dictionary<string, string> properties)
     {
         if (parent is not TableRow targetRow)

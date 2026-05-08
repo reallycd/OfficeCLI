@@ -167,6 +167,7 @@ public partial class WordHandler
             "run" or "r" => AddRun(parent, parentPath, index, properties),
             "table" or "tbl" => AddTable(parent, parentPath, index, properties),
             "row" or "tr" => AddRow(parent, parentPath, index, properties),
+            "col" or "column" => AddTableColumn(parent, parentPath, index, properties),
             "cell" or "tc" => AddCell(parent, parentPath, index, properties),
             "tab" or "tabstop" => AddTab(parent, parentPath, index, properties),
             "ptab" or "positionaltab" => AddPtab(parent, parentPath, index, properties),
@@ -463,6 +464,12 @@ public partial class WordHandler
             {
                 case "row":
                 case "tr":
+                case "col":
+                case "column":
+                    // 'col'/'column' is a virtual element synthesized by
+                    // AddTableColumn (gridCol + per-row tc). OOXML has no
+                    // <w:col> child; the gate is opened here so dispatch
+                    // reaches the column helper.
                     break;
                 default:
                     throw new ArgumentException(

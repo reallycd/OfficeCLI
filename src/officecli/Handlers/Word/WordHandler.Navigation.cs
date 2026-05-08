@@ -389,6 +389,29 @@ public partial class WordHandler
             }
         }
 
+        // Virtual table column anchor: /body/tbl[N]/col[N]. ParsePath would
+        // fail because <w:col> doesn't exist in OOXML. Used by `add column
+        // --before/--after col[K]` and `add --from col[K] --before/--after col[J]`.
+        // Validates that the anchor exists in the named table.
+        {
+            var colAnchorMatch = System.Text.RegularExpressions.Regex.Match(
+                anchorPath, @"^/body/tbl\[(\d+)\]/col\[(\d+)\]$");
+            if (colAnchorMatch.Success)
+            {
+                var anchorTableIdx = int.Parse(colAnchorMatch.Groups[1].Value);
+                var anchorColIdx = int.Parse(colAnchorMatch.Groups[2].Value);
+                var body = _doc.MainDocumentPart?.Document?.Body;
+                var tables = body?.Elements<Table>().ToList() ?? new List<Table>();
+                if (anchorTableIdx < 1 || anchorTableIdx > tables.Count)
+                    throw new ArgumentException($"Anchor table not found: {anchorPath} (total tables at /body: {tables.Count})");
+                var anchorGrid = tables[anchorTableIdx - 1].GetFirstChild<TableGrid>();
+                var gridColCount = anchorGrid?.Elements<GridColumn>().Count() ?? 0;
+                if (anchorColIdx < 1 || anchorColIdx > gridColCount)
+                    throw new ArgumentException($"Anchor column not found: {anchorPath} (total columns: {gridColCount})");
+                return position.After != null ? anchorColIdx : anchorColIdx - 1;
+            }
+        }
+
         var segments = ParsePath(anchorPath);
         var anchor = NavigateToElement(segments, out var ctx)
             ?? throw new ArgumentException($"Anchor element not found: {anchorPath}" + (ctx != null ? $". {ctx}" : ""));

@@ -77,6 +77,15 @@ public partial class WordHandler
             return Remove(allOles[wOleIdx - 1].Path);
         }
 
+        // Virtual table column path — strip gridCol + per-row tc.
+        var colRemoveMatch = Regex.Match(path, @"^/body/tbl\[(\d+)\]/col\[(\d+)\]$");
+        if (colRemoveMatch.Success)
+        {
+            RemoveTableColumn(colRemoveMatch);
+            _doc.MainDocumentPart?.Document?.Save();
+            return null;
+        }
+
         var parts = ParsePath(path);
 
         // Handle header/footer removal by deleting the part itself
@@ -522,6 +531,14 @@ public partial class WordHandler
 
     public string Move(string sourcePath, string? targetParentPath, InsertPosition? position)
     {
+        // Virtual table column path — same-table only. OOXML has no <w:col>
+        // element; the move is a (gridCol + per-row tc) shuffle in lockstep.
+        var colMoveMatch = Regex.Match(sourcePath, @"^/body/tbl\[(\d+)\]/col\[(\d+)\]$");
+        if (colMoveMatch.Success)
+        {
+            return MoveTableColumn(colMoveMatch, position, targetParentPath);
+        }
+
         var srcParts = ParsePath(sourcePath);
         var element = NavigateToElement(srcParts)
             ?? throw new ArgumentException($"Source not found: {sourcePath}");
@@ -661,6 +678,13 @@ public partial class WordHandler
 
     public string CopyFrom(string sourcePath, string targetParentPath, InsertPosition? position)
     {
+        // Virtual table column clone — same-table only.
+        var colCopyMatch = Regex.Match(sourcePath, @"^/body/tbl\[(\d+)\]/col\[(\d+)\]$");
+        if (colCopyMatch.Success)
+        {
+            return CopyTableColumn(colCopyMatch, position, targetParentPath);
+        }
+
         var srcParts = ParsePath(sourcePath);
         var element = NavigateToElement(srcParts)
             ?? throw new ArgumentException($"Source not found: {sourcePath}");
@@ -1289,5 +1313,205 @@ public partial class WordHandler
 
         _doc.MainDocumentPart?.Document?.Save();
         return count;
+    }
+
+    // -------- Word virtual table-column ops --------
+    //
+    // OOXML has no <w:col> child of <w:tbl>; columns are implicit (gridCol +
+    // per-row tc). These helpers synthesize Remove/Move/CopyFrom for the
+    // virtual `/body/tbl[N]/col[C]` path. Same-table only — cross-table is
+    // rejected because grid widths and row counts differ ambiguously.
+
+    private (Table table, TableGrid grid) ResolveBodyTable(int tableIdx)
+    {
+        var body = _doc.MainDocumentPart?.Document?.Body
+            ?? throw new InvalidOperationException("Document body not found");
+        var tables = body.Elements<Table>().ToList();
+        if (tableIdx < 1 || tableIdx > tables.Count)
+            throw new ArgumentException($"Table {tableIdx} not found at /body (total: {tables.Count})");
+        var table = tables[tableIdx - 1];
+        var grid = table.GetFirstChild<TableGrid>()
+            ?? throw new InvalidOperationException("Table has no <w:tblGrid>");
+        return (table, grid);
+    }
+
+    private static void GuardNoMergesInColumn(Table table, int colIdx, string action)
+    {
+        // gridSpan/vMerge in the affected column slot would silently break.
+        foreach (var row in table.Elements<TableRow>())
+        {
+            var cells = row.Elements<TableCell>().ToList();
+            if (colIdx - 1 < cells.Count)
+            {
+                var tc = cells[colIdx - 1];
+                var tcPr = tc.GetFirstChild<TableCellProperties>();
+                var span = tcPr?.GetFirstChild<GridSpan>()?.Val?.Value ?? 1;
+                if (span > 1 || tcPr?.GetFirstChild<VerticalMerge>() != null)
+                    throw new ArgumentException(
+                        $"Cannot {action} column {colIdx}: a row contains a merged cell (gridSpan/vMerge) " +
+                        "spanning that column. Unmerge before performing column-level operations.");
+            }
+        }
+    }
+
+    private void RemoveTableColumn(Match colMatch)
+    {
+        var tableIdx = int.Parse(colMatch.Groups[1].Value);
+        var colIdx = int.Parse(colMatch.Groups[2].Value);
+        var (table, grid) = ResolveBodyTable(tableIdx);
+        var gridCols = grid.Elements<GridColumn>().ToList();
+        if (colIdx < 1 || colIdx > gridCols.Count)
+            throw new ArgumentException($"Column {colIdx} not found (total: {gridCols.Count})");
+
+        GuardNoMergesInColumn(table, colIdx, "remove");
+
+        gridCols[colIdx - 1].Remove();
+        foreach (var row in table.Elements<TableRow>())
+        {
+            var cells = row.Elements<TableCell>().ToList();
+            if (colIdx - 1 < cells.Count)
+                cells[colIdx - 1].Remove();
+        }
+    }
+
+    private static int? ResolveSameTableColumnAnchor(InsertPosition? position, int tableIdx, int? sourceColIdx)
+    {
+        if (position?.After == null && position?.Before == null)
+            return position?.Index;
+        var anchorPath = position.After ?? position.Before!;
+        var anchorMatch = Regex.Match(anchorPath, @"^/body/tbl\[(\d+)\]/col\[(\d+)\]$");
+        if (!anchorMatch.Success || int.Parse(anchorMatch.Groups[1].Value) != tableIdx)
+            throw new ArgumentException(
+                $"Column anchor must be a column in the same table: /body/tbl[{tableIdx}]/col[N]. Got: {anchorPath}");
+        var anchorColIdx = int.Parse(anchorMatch.Groups[2].Value);
+        if (sourceColIdx.HasValue && anchorColIdx == sourceColIdx.Value)
+            return -1; // self-anchor sentinel
+        var target = position.After != null ? anchorColIdx : anchorColIdx - 1; // 0-based
+        if (sourceColIdx.HasValue && sourceColIdx.Value < anchorColIdx) target -= 1;
+        return target;
+    }
+
+    private string MoveTableColumn(Match colMatch, InsertPosition? position, string? targetParentPath)
+    {
+        var tableIdx = int.Parse(colMatch.Groups[1].Value);
+        var colIdx = int.Parse(colMatch.Groups[2].Value);
+
+        if (!string.IsNullOrEmpty(targetParentPath))
+        {
+            var expected = $"/body/tbl[{tableIdx}]";
+            if (!string.Equals(targetParentPath, expected, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException(
+                    $"Cross-table column move is not supported. Source column's table is {expected}; target was {targetParentPath}.");
+        }
+
+        var (table, grid) = ResolveBodyTable(tableIdx);
+        var gridCols = grid.Elements<GridColumn>().ToList();
+        if (colIdx < 1 || colIdx > gridCols.Count)
+            throw new ArgumentException($"Column {colIdx} not found (total: {gridCols.Count})");
+
+        GuardNoMergesInColumn(table, colIdx, "move");
+
+        var targetIdx = ResolveSameTableColumnAnchor(position, tableIdx, colIdx);
+        if (targetIdx == -1)
+            return $"/body/tbl[{tableIdx}]/col[{colIdx}]";
+
+        var movingGridCol = gridCols[colIdx - 1];
+        movingGridCol.Remove();
+        var movingCells = new List<TableCell>();
+        foreach (var row in table.Elements<TableRow>())
+        {
+            var cells = row.Elements<TableCell>().ToList();
+            if (colIdx - 1 < cells.Count)
+            {
+                movingCells.Add(cells[colIdx - 1]);
+                cells[colIdx - 1].Remove();
+            }
+            else
+            {
+                movingCells.Add(new TableCell(new Paragraph()));
+            }
+        }
+
+        var remainingGridCols = grid.Elements<GridColumn>().ToList();
+        if (targetIdx.HasValue && targetIdx.Value >= 0 && targetIdx.Value < remainingGridCols.Count)
+            remainingGridCols[targetIdx.Value].InsertBeforeSelf(movingGridCol);
+        else
+            grid.AppendChild(movingGridCol);
+
+        int rowIdx = 0;
+        foreach (var row in table.Elements<TableRow>())
+        {
+            var rowCells = row.Elements<TableCell>().ToList();
+            var movingCell = movingCells[rowIdx++];
+            if (targetIdx.HasValue && targetIdx.Value >= 0 && targetIdx.Value < rowCells.Count)
+                rowCells[targetIdx.Value].InsertBeforeSelf(movingCell);
+            else
+                row.AppendChild(movingCell);
+        }
+
+        _doc.MainDocumentPart?.Document?.Save();
+        var newGridCols = grid.Elements<GridColumn>().ToList();
+        var newColIdx = newGridCols.IndexOf(movingGridCol) + 1;
+        return $"/body/tbl[{tableIdx}]/col[{newColIdx}]";
+    }
+
+    private string CopyTableColumn(Match colMatch, InsertPosition? position, string? targetParentPath)
+    {
+        var tableIdx = int.Parse(colMatch.Groups[1].Value);
+        var colIdx = int.Parse(colMatch.Groups[2].Value);
+
+        if (!string.IsNullOrEmpty(targetParentPath))
+        {
+            var expected = $"/body/tbl[{tableIdx}]";
+            if (!string.Equals(targetParentPath, expected, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException(
+                    $"Cross-table column copy is not supported. Source column's table is {expected}; target was {targetParentPath}.");
+        }
+
+        var (table, grid) = ResolveBodyTable(tableIdx);
+        var gridCols = grid.Elements<GridColumn>().ToList();
+        if (colIdx < 1 || colIdx > gridCols.Count)
+            throw new ArgumentException($"Column {colIdx} not found (total: {gridCols.Count})");
+
+        GuardNoMergesInColumn(table, colIdx, "copy");
+
+        var targetIdx = ResolveSameTableColumnAnchor(position, tableIdx, sourceColIdx: null);
+
+        var clonedGridCol = (GridColumn)gridCols[colIdx - 1].CloneNode(true);
+        var clonedCells = new List<TableCell>();
+        foreach (var row in table.Elements<TableRow>())
+        {
+            var cells = row.Elements<TableCell>().ToList();
+            clonedCells.Add(colIdx - 1 < cells.Count
+                ? (TableCell)cells[colIdx - 1].CloneNode(true)
+                : new TableCell(new Paragraph()));
+        }
+
+        var siblingsGrid = grid.Elements<GridColumn>().ToList();
+        if (targetIdx.HasValue && targetIdx.Value >= 0 && targetIdx.Value < siblingsGrid.Count)
+            siblingsGrid[targetIdx.Value].InsertBeforeSelf(clonedGridCol);
+        else
+            grid.AppendChild(clonedGridCol);
+
+        int rowIdx = 0;
+        foreach (var row in table.Elements<TableRow>())
+        {
+            var rowCells = row.Elements<TableCell>().ToList();
+            var clone = clonedCells[rowIdx++];
+            if (targetIdx.HasValue && targetIdx.Value >= 0 && targetIdx.Value < rowCells.Count)
+                rowCells[targetIdx.Value].InsertBeforeSelf(clone);
+            else
+                row.AppendChild(clone);
+        }
+
+        // Re-assign paraId to all cloned paragraphs to avoid duplicates.
+        foreach (var clonedCell in clonedCells)
+            foreach (var p in clonedCell.Descendants<Paragraph>())
+                AssignParaId(p);
+
+        _doc.MainDocumentPart?.Document?.Save();
+        var newGridCols = grid.Elements<GridColumn>().ToList();
+        var newColIdx = newGridCols.IndexOf(clonedGridCol) + 1;
+        return $"/body/tbl[{tableIdx}]/col[{newColIdx}]";
     }
 }
