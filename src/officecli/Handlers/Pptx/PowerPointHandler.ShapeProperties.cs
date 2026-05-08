@@ -1488,8 +1488,24 @@ public partial class PowerPointHandler
                     break;
                 }
                 case "gridspan" or "colspan":
-                    cell.GridSpan = new DocumentFormat.OpenXml.Int32Value(ParseHelpers.SafeParseInt(value, "gridspan"));
+                {
+                    // CONSISTENCY(merge-continuation): a CT_TableCell with
+                    // gridSpan=N is only a valid horizontal merge if the next
+                    // (N-1) cells in the same row carry hMerge=true. Without
+                    // them PowerPoint renders the row un-merged. Mirror the
+                    // merge.right case (below) so plain `gridSpan=N` produces
+                    // a working merge instead of a half-applied one.
+                    var span = ParseHelpers.SafeParseInt(value, "gridspan");
+                    cell.GridSpan = new DocumentFormat.OpenXml.Int32Value(span);
+                    if (span > 1 && cell.Parent is Drawing.TableRow gsRow)
+                    {
+                        var gsCells = gsRow.Elements<Drawing.TableCell>().ToList();
+                        var gsIdx = gsCells.IndexOf(cell);
+                        for (int mi = gsIdx + 1; mi < gsIdx + span && mi < gsCells.Count; mi++)
+                            gsCells[mi].HorizontalMerge = new DocumentFormat.OpenXml.BooleanValue(true);
+                    }
                     break;
+                }
                 case "rowspan":
                     cell.RowSpan = new DocumentFormat.OpenXml.Int32Value(ParseHelpers.SafeParseInt(value, "rowspan"));
                     break;

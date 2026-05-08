@@ -30,10 +30,11 @@
     "gridSpan": {
       "type": "number",
       "add": false,
-      "set": false,
+      "set": true,
       "get": true,
-      "description": "horizontal merge span — number of grid columns this cell spans (>=2 means merged across).",
+      "description": "horizontal merge span — number of grid columns this cell spans (>=2 means merged across). Setting gridSpan=N also stamps hMerge=true on the next (N-1) cells in the same row, matching the convenience prop merge.right.",
       "readback": "integer span",
+      "examples": ["--prop gridSpan=3"],
       "enforcement": "report"
     },
     "hmerge": {
