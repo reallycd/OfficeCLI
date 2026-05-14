@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/ppt-process.gif" alt="在 AionUi 上使用 OfficeCLI 的 PPT 制作过程" width="100%">
+  <video src="assets/ppt-process.mp4" aria-label="在 AionUi 上使用 OfficeCLI 的 PPT 制作过程" width="100%" autoplay loop muted playsinline></video>
 </p>
 
 <p align="center"><em>在 <a href="https://github.com/iOfficeAI/AionUi">AionUi</a> 上使用 OfficeCLI 的 PPT 制作过程</em></p>

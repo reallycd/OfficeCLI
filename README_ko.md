@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/ppt-process.gif" alt="AionUi에서 OfficeCLI로 PPT 제작 과정" width="100%">
+  <video src="assets/ppt-process.mp4" aria-label="AionUi에서 OfficeCLI로 PPT 제작 과정" width="100%" autoplay loop muted playsinline></video>
 </p>
 
 <p align="center"><em><a href="https://github.com/iOfficeAI/AionUi">AionUi</a>에서 OfficeCLI로 PPT 제작 과정</em></p>

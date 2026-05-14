@@ -18,7 +18,7 @@ Open-source. Single binary. No Office installation. No dependencies. Works every
 </p>
 
 <p align="center">
-  <img src="assets/ppt-process.gif" alt="OfficeCLI creating a PowerPoint presentation on AionUi" width="100%">
+  <video src="assets/ppt-process.mp4" aria-label="OfficeCLI creating a PowerPoint presentation on AionUi" width="100%" autoplay loop muted playsinline></video>
 </p>
 
 <p align="center"><em>PPT creation process using OfficeCLI on <a href="https://github.com/iOfficeAI/AionUi">AionUi</a></em></p>
