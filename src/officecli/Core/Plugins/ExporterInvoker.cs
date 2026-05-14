@@ -1,15 +1,16 @@
 // Copyright 2025 OfficeCLI (officecli.ai)
 // SPDX-License-Identifier: Apache-2.0
 
-using System.Diagnostics;
-
 namespace OfficeCli.Core.Plugins;
 
 /// <summary>
 /// Shared logic for invoking exporter plugins (docs/plugin-protocol.md §5.2):
-/// resolution, source snapshotting, subprocess invocation, exit-code mapping.
-/// Used by `view <file> pdf` and any future caller that needs to convert a
-/// native document to a foreign target via an installed exporter plugin.
+/// resolution, subprocess invocation, exit-code mapping. Used by
+/// `view &lt;file&gt; pdf` and any future caller that needs to convert a native
+/// document to a foreign target via an installed exporter plugin.
+///
+/// Per §5.2 the plugin MUST NOT write to the source path, so main passes
+/// the source path directly without snapshotting.
 /// </summary>
 public static class ExporterInvoker
 {
@@ -43,35 +44,44 @@ public static class ExporterInvoker
                 residentClosed = true;
         }
 
-        var pluginSource = SnapshotForExport(sourceFullPath);
-        try
+        var idle = plugin.Manifest.ResolveIdleTimeout("export");
+        var result = PluginProcess.Run(new PluginProcess.RunOptions
         {
-            var (exitCode, stderr) = RunPlugin(plugin.ExecutablePath, pluginSource, outPath);
-            if (exitCode != 0)
-                throw new CliException(
-                    $"Exporter plugin '{plugin.Manifest.Name}' failed (exit {exitCode}): {Truncate(stderr, 500)}")
+            ExecutablePath = plugin.ExecutablePath,
+            Arguments = new[] { "export", sourceFullPath, "--out", outPath },
+            IdleTimeoutSeconds = idle,
+        });
+
+        if (result.IdleTimedOut)
+            throw new CliException(
+                $"Exporter plugin '{plugin.Manifest.Name}' produced no output for {idle}s — likely hung.")
+            {
+                Code = "plugin_idle_timeout",
+                Suggestion = "Override with --timeout 0 or raise `idle_timeout_seconds.verbs.export` in the plugin's manifest. " +
+                             "Long-running exporters should also emit `{\"heartbeat\":true}` on stderr periodically.",
+            };
+
+        if (result.ExitCode != 0)
+            throw new CliException(
+                $"Exporter plugin '{plugin.Manifest.Name}' failed (exit {result.ExitCode}): {Truncate(result.Stderr, 500)}")
+            {
+                Code = result.ExitCode switch
                 {
-                    Code = exitCode switch
-                    {
-                        2 => "corrupt_input",
-                        3 => "unsupported_feature",
-                        4 => "license_expired",
-                        5 => "protocol_mismatch",
-                        _ => "plugin_failed",
-                    },
-                };
+                    2 => "corrupt_input",
+                    3 => "unsupported_feature",
+                    4 => "license_expired",
+                    5 => "protocol_mismatch",
+                    6 => "plugin_idle_timeout",
+                    _ => "plugin_failed",
+                },
+            };
 
-            if (!File.Exists(outPath))
-                throw new CliException(
-                    $"Exporter plugin '{plugin.Manifest.Name}' reported success but no output file was written at {outPath}.")
-                { Code = "plugin_contract_violation" };
+        if (!File.Exists(outPath))
+            throw new CliException(
+                $"Exporter plugin '{plugin.Manifest.Name}' reported success but no output file was written at {outPath}.")
+            { Code = "plugin_contract_violation" };
 
-            return new ExportResult(outPath, plugin, residentClosed);
-        }
-        finally
-        {
-            try { File.Delete(pluginSource); } catch { }
-        }
+        return new ExportResult(outPath, plugin, residentClosed);
     }
 
     /// <summary>
@@ -96,44 +106,6 @@ public static class ExporterInvoker
             return p;
 
         return null;
-    }
-
-    /// <summary>
-    /// Copy the source to a fresh tmp file so the exporter plugin can open it
-    /// exclusively even when another process (resident, antivirus, ...) holds
-    /// the original. Caller is responsible for deleting the result.
-    /// </summary>
-    private static string SnapshotForExport(string sourcePath)
-    {
-        var ext = Path.GetExtension(sourcePath);
-        var tmp = Path.Combine(Path.GetTempPath(),
-            $"officecli-export-{Guid.NewGuid():N}{ext}");
-        using var src = new FileStream(sourcePath, FileMode.Open, FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete);
-        using var dst = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        src.CopyTo(dst);
-        return tmp;
-    }
-
-    private static (int exitCode, string stderr) RunPlugin(string exe, string source, string target)
-    {
-        using var p = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = exe,
-                ArgumentList = { "export", source, "--out", target },
-                UseShellExecute = false,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-                CreateNoWindow = true,
-            }
-        };
-        p.Start();
-        _ = p.StandardOutput.ReadToEndAsync();
-        var stderrTask = p.StandardError.ReadToEndAsync();
-        p.WaitForExit();
-        return (p.ExitCode, stderrTask.Result);
     }
 
     private static string Truncate(string s, int max) =>

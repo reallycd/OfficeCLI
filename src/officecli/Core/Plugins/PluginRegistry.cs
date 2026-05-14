@@ -212,10 +212,16 @@ public static class PluginRegistry
     // ---------------------------------------------------------------------
 
     /// <summary>
+    /// Supported plugin protocol major version. The registry rejects any
+    /// manifest whose <c>protocol</c> differs from this value (per §13).
+    /// </summary>
+    public const int SupportedProtocolVersion = 1;
+
+    /// <summary>
     /// Run <c>plugin --info</c> and parse the resulting JSON. Returns false
     /// (and swallows the exception) if the plugin times out, exits non-zero,
-    /// or emits malformed JSON. Callers should treat false the same way they
-    /// treat "plugin not found".
+    /// emits malformed JSON, or declares an incompatible protocol version.
+    /// Callers should treat false the same way they treat "plugin not found".
     /// </summary>
     public static bool TryReadManifest(string executablePath, out PluginManifest manifest)
     {
@@ -235,6 +241,13 @@ public static class PluginRegistry
                 }
             };
             if (!p.Start()) return false;
+
+            // Start the async stdout/stderr reads BEFORE WaitForExit. Synchronous
+            // read-after-wait deadlocks when manifest output exceeds the pipe
+            // buffer (rare for manifests, but happens when plugins emit verbose
+            // diagnostics on stderr alongside --info).
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
             if (!p.WaitForExit(InfoTimeoutMs))
             {
                 try { p.Kill(entireProcessTree: true); } catch { }
@@ -242,11 +255,27 @@ public static class PluginRegistry
             }
             if (p.ExitCode != 0) return false;
 
-            var stdout = p.StandardOutput.ReadToEnd();
+            var stdout = stdoutTask.Result;
+            _ = stderrTask.Result;
             if (string.IsNullOrWhiteSpace(stdout)) return false;
 
             var parsed = JsonSerializer.Deserialize(stdout, PluginJsonContext.Default.PluginManifest);
             if (parsed is null) return false;
+
+            // Protocol gate. Mismatch is fatal — we will not load a plugin that
+            // implements a different major version, since the wire format may
+            // differ in ways main does not understand. Surface a one-line
+            // warning so users debugging "plugin not found" can see that an
+            // installed plugin was rejected for version reasons — silent
+            // rejection would leave them guessing.
+            if (parsed.Protocol != SupportedProtocolVersion)
+            {
+                Console.Error.WriteLine(
+                    $"[warning] plugin at {executablePath} declares protocol={parsed.Protocol} " +
+                    $"but main supports protocol={SupportedProtocolVersion}; plugin will not load.");
+                return false;
+            }
+
             manifest = parsed;
             return true;
         }

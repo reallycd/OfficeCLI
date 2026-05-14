@@ -88,8 +88,10 @@ internal sealed class FormatHandlerProxy : IDocumentHandler
         var args = new JsonObject { ["path"] = path };
         var props = PropsToJson(properties);
         var result = _session.Send("command", "set", args, props);
-        if (result is null) return new List<string>();
-        return JsonSerializer.Deserialize(result.ToJsonString(), PluginJsonContext.Default.ListString) ?? new List<string>();
+        // Protocol §5.3 (set): result is `{"unsupported_properties":["k1",...]}`.
+        // Accept the older bare-string-array shape too so a plugin upgrading
+        // at its own pace does not break.
+        return ParseUnsupportedProperties(result);
     }
 
     public string Add(string parentPath, string type, InsertPosition? position, Dictionary<string, string> properties)
@@ -102,7 +104,9 @@ internal sealed class FormatHandlerProxy : IDocumentHandler
         if (position is not null) args["position"] = PositionToJson(position);
         var props = PropsToJson(properties);
         var result = _session.Send("command", "add", args, props);
-        return result?.GetValue<string>() ?? "";
+        // Protocol §5.3 (add): result is `{"path":"...","unsupported_properties":[...]}`.
+        // Accept the older bare-string shape too.
+        return ParseAddPath(result);
     }
 
     public string? Remove(string path)
@@ -151,7 +155,7 @@ internal sealed class FormatHandlerProxy : IDocumentHandler
             ["action"] = action,
         };
         if (xml is not null) args["xml"] = xml;
-        _session.Send("command", "raw-set", args);
+        _session.Send("command", "raw_set", args);
     }
 
     public (string RelId, string PartPath) AddPart(string parentPartPath, string partType, Dictionary<string, string>? properties = null)
@@ -162,7 +166,7 @@ internal sealed class FormatHandlerProxy : IDocumentHandler
             ["part_type"] = partType,
         };
         var props = properties is not null ? PropsToJson(properties) : null;
-        var result = _session.Send("command", "add-part", args, props)?.AsObject();
+        var result = _session.Send("command", "add_part", args, props)?.AsObject();
         if (result is null)
             throw new CliException("Format-handler add-part returned null.") { Code = "protocol_mismatch" };
         var relId = result["rel_id"]?.GetValue<string>() ?? "";
@@ -245,7 +249,7 @@ internal sealed class FormatHandlerProxy : IDocumentHandler
         byteCount = 0;
         try
         {
-            var result = _session.Send("command", "extract-binary", new JsonObject
+            var result = _session.Send("command", "extract_binary", new JsonObject
             {
                 ["path"] = path,
                 ["dest_path"] = destPath,
@@ -254,7 +258,10 @@ internal sealed class FormatHandlerProxy : IDocumentHandler
             var found = result["found"]?.GetValue<bool>() ?? false;
             if (!found) return false;
             contentType = result["content_type"]?.GetValue<string>();
-            byteCount = result["byte_count"]?.GetValue<long>() ?? 0;
+            // Tolerant integer parse: some plugins / language runtimes encode
+            // counts as JSON doubles (`42.0`) which System.Text.Json refuses
+            // to deserialize as long via the strict GetValue<long> path.
+            byteCount = ParseLongTolerant(result["byte_count"]);
             return true;
         }
         catch (CliException ex) when (ex.Code == "unsupported_command")
@@ -307,5 +314,58 @@ internal sealed class FormatHandlerProxy : IDocumentHandler
         if (pos.After != null) obj["after"] = pos.After;
         if (pos.Before != null) obj["before"] = pos.Before;
         return obj;
+    }
+
+    private static long ParseLongTolerant(JsonNode? node)
+    {
+        if (node is null) return 0;
+        try
+        {
+            var v = node.AsValue();
+            if (v.TryGetValue<long>(out var l)) return l;
+            if (v.TryGetValue<double>(out var d)) return (long)d;
+            if (v.TryGetValue<string>(out var s) && long.TryParse(s, out var sl)) return sl;
+        }
+        catch { }
+        return 0;
+    }
+
+    /// <summary>
+    /// Extract the <c>unsupported_properties</c> list from a <c>set</c> reply.
+    /// Spec-conformant plugins return <c>{"unsupported_properties":[...]}</c>;
+    /// older plugins returned a bare string array. Both shapes are accepted so
+    /// host stays compatible during the protocol-v1 rollout.
+    /// </summary>
+    private static List<string> ParseUnsupportedProperties(JsonNode? result)
+    {
+        if (result is null) return new List<string>();
+        if (result is JsonArray array)
+        {
+            return array
+                .Where(n => n is not null)
+                .Select(n => n!.GetValue<string>())
+                .ToList();
+        }
+        if (result is JsonObject obj && obj["unsupported_properties"] is JsonArray ups)
+        {
+            return ups
+                .Where(n => n is not null)
+                .Select(n => n!.GetValue<string>())
+                .ToList();
+        }
+        return new List<string>();
+    }
+
+    /// <summary>
+    /// Extract the new element's path from an <c>add</c> reply.
+    /// Spec-conformant plugins return <c>{"path":"...","unsupported_properties":[...]}</c>;
+    /// older plugins returned a bare string. Both shapes are accepted.
+    /// </summary>
+    private static string ParseAddPath(JsonNode? result)
+    {
+        if (result is null) return "";
+        if (result is JsonValue v && v.TryGetValue<string>(out var s)) return s;
+        if (result is JsonObject obj) return obj["path"]?.GetValue<string>() ?? "";
+        return "";
     }
 }

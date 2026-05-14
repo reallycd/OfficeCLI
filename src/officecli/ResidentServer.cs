@@ -514,6 +514,12 @@ public class ResidentServer : IDisposable
             Console.SetOut(stdoutWriter);
             Console.SetError(stderrWriter);
 
+            // Drain any warnings produced at handler-open time (the resident
+            // constructor runs before this capture scope exists, so any
+            // Console.Error written then was lost to an unread pipe). Surface
+            // them on the next command's stderr so users see them at all.
+            OfficeCli.Core.Plugins.DumpReaderInvoker.DrainPendingWarnings();
+
             try
             {
                 ExecuteCommand(request);

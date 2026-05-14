@@ -155,7 +155,7 @@ public static class DocumentHandlerFactory
             var session = new FormatHandlerSession(filePath, formatHandler);
             try
             {
-                session.Start();
+                session.Start(editable);
                 return new FormatHandlerProxy(session);
             }
             catch

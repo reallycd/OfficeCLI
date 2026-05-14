@@ -48,6 +48,16 @@ static partial class CommandBuilder
                         JsonSerializer.Serialize(w, p.Manifest.Extensions, PluginJsonContext.Default.ListString);
                         if (p.Manifest.Tier is { } tier) w.WriteString("tier", tier);
                         w.WriteString("path", p.ExecutablePath);
+                        // Per-plugin manifest warnings — emit the same data
+                        // that the text-mode table prints in its trailing
+                        // Warnings: section, so script/AI consumers of --json
+                        // can react to drift without parsing stderr.
+                        var pluginWarnings = p.Manifest.Warnings();
+                        if (pluginWarnings.Count > 0)
+                        {
+                            w.WritePropertyName("warnings");
+                            JsonSerializer.Serialize(w, pluginWarnings, PluginJsonContext.Default.ListString);
+                        }
                         w.WriteEndObject();
                     }
                     w.WriteEndArray();
@@ -85,6 +95,24 @@ static partial class CommandBuilder
             Console.WriteLine($"{"NAME".PadRight(wName)}  {"VERSION".PadRight(wVer)}  {"KINDS".PadRight(wKinds)}  {"EXTENSIONS".PadRight(wExts)}  PATH");
             foreach (var r in rows)
                 Console.WriteLine($"{r.Name.PadRight(wName)}  {r.Version.PadRight(wVer)}  {r.Kinds.PadRight(wKinds)}  {r.Exts.PadRight(wExts)}  {r.Path}");
+
+            // Surface manifest-level warnings discovered during enumeration —
+            // missing idle_timeout_seconds, unknown kinds, invalid target,
+            // missing format-handler vocabulary. These do not fail the
+            // listing, but they help plugin authors notice drift before
+            // users hit it at invocation time.
+            var withWarnings = plugins
+                .Select(p => (p.Manifest.Name, Warnings: p.Manifest.Warnings()))
+                .Where(t => t.Warnings.Count > 0)
+                .ToList();
+            if (withWarnings.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Warnings:");
+                foreach (var (name, ws) in withWarnings)
+                    foreach (var w in ws)
+                        Console.WriteLine($"  [{name}] {w}");
+            }
 
             return 0;
         }, json); });
@@ -231,74 +259,92 @@ static partial class CommandBuilder
             // tree to validate emitted props against (default: docx).
             var schemaFormat = resolved.Manifest.ResolveTargetFormat();
 
-            // Run the plugin.
-            var (exitCode, stdout, stderr) = RunPluginDump(resolved.ExecutablePath, fixturePath);
-            if (exitCode != 0)
-                throw new CliException(
-                    $"Plugin '{resolved.Manifest.Name}' dump failed (exit {exitCode}) on fixture '{fixturePath}': {TruncateForLint(stderr, 500)}")
-                {
-                    Code = "plugin_failed",
-                };
-
-            // Parse batch stream.
-            List<BatchItem> items;
-            try
-            {
-                items = JsonSerializer.Deserialize<List<BatchItem>>(stdout, BatchJsonContext.Default.ListBatchItem)
-                       ?? new List<BatchItem>();
-            }
-            catch (JsonException ex)
-            {
-                throw new CliException(
-                    $"Plugin '{resolved.Manifest.Name}' emitted invalid JSON: {ex.Message}")
-                { Code = "plugin_contract_violation" };
-            }
-
-            // Validate every add command's props against the docx schema.
-            // BatchItem.Type is used verbatim as the schema element name —
-            // SchemaHelpLoader already resolves path-form aliases declared
-            // by the schemas themselves (elementAliases). The lint command
-            // intentionally carries no plugin-specific alias table: the
-            // plugin contract is "use the canonical vocabulary from
-            // schemas/help/docx/*.json", and any drift surfaces as an
-            // unknown_type finding for the plugin author to fix.
+            // Run the plugin and stream JSONL.
+            var items = new List<BatchItem>();
             var findings = new List<LintFinding>();
+
+            void OnLine(string raw)
+            {
+                // Mirrors DumpReaderInvoker: strip per-line UTF-8 BOM so a
+                // plugin that BOMs every JSONL line passes lint as well as
+                // it passes invocation.
+                var line = raw.TrimStart('﻿').Trim();
+                if (line.Length == 0) return;
+                if (line[0] == '[')
+                    throw new CliException(
+                        $"Plugin '{resolved.Manifest.Name}' emitted a JSON array; protocol v1 requires JSONL (one BatchItem per line).")
+                    { Code = "corrupt_batch" };
+
+                BatchItem? item;
+                try { item = JsonSerializer.Deserialize(line, BatchJsonContext.Default.BatchItem); }
+                catch (JsonException ex)
+                {
+                    throw new CliException(
+                        $"Plugin '{resolved.Manifest.Name}' emitted invalid JSON at line #{items.Count}: {ex.Message}")
+                    { Code = "plugin_contract_violation" };
+                }
+                if (item is null) return;
+                items.Add(item);
+            }
+
+            var idle = resolved.Manifest.ResolveIdleTimeout("dump");
+            var runResult = PluginProcess.Run(new PluginProcess.RunOptions
+            {
+                ExecutablePath = resolved.ExecutablePath,
+                Arguments = new[] { "dump", fixturePath },
+                IdleTimeoutSeconds = idle,
+                OnStdoutLine = OnLine,
+            });
+            if (PluginProcess.LineCallbackError is CliException ce) throw ce;
+            if (PluginProcess.LineCallbackError is not null) throw PluginProcess.LineCallbackError;
+            if (runResult.IdleTimedOut)
+                throw new CliException(
+                    $"Plugin '{resolved.Manifest.Name}' produced no output for {idle}s — likely hung.")
+                { Code = "plugin_idle_timeout" };
+            if (runResult.ExitCode != 0)
+                throw new CliException(
+                    $"Plugin '{resolved.Manifest.Name}' dump failed (exit {runResult.ExitCode}) on fixture '{fixturePath}': {TruncateForLint(runResult.Stderr, 500)}")
+                { Code = "plugin_failed" };
+
+            // Validate both add and set props against the target-format
+            // schema. BatchItem.Type is used verbatim as the schema element
+            // name for add; set commands look up the element via the path's
+            // leaf type when available, falling back to lenient validation
+            // when the schema doesn't recognize the inferred element.
             for (int i = 0; i < items.Count; i++)
             {
                 var it = items[i];
                 if (it is null) continue;
-                if (!string.Equals(it.Command, "add", StringComparison.OrdinalIgnoreCase)) continue;
-                var typeName = it.Type ?? "";
+                var verb = (it.Command ?? "").ToLowerInvariant();
+                if (verb != "add" && verb != "set") continue;
+                if (it.Props == null || it.Props.Count == 0) continue;
+
+                // For add: explicit Type. For set: best-effort infer from the
+                // last segment of the path (e.g. "/p[1]/r[2]" → "r"). This
+                // matches main's own ValidateProperties contract.
+                string typeName = verb == "add"
+                    ? (it.Type ?? "")
+                    : InferTypeFromPath(it.Path ?? "");
                 if (string.IsNullOrEmpty(typeName)) continue;
 
-                // Probe schema existence so unknown types are reported
-                // instead of silently passing (ValidateProperties is lenient
-                // on unknown elements).
                 bool schemaExists;
                 try { using var _ = SchemaHelpLoader.LoadSchema(schemaFormat, typeName); schemaExists = true; }
                 catch { schemaExists = false; }
 
                 if (!schemaExists)
                 {
-                    findings.Add(new LintFinding(
-                        Index: i,
-                        Type: typeName,
-                        Element: typeName,
-                        Prop: "<unknown_type>"));
+                    if (verb == "add")
+                        findings.Add(new LintFinding(i, typeName, typeName, "<unknown_type>"));
+                    // For set: silently skip unknown leaf types — the path
+                    // might reference an aliased element the loader doesn't
+                    // expose by name. Don't false-positive plugin authors.
                     continue;
                 }
 
-                if (it.Props == null || it.Props.Count == 0) continue;
                 var unknown = SchemaHelpLoader.ValidateProperties(
-                    schemaFormat, typeName, "add", it.Props);
+                    schemaFormat, typeName, verb, it.Props);
                 foreach (var key in unknown)
-                {
-                    findings.Add(new LintFinding(
-                        Index: i,
-                        Type: typeName,
-                        Element: typeName,
-                        Prop: key));
-                }
+                    findings.Add(new LintFinding(i, typeName, typeName, key));
             }
 
             if (json)
@@ -343,6 +389,18 @@ static partial class CommandBuilder
                     foreach (var f in findings)
                         Console.WriteLine($"  [#{f.Index}] type={f.Type}  element={f.Element}  prop=\"{f.Prop}\"  (not declared in schemas/help/{schemaFormat}/{f.Element}.json)");
                 }
+
+                // Surface manifest-level soft warnings (§4 recommended fields,
+                // unknown kinds, suspect target) so lint covers the same
+                // ground as `plugins list` without users having to run both.
+                var manifestWarnings = resolved.Manifest.Warnings();
+                if (manifestWarnings.Count > 0)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine($"Manifest warnings:");
+                    foreach (var w in manifestWarnings)
+                        Console.WriteLine($"  - {w}");
+                }
             }
 
             return findings.Count == 0 ? 0 : 1;
@@ -353,29 +411,24 @@ static partial class CommandBuilder
 
     private sealed record LintFinding(int Index, string Type, string Element, string Prop);
 
-    private static (int exitCode, string stdout, string stderr) RunPluginDump(string exe, string source)
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = exe,
-            ArgumentList = { "dump", source },
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-        };
-        using var p = new System.Diagnostics.Process { StartInfo = psi };
-        p.Start();
-        var stdoutTask = p.StandardOutput.ReadToEndAsync();
-        var stderrTask = p.StandardError.ReadToEndAsync();
-        p.WaitForExit();
-        return (p.ExitCode, stdoutTask.Result, stderrTask.Result);
-    }
-
     private static string TruncateForLint(string s, int max) =>
         s.Length <= max ? s : s.Substring(0, max) + "...";
+
+    /// <summary>
+    /// Best-effort extraction of the leaf element type from a path like
+    /// <c>"/body/p[1]/r[2]"</c> → <c>"r"</c>. Used by lint to look up the
+    /// schema for set commands, which (unlike add) do not carry an explicit
+    /// Type. Returns empty string for unrecognizable paths.
+    /// </summary>
+    private static string InferTypeFromPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return "";
+        var slash = path.LastIndexOf('/');
+        var leaf = slash < 0 ? path : path.Substring(slash + 1);
+        var bracket = leaf.IndexOf('[');
+        if (bracket > 0) leaf = leaf.Substring(0, bracket);
+        return leaf;
+    }
 
     private static ResolvedPlugin? ResolveByNameOrPath(string target)
     {
