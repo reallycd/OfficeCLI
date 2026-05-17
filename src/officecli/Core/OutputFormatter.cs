@@ -332,6 +332,61 @@ internal static class OutputFormatter
             result.Code = "file_not_found";
             return;
         }
+
+        // Pattern: "Batch input must be a JSON array..."
+        if (msg.StartsWith("Batch input must be"))
+        {
+            result.Code = "invalid_input";
+            return;
+        }
+
+        // Pattern: System.Text.Json error like "'I' is an invalid start of a value..."
+        if (ex is System.Text.Json.JsonException)
+        {
+            result.Code = "invalid_json";
+            return;
+        }
+
+        // Pattern: "No shape found with @id=NNN" / "No <element> found with ..."
+        if (System.Text.RegularExpressions.Regex.IsMatch(msg, @"^No \w+ found with "))
+        {
+            result.Code = "not_found";
+            return;
+        }
+
+        // Pattern: System.Xml.XPath invalid expression — surfaces as
+        // XPathException with message "Expression must evaluate to a node-set."
+        // or similar parser-side text.
+        if (ex is System.Xml.XPath.XPathException
+            || msg.Contains("Expression must evaluate")
+            || msg.Contains("invalid token")
+            || msg.Contains("invalid XPath"))
+        {
+            result.Code = "invalid_xpath";
+            return;
+        }
+
+        // Pattern: file-system IO denial / disk errors (UnauthorizedAccess,
+        // DirectoryNotFound, generic IOException for path-level failures).
+        if (ex is UnauthorizedAccessException || ex is DirectoryNotFoundException
+            || ex is PathTooLongException)
+        {
+            result.Code = "io_error";
+            return;
+        }
+        if (ex is IOException && !(ex is FileNotFoundException))
+        {
+            result.Code = "io_error";
+            return;
+        }
+
+        // Final catch-all: every WrapEnvelopeError consumer expects a 'code'
+        // field for stable error routing. Unhandled exceptions previously
+        // produced { error: "..." } with no code, leaving agent callers to
+        // string-match free-form messages. internal_error mirrors the
+        // 'unknown business failure' bucket used by other envelope code paths.
+        if (string.IsNullOrEmpty(result.Code))
+            result.Code = "internal_error";
     }
 
     public static string FormatView(string view, string content, OutputFormat format)
