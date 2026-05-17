@@ -1112,7 +1112,15 @@ internal static partial class ChartHelper
                         _ => C.AxisPositionValues.Bottom
                     };
                     foreach (var ax in plotArea2.Elements<C.CategoryAxis>())
-                    { ax.RemoveAllChildren<C.AxisPosition>(); ax.AppendChild(new C.AxisPosition { Val = axPos }); }
+                    {
+                        ax.RemoveAllChildren<C.AxisPosition>();
+                        // CONSISTENCY(chart/axis-schema-order): axPos must sit
+                        // immediately after delete in the CT_*Ax prefix; an
+                        // AppendChild lands it at the tail and PowerPoint silently
+                        // honors a stale axPos while OpenXmlValidator rejects the
+                        // file with 'unexpected child element majorTickMark'.
+                        InsertAxisChildInOrder(ax, new C.AxisPosition { Val = axPos });
+                    }
                     break;
                 }
 

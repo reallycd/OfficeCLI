@@ -818,12 +818,19 @@ internal static partial class ChartHelper
         string[] afterTickElements = ["spPr", "txPr", "crossAx", "crosses", "crossesAt",
             "crossBetween", "auto", "lblAlgn", "lblOffset", "tickLblSkip", "tickMarkSkip",
             "noMultiLvlLbl", "majorUnit", "minorUnit", "dispUnits", "extLst"];
+        // Elements that come AFTER axPos in the shared axis prefix
+        // (axId, scaling, delete, axPos, majorGridlines, minorGridlines, title,
+        // numFmt, majorTickMark, minorTickMark, tickLblPos, ...afterTickElements).
+        string[] afterAxPos = ["majorGridlines", "minorGridlines", "title", "numFmt",
+            "majorTickMark", "minorTickMark", "tickLblPos", ..afterTickElements];
 
+        // For axPos: insert before majorGridlines and everything after.
         // For majorTickMark: insert before minorTickMark, tickLblPos, or any afterTickElements
         // For minorTickMark: insert before tickLblPos or any afterTickElements
         // For tickLblPos: insert before spPr, txPr, crossAx, etc.
         string[] insertBeforeNames = child.LocalName switch
         {
+            "axPos" => afterAxPos,
             "majorTickMark" => ["minorTickMark", "tickLblPos", ..afterTickElements],
             "minorTickMark" => ["tickLblPos", ..afterTickElements],
             "tickLblPos" => afterTickElements,
