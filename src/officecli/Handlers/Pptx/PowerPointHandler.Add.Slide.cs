@@ -74,6 +74,8 @@ public partial class PowerPointHandler
                     SetAdvanceTime(newSlidePart.Slide, advTime);
                 if (properties.TryGetValue("advanceclick", out var advClick) || properties.TryGetValue("advanceClick", out advClick))
                     SetAdvanceClick(newSlidePart.Slide, IsTruthy(advClick));
+                if (properties.TryGetValue("hidden", out var hiddenVal) && IsTruthy(hiddenVal))
+                    newSlidePart.Slide.Show = false;
 
                 newSlidePart.Slide.Save();
 
