@@ -515,8 +515,12 @@ public partial class PowerPointHandler
                             "so the alpha value has a color element to attach to.");
                     if (double.TryParse(opacityVal, System.Globalization.CultureInfo.InvariantCulture, out var alphaNum))
                     {
-                        if (alphaNum > 1.0) alphaNum /= 100.0; // treat >1 as percentage (e.g. 30 → 0.30)
-                        // CONSISTENCY(opacity-clamp): same rejection as Set paths.
+                        // CONSISTENCY(opacity-clamp): (1, 2) ambiguous; see
+                        // the shape Set path. Reject before the /100.
+                        if (alphaNum > 1.0 && alphaNum < 2.0)
+                            throw new ArgumentException(
+                                $"Invalid 'opacity' value: '{opacityVal}'. Expected 0.0-1.0 as decimal or 2-100 as percent (values in (1, 2) are ambiguous).");
+                        if (alphaNum > 1.0) alphaNum /= 100.0; // treat >=2 as percentage (e.g. 30 → 0.30)
                         if (alphaNum < 0.0 || alphaNum > 1.0)
                             throw new ArgumentException(
                                 $"Invalid 'opacity' value: '{opacityVal}'. Expected 0.0-1.0 (or 0-100 as percent).");

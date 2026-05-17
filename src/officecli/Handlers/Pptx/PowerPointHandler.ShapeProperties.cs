@@ -793,7 +793,18 @@ public partial class PowerPointHandler
                     if (spPr == null) { unsupported.Add(key); break; }
                     if (!double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var opacityVal) || double.IsNaN(opacityVal) || double.IsInfinity(opacityVal))
                         throw new ArgumentException($"Invalid 'opacity' value: '{value}'. Expected a finite decimal 0.0-1.0 (e.g. 0.5 = 50% opacity).");
-                    if (opacityVal > 1.0) opacityVal /= 100.0; // treat >1 as percentage (e.g. 30 → 0.30)
+                    // The percentage shorthand (>1 treated as 0-100 percent)
+                    // was silently accepting ambiguous values in the (1, 2)
+                    // range: opacity=1.5 → divided to 0.015, written as
+                    // alpha=1500 (≈1.5% visible) instead of being rejected
+                    // outright. 1.5 isn't a meaningful percentage (a user
+                    // typing "1.5" almost certainly meant the decimal form,
+                    // which is out of range) AND isn't a meaningful decimal
+                    // (>1). Treat the gap as a clear input error rather than
+                    // a silent /100 division.
+                    if (opacityVal > 1.0 && opacityVal < 2.0)
+                        throw new ArgumentException($"Invalid 'opacity' value: '{value}'. Expected 0.0-1.0 as decimal or 2-100 as percent (use 0-1 for the decimal form; values in (1, 2) are ambiguous).");
+                    if (opacityVal > 1.0) opacityVal /= 100.0; // treat >=2 as percentage (e.g. 30 → 0.30)
                     // R10: reject out-of-range opacity instead of writing invalid OOXML
                     // (a:alpha/@val must be in [0, 100000]). Negative input was producing
                     // <a:alpha val="-100000"/> which corrupts the file.
@@ -2108,12 +2119,13 @@ public partial class PowerPointHandler
                     if (tcPrO != null)
                     {
                         var opacityVal = ParseHelpers.SafeParseDouble(value, "opacity");
-                        if (opacityVal > 1.0) opacityVal /= 100.0; // treat >1 as percentage (e.g. 50 → 0.50)
-                        // CONSISTENCY(opacity-clamp): mirror the shape opacity path —
-                        // reject out-of-range values instead of silently clamping. A
-                        // raw `opacity=1.5` would divide to 0.015 then quietly write
-                        // alpha=1500 (≈1.5% — almost transparent) on cells whose fill
-                        // already existed.
+                        // CONSISTENCY(opacity-clamp): values in (1, 2) are
+                        // ambiguous — explicit-reject upfront before the /100
+                        // would silently coerce 1.5 to 0.015. See the shape
+                        // opacity path for the full rationale.
+                        if (opacityVal > 1.0 && opacityVal < 2.0)
+                            throw new ArgumentException($"Invalid 'opacity' value: '{value}'. Expected 0.0-1.0 as decimal or 2-100 as percent (values in (1, 2) are ambiguous).");
+                        if (opacityVal > 1.0) opacityVal /= 100.0; // treat >=2 as percentage (e.g. 50 → 0.50)
                         if (opacityVal < 0.0 || opacityVal > 1.0)
                             throw new ArgumentException($"Invalid 'opacity' value: '{value}'. Expected 0.0-1.0 (or 0-100 as percent).");
                         var alphaVal = (int)Math.Round(opacityVal * 100000); // 0.0-1.0 → 0-100000

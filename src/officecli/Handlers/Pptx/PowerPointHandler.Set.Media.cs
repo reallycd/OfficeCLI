@@ -217,10 +217,14 @@ public partial class PowerPointHandler
                     if (!double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var opacityVal)
                         || double.IsNaN(opacityVal) || double.IsInfinity(opacityVal))
                         throw new ArgumentException($"Invalid 'opacity' value: '{value}'. Expected a finite decimal 0.0-1.0.");
+                    // CONSISTENCY(opacity-clamp): mirror the shape/cell path —
+                    // values in (1, 2) are ambiguous (1.5 as decimal is OOR,
+                    // as percentage would silently become 0.015) so reject
+                    // outright instead of /100-dividing into the alpha=1500
+                    // (≈1.5%) trap.
+                    if (opacityVal > 1.0 && opacityVal < 2.0)
+                        throw new ArgumentException($"Invalid 'opacity' value: '{value}'. Expected 0.0-1.0 as decimal or 2-100 as percent (values in (1, 2) are ambiguous).");
                     if (opacityVal > 1.0) opacityVal /= 100.0;
-                    // CONSISTENCY(opacity-clamp): same rule as shape/cell opacity —
-                    // reject out-of-range values so picture blips can't quietly land
-                    // at sub-1% alpha when callers pass an obviously-wrong number.
                     if (opacityVal < 0.0 || opacityVal > 1.0)
                         throw new ArgumentException($"Invalid 'opacity' value: '{value}'. Expected 0.0-1.0 (or 0-100 as percent).");
                     var blip = pic.BlipFill?.GetFirstChild<Drawing.Blip>();
