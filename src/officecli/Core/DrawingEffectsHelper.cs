@@ -25,6 +25,10 @@ internal static class DrawingEffectsHelper
         var blurPt = ParseParam(parts, 1, 4.0, "shadow blur");
         var angleDeg = ParseParam(parts, 2, 45.0, "shadow angle");
         var distPt = ParseParam(parts, 3, 3.0, "shadow distance");
+        // Distinguish "user supplied opacity" from "default 40%": if the color
+        // carries an 8-digit hex alpha (#RRGGBBAA) and no explicit -OPACITY tail,
+        // the alpha-from-color must win over the 40% default so RRGGBBAA round-trips.
+        bool hasExplicitOpacity = parts.Length > 4;
         var opacity = ParseParam(parts, 4, 40.0, "shadow opacity");
 
         var shadow = new Drawing.OuterShadow
@@ -36,7 +40,9 @@ internal static class DrawingEffectsHelper
             RotateWithShape = false
         };
         var clr = colorBuilder(parts[0]);
-        SetAlphaChild(clr, (int)(opacity * 1000));
+        bool colorHasAlpha = clr.GetFirstChild<Drawing.Alpha>() != null;
+        if (hasExplicitOpacity || !colorHasAlpha)
+            SetAlphaChild(clr, (int)(opacity * 1000));
         shadow.AppendChild(clr);
         return shadow;
     }
@@ -51,11 +57,14 @@ internal static class DrawingEffectsHelper
         value = value.Replace(';', '-');
         var parts = value.Split('-');
         var radiusPt = ParseParam(parts, 1, 8.0, "glow radius");
+        bool hasExplicitOpacity = parts.Length > 2;
         var opacity = ParseParam(parts, 2, 75.0, "glow opacity");
 
         var glow = new Drawing.Glow { Radius = (long)(radiusPt * 12700) };
         var clr = colorBuilder(parts[0]);
-        SetAlphaChild(clr, (int)(opacity * 1000));
+        bool colorHasAlpha = clr.GetFirstChild<Drawing.Alpha>() != null;
+        if (hasExplicitOpacity || !colorHasAlpha)
+            SetAlphaChild(clr, (int)(opacity * 1000));
         glow.AppendChild(clr);
         return glow;
     }
