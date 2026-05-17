@@ -719,7 +719,16 @@ internal static partial class ChartHelper
                         if (ser is not (C.LineChartSeries or C.ScatterChartSeries or C.RadarChartSeries))
                             continue;
                         var marker = ser.GetFirstChild<C.Marker>();
-                        if (marker == null) { marker = new C.Marker(); ser.AppendChild(marker); }
+                        if (marker == null)
+                        {
+                            // CONSISTENCY(chart/series-schema-order): marker must
+                            // precede cat/val/xVal/yVal in CT_LineSer/CT_ScatterSer/
+                            // CT_RadarSer. AppendChild lands marker at the tail,
+                            // which PowerPoint silently renders but OpenXmlValidator
+                            // rejects ('unexpected child element marker').
+                            marker = new C.Marker();
+                            InsertSeriesChildInOrder(ser, marker);
+                        }
                         marker.RemoveAllChildren<C.Size>();
                         marker.AppendChild(new C.Size { Val = mSize });
                     }

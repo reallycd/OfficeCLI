@@ -894,6 +894,10 @@ internal static partial class ChartHelper
             "invertIfNegative" => ["pictureOptions", "dPt", "dLbls", "trendline", "errBars", "cat", "val", "xVal", "yVal", "bubbleSize", "bubble3D", "shape", "smooth", "extLst"],
             // CT_PieSer / CT_DoughnutSer: idx, order, tx?, spPr?, explosion?, dPt*, dLbls?, cat?, val?
             "explosion" => ["dPt", "dLbls", "cat", "val", "extLst"],
+            // CT_LineSer / CT_ScatterSer / CT_RadarSer: ..., spPr?, marker?, dPt*,
+            // dLbls?, trendline?, errBars?, cat/xVal?, val/yVal?, smooth?, extLst?.
+            // marker must precede every data-bearing tail element.
+            "marker" => ["dPt", "dLbls", "trendline", "errBars", "cat", "val", "xVal", "yVal", "bubbleSize", "smooth", "extLst"],
             "dLbls" => ["trendline", "errBars", "cat", "val", "xVal", "yVal", "bubbleSize", "bubble3D", "smooth", "extLst"],
             "trendline" => ["errBars", "cat", "val", "xVal", "yVal", "bubbleSize", "bubble3D", "smooth", "extLst"],
             "errBars" => ["cat", "val", "xVal", "yVal", "bubbleSize", "bubble3D", "smooth", "extLst"],
