@@ -791,7 +791,7 @@ public partial class PowerPointHandler
                     var inner = ngCurrent.Elements<Shape>().ToList();
                     if (ngLeafIdx < 1 || ngLeafIdx > inner.Count)
                         throw new ArgumentException($"Shape {ngLeafIdx} not found in group {ngPathPrefix} (total: {inner.Count})");
-                    var node = ShapeToNode(inner[ngLeafIdx - 1], ngSlideIdx, ngLeafIdx, depth, ngSlidePart);
+                    var node = ShapeToNode(inner[ngLeafIdx - 1], ngSlideIdx, ngLeafIdx, depth, ngSlidePart, ngPathPrefix);
                     node.Path = $"{ngPathPrefix}/{BuildElementPathSegment("shape", inner[ngLeafIdx - 1], ngLeafIdx)}";
                     return node;
                 }
@@ -801,7 +801,7 @@ public partial class PowerPointHandler
                     var inner = ngCurrent.Elements<Picture>().ToList();
                     if (ngLeafIdx < 1 || ngLeafIdx > inner.Count)
                         throw new ArgumentException($"Picture {ngLeafIdx} not found in group {ngPathPrefix} (total: {inner.Count})");
-                    var node = PictureToNode(inner[ngLeafIdx - 1], ngSlideIdx, ngLeafIdx, ngSlidePart);
+                    var node = PictureToNode(inner[ngLeafIdx - 1], ngSlideIdx, ngLeafIdx, ngSlidePart, ngPathPrefix);
                     node.Path = $"{ngPathPrefix}/{BuildElementPathSegment("picture", inner[ngLeafIdx - 1], ngLeafIdx)}";
                     return node;
                 }
@@ -854,8 +854,9 @@ public partial class PowerPointHandler
             var giInnerShapes = giGroups[giGrpIdx - 1].Elements<Shape>().ToList();
             if (giShapeIdx < 1 || giShapeIdx > giInnerShapes.Count)
                 throw new ArgumentException($"Shape {giShapeIdx} not found in group {giGrpIdx} (total: {giInnerShapes.Count})");
-            var giNode = ShapeToNode(giInnerShapes[giShapeIdx - 1], giSlideIdx, giShapeIdx, depth, giSlidePart);
-            giNode.Path = $"/slide[{giSlideIdx}]/group[{giGrpIdx}]/{BuildElementPathSegment("shape", giInnerShapes[giShapeIdx - 1], giShapeIdx)}";
+            var giParentPrefix = $"/slide[{giSlideIdx}]/group[{giGrpIdx}]";
+            var giNode = ShapeToNode(giInnerShapes[giShapeIdx - 1], giSlideIdx, giShapeIdx, depth, giSlidePart, giParentPrefix);
+            giNode.Path = $"{giParentPrefix}/{BuildElementPathSegment("shape", giInnerShapes[giShapeIdx - 1], giShapeIdx)}";
             return giNode;
         }
 
