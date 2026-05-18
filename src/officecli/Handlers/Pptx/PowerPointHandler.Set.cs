@@ -196,8 +196,12 @@ public partial class PowerPointHandler
         // /slidemaster[N], /slidemaster[N]/slidelayout[M], /slidelayout[N]
         // Handles background and name props. Falls through for shape-nested paths.
         {
-            var masterBgMatch = Regex.Match(path, @"^/slidemaster\[(\d+)\](?:/slidelayout\[(\d+)\])?$", RegexOptions.IgnoreCase);
-            var layoutBgMatch = Regex.Match(path, @"^/slidelayout\[(\d+)\]$", RegexOptions.IgnoreCase);
+            // CONSISTENCY(master-layout-path-aliases): accept the short forms
+            // `/master[N]` and `/layout[N]` documented in Handlers/Pptx/CLAUDE.md
+            // alongside the long forms `/slidemaster[N]` and `/slidelayout[N]`.
+            // Long form is what Get/Add emit; short form is accepted-only on input.
+            var masterBgMatch = Regex.Match(path, @"^/(?:slidemaster|master)\[(\d+)\](?:/(?:slidelayout|layout)\[(\d+)\])?$", RegexOptions.IgnoreCase);
+            var layoutBgMatch = Regex.Match(path, @"^/(?:slidelayout|layout)\[(\d+)\]$", RegexOptions.IgnoreCase);
             if (masterBgMatch.Success || layoutBgMatch.Success)
                 return SetMasterOrLayoutBackgroundByPath(masterBgMatch, layoutBgMatch, properties);
         }
@@ -210,12 +214,16 @@ public partial class PowerPointHandler
         //   /slidemaster[N]/shape[K]
         //   /slidelayout[N]/shape[K]                        — flat top-level layout numbering
         //   /slidemaster[N]/slidelayout[L]/shape[K]         — nested form
+        // CONSISTENCY(master-layout-path-aliases): accept short forms /master[N]
+        // and /layout[N] alongside the long /slidemaster[N] and /slidelayout[N].
+        // Group[1] captures kind (normalized to long form below by SetMasterShapeByPath
+        // via case-insensitive comparison on "slidemaster" prefix).
         var masterShapeMatch = Regex.Match(path,
-            @"^/(slidemaster|slidelayout)\[(\d+)\](?:/(\w+)\[(\d+)\])?$",
+            @"^/(slidemaster|master|slidelayout|layout)\[(\d+)\](?:/(\w+)\[(\d+)\])?$",
             RegexOptions.IgnoreCase);
         if (masterShapeMatch.Success) return SetMasterShapeByPath(masterShapeMatch, properties);
         var nestedMasterShapeMatch = Regex.Match(path,
-            @"^/slidemaster\[(\d+)\]/slidelayout\[(\d+)\](?:/(\w+)\[(\d+)\])?$",
+            @"^/(?:slidemaster|master)\[(\d+)\]/(?:slidelayout|layout)\[(\d+)\](?:/(\w+)\[(\d+)\])?$",
             RegexOptions.IgnoreCase);
         if (nestedMasterShapeMatch.Success) return SetNestedMasterLayoutShapeByPath(nestedMasterShapeMatch, properties);
 

@@ -82,7 +82,11 @@ public partial class PowerPointHandler
 
         OpenXmlPart ownerPart;
         OpenXmlPartRootElement rootEl;
-        if (partType.Equals("slidemaster", StringComparison.OrdinalIgnoreCase))
+        // CONSISTENCY(master-layout-path-aliases): accept both `slidemaster` and
+        // short `master`; same for `slidelayout` / `layout`.
+        var isMaster = partType.Equals("slidemaster", StringComparison.OrdinalIgnoreCase)
+                    || partType.Equals("master", StringComparison.OrdinalIgnoreCase);
+        if (isMaster)
         {
             var masters = presentationPart.SlideMasterParts.ToList();
             if (partIdx < 1 || partIdx > masters.Count)
