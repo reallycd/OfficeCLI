@@ -1631,10 +1631,19 @@ public partial class WordHandler
             case "kern":
                 // BUG-R7-06: <w:kern w:val="N"/> (kerning threshold in
                 // half-points). Get exposes it; Add/Set silently dropped.
+                // Docx kern unit is half-points (raw uint per ST_HpsMeasure);
+                // unlike pptx kern (100ths of pt) we deliberately do NOT
+                // accept a "pt" suffix here — pass an integer half-points
+                // value. An empty value clears the element; an invalid
+                // value (e.g. "14pt", "abc") returns false so the dispatch
+                // surfaces invalid_value rather than silently no-op'ing.
                 props.RemoveAllChildren<Kern>();
-                if (!string.IsNullOrEmpty(value)
-                    && uint.TryParse(value, out var kernVal))
-                    InsertRunPropInSchemaOrder(props, new Kern { Val = kernVal });
+                if (string.IsNullOrEmpty(value))
+                    return true;
+                if (!uint.TryParse(value, out var kernVal))
+                    throw new ArgumentException(
+                        $"Invalid kern value '{value}'. Pass an integer in half-points (e.g. 28 = 14pt threshold); 'pt' suffix is not accepted on docx kern.");
+                InsertRunPropInSchemaOrder(props, new Kern { Val = kernVal });
                 return true;
             case "position":
                 // <w:position w:val="N"/> — vertical raise/lower in
