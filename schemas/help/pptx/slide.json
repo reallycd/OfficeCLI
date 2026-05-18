@@ -17,7 +17,7 @@
   "properties": {
     "layout": {
       "type": "string",
-      "description": "slide layout name (e.g. 'Title Slide', 'Title and Content'). Resolved against the presentation's slide masters.",
+      "description": "slide layout name (e.g. 'Title Slide', 'Title and Content'). Resolved against the presentation's slide masters. The `layout` property is metadata only — placeholder slots defined in the layout are NOT auto-materialized on the slide. To populate slots: pass `--prop title=…` to auto-emit a title placeholder shape (phType=title); pass `--prop text=…` to auto-emit a body placeholder shape (phType=body); or add placeholders explicitly with `--type placeholder --prop phType=<role>`.",
       "add": true, "set": true, "get": true,
       "examples": ["--prop layout=\"Title Slide\""],
       "readback": "layout name string",
@@ -25,7 +25,7 @@
     },
     "title": {
       "type": "string",
-      "description": "title text. Creates a Title shape at Add time. To modify or read the title text after creation, target the title shape directly (e.g. /slide[N]/shape[@phType=title]).",
+      "description": "title text. Creates a Title shape at Add time, carrying <p:ph type=\"title\"/>. To modify or read the title text after creation, target the title shape directly (e.g. /slide[N]/shape[@phType=title]).",
       "add": true, "set": false, "get": false,
       "examples": ["--prop title=\"Introduction\""],
       "readback": "not surfaced at slide level; descend into the title shape",
@@ -33,7 +33,7 @@
     },
     "text": {
       "type": "string",
-      "description": "content body text. Creates a Content text shape at Add time.",
+      "description": "content body text. Creates a Content text shape at Add time, carrying <p:ph type=\"body\" idx=\"1\"/> so it binds to the layout's body slot.",
       "add": true, "set": false, "get": false,
       "examples": ["--prop text=\"Body text\""],
       "readback": "not surfaced at slide level",
