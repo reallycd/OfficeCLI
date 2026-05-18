@@ -80,15 +80,10 @@ public partial class PowerPointHandler
     private static readonly System.Collections.Generic.HashSet<string> DrawingCapsEnum =
         new(System.StringComparer.Ordinal) { "none", "small", "all" };
 
-    // BCP-47 shape per RFC 5646 §2.1 (subset): primary subtag 2-3 ALPHA (or
-    // 4-8 ALPHA for reserved/registered), then hyphen-separated subtags each
-    // 1-8 alphanumerics, total length <= 35. Also accepts `x-…` private-use.
-    // R18-fuzz-3: tightened — old shape `^[A-Za-z][A-Za-z0-9-]*$` accepted
-    // hyphen-less garbage like "INVALID" and 1000-char strings.
-    private const int Bcp47MaxLength = 35;
-    private static readonly System.Text.RegularExpressions.Regex Bcp47Shape =
-        new(@"^(?:[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*|[A-Za-z]{4,8}(?:-[A-Za-z0-9]{1,8})+|x(?:-[A-Za-z0-9]{1,8})+)$",
-            System.Text.RegularExpressions.RegexOptions.Compiled);
+    // CONSISTENCY(bcp47-validation): shape regex lives in Core/Bcp47LanguageTag.cs
+    // so docx and pptx share one validator. `lang` and `altLang` are the only
+    // BCP-47-shaped attrs in rPr; the rest of the long-tail string attrs
+    // (kumimoji, bmk, …) stay free-form.
 
     private static bool IsValidDrawingRunAttrValue(string key, string value)
     {
@@ -98,7 +93,7 @@ public partial class PowerPointHandler
         if (key == "u") return DrawingUnderlineEnum.Contains(value);
         if (key == "strike") return DrawingStrikeEnum.Contains(value);
         if (key == "cap") return DrawingCapsEnum.Contains(value);
-        if (key is "lang" or "altLang") return string.IsNullOrEmpty(value) || (value.Length <= Bcp47MaxLength && Bcp47Shape.IsMatch(value));
+        if (key is "lang" or "altLang") return OfficeCli.Core.Bcp47LanguageTag.IsValid(value);
         return true; // remaining string attrs (kumimoji handled above; bmk arbitrary string)
     }
 
@@ -202,6 +197,7 @@ public partial class PowerPointHandler
                 }
                 case "text":
                 {
+                    XmlTextValidator.ValidateOrThrow(value, "text");
                     // CONSISTENCY(escape-sequences): \n splits paragraphs, \t
                     // becomes <a:tab/> paragraph children between text runs.
                     var resolved = value.Replace("\\n", "\n").Replace("\\t", "\t");
@@ -209,7 +205,7 @@ public partial class PowerPointHandler
                     if (runs.Count == 1 && textLines.Length == 1 && !textLines[0].Contains('\t'))
                     {
                         // Single run, single line, no tabs: just replace text
-                        runs[0].Text = new Drawing.Text { Text = textLines[0] };
+                        runs[0].Text = BuildDrawingText(textLines[0]);
                     }
                     else
                     {
@@ -234,7 +230,7 @@ public partial class PowerPointHandler
                                     var r = new Drawing.Run();
                                     if (runProps != null)
                                         r.RunProperties = runProps.CloneNode(true) as Drawing.RunProperties;
-                                    r.Text = new Drawing.Text { Text = seg };
+                                    r.Text = BuildDrawingText(seg);
                                     return r;
                                 });
                                 textBody.Append(newPara);
@@ -1403,6 +1399,7 @@ public partial class PowerPointHandler
             {
                 case "text":
                 {
+                    XmlTextValidator.ValidateOrThrow(value, "text");
                     var textBody = cell.TextBody;
                     // CONSISTENCY(escape-sequences): \n -> paragraph split,
                     // \t -> <a:tab/> between runs.
