@@ -18,9 +18,14 @@ namespace OfficeCli.Core;
 /// </summary>
 internal static class TemplateMerger
 {
-    // Allow optional inner whitespace ({{ name }}) and hyphenated keys ({{user-id}}).
-    // Captured key is trimmed via the trim group: outer \s* discarded, group 1 keeps the raw key.
-    private static readonly Regex PlaceholderPattern = new(@"\{\{\s*(\w[\w.\-]*)\s*\}\}", RegexOptions.Compiled);
+    // Allow optional outer whitespace ({{ name }}), hyphenated keys
+    // ({{user-id}}), and inner spaces ({{ first name }}). Outer \s* is
+    // stripped; inner spaces are preserved as part of the key. The captured
+    // group is also Trim()'d at the use site so a placeholder like
+    // "{{  name  }}" resolves the same as "{{name}}".
+    // Match is non-greedy on the inner segment so trailing whitespace
+    // followed by }} is not absorbed into the key.
+    private static readonly Regex PlaceholderPattern = new(@"\{\{\s*(\w[\w.\- ]*?)\s*\}\}", RegexOptions.Compiled);
 
     /// <summary>
     /// Result of a merge operation.
