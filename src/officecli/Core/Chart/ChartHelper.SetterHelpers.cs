@@ -475,9 +475,30 @@ internal static partial class ChartHelper
                     }
                     else
                     {
-                        var nums = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                            .Select(s => double.TryParse(s, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0.0)
-                            .ToArray();
+                        // Mirror the Add path's ParseSeriesValues guard. The
+                        // old TryParse ? d : 0.0 fallback silently coerced
+                        // NaN / Infinity / unparsable tokens into 0.0, and
+                        // worse, NaN / Infinity that *did* parse went straight
+                        // into <c:v> as text — OOXML <c:v> requires a finite
+                        // double. Reject non-finite values and empty tokens
+                        // with invalid_value so set chart values=NaN behaves
+                        // the same as add chart values=NaN.
+                        var tokens = value.Split(',');
+                        var nums = new double[tokens.Length];
+                        for (int ti = 0; ti < tokens.Length; ti++)
+                        {
+                            var trimmed = tokens[ti].Trim();
+                            if (string.IsNullOrEmpty(trimmed))
+                                throw new CliException(
+                                    $"values: empty token at position {ti + 1}. Expected comma-separated finite numbers (e.g. '1,2,3').")
+                                    { Code = "invalid_value" };
+                            if (!double.TryParse(trimmed, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d)
+                                || double.IsNaN(d) || double.IsInfinity(d))
+                                throw new CliException(
+                                    $"values: invalid number '{trimmed}'. Expected comma-separated finite numbers (e.g. '1,2,3').")
+                                    { Code = "invalid_value" };
+                            nums[ti] = d;
+                        }
                         var builtVals = BuildValues(nums);
                         foreach (var child in builtVals.ChildElements.ToList())
                             valEl.AppendChild(child.CloneNode(true));
