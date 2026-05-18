@@ -1626,12 +1626,21 @@ public partial class PowerPointHandler
         }
     }
 
-    private static Shape CreateTextShape(uint id, string name, string text, bool isTitle, bool isTextBox = false)
+    private static Shape CreateTextShape(uint id, string name, string text, bool isTitle, bool isTextBox = false,
+                                         PlaceholderValues? placeholderType = null, uint? placeholderIndex = null)
     {
         var shape = new Shape();
         var appNvPr = new ApplicationNonVisualDrawingProperties();
         if (isTitle)
+        {
             appNvPr.AppendChild(new PlaceholderShape { Type = PlaceholderValues.Title });
+        }
+        else if (placeholderType.HasValue)
+        {
+            var ph = new PlaceholderShape { Type = placeholderType.Value };
+            if (placeholderIndex.HasValue) ph.Index = placeholderIndex.Value;
+            appNvPr.AppendChild(ph);
+        }
         // OOXML `<p:cNvSpPr txBox="1"/>` is the only on-disk marker that
         // distinguishes a dedicated text container from a geometry shape that
         // happens to carry text. Without it, every shape with a prstGeom and
