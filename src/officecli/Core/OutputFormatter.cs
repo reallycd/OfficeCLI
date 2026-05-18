@@ -306,6 +306,15 @@ internal static class OutputFormatter
             return;
         }
 
+        // Pattern: "Sheet not found: <name>" — xlsx-specific not_found surface.
+        // Handlers throw this when a worksheet name doesn't resolve; classify
+        // alongside other missing-element errors instead of internal_error.
+        if (msg.StartsWith("Sheet not found:", StringComparison.Ordinal))
+        {
+            result.Code = "not_found";
+            return;
+        }
+
         // Pattern: "Unknown part: X. Available: ..."
         var unknownPartMatch = System.Text.RegularExpressions.Regex.Match(msg, @"Unknown part: (.+?)\. Available: (.+)");
         if (unknownPartMatch.Success)
