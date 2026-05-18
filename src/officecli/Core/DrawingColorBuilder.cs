@@ -70,12 +70,28 @@ internal static class DrawingColorBuilder
         var result = new List<(string Name, int Val)>();
         foreach (var token in chain.Split('+', StringSplitOptions.RemoveEmptyEntries))
         {
+            // OOXML ST_PositivePercentage / ST_PositiveFixedPercentage forbids
+            // negative values — every color transform child a:lumMod / a:lumOff
+            // / a:shade / a:tint / a:satMod / a:satOff / a:hueMod / a:hueOff /
+            // a:alpha takes a non-negative percent. Reject "lumMod-50" etc.
+            // explicitly instead of letting the digit-scan land on the digit
+            // after the sign and silently drop the token as "unknown transform".
+            if (token.Contains('-'))
+                throw new ArgumentException(
+                    $"Invalid color transform '{token}': negative percentages are not allowed (OOXML ST_PositivePercentage).");
             int i = 0;
             while (i < token.Length && !char.IsDigit(token[i])) i++;
             if (i == 0 || i == token.Length) continue;
             var name = token.Substring(0, i);
-            if (!KnownTransforms.Contains(name)) continue;
-            if (!int.TryParse(token.Substring(i), out var pct)) continue;
+            if (!KnownTransforms.Contains(name))
+                throw new ArgumentException(
+                    $"Unknown color transform '{name}'. Valid: lumMod, lumOff, shade, tint, satMod, satOff, hueMod, hueOff, alpha.");
+            if (!int.TryParse(token.Substring(i), out var pct))
+                throw new ArgumentException(
+                    $"Invalid color transform '{token}': percentage must be a non-negative integer 0-100.");
+            if (pct < 0 || pct > 100)
+                throw new ArgumentException(
+                    $"Invalid color transform '{token}': percentage {pct} out of range 0-100.");
             // Canonicalize: lumMod → lumMod (lowercase first letter? OOXML uses
             // camelCase: lumMod, lumOff, satMod, satOff, hueMod, hueOff,
             // shade, tint). KnownTransforms matches case-insensitively; we
