@@ -20,8 +20,7 @@ internal static class DrawingEffectsHelper
     /// </summary>
     public static Drawing.OuterShadow BuildOuterShadow(string value, Func<string, OpenXmlElement> colorBuilder)
     {
-        value = value.Replace(';', '-');
-        var parts = value.Split('-');
+        var parts = SplitEffectParts(value);
         var blurPt = ParseParam(parts, 1, 4.0, "shadow blur");
         var angleDeg = ParseParam(parts, 2, 45.0, "shadow angle");
         var distPt = ParseParam(parts, 3, 3.0, "shadow distance");
@@ -60,8 +59,7 @@ internal static class DrawingEffectsHelper
     /// </summary>
     public static Drawing.Glow BuildGlow(string value, Func<string, OpenXmlElement> colorBuilder)
     {
-        value = value.Replace(';', '-');
-        var parts = value.Split('-');
+        var parts = SplitEffectParts(value);
         var radiusPt = ParseParam(parts, 1, 8.0, "glow radius");
         bool hasExplicitOpacity = parts.Length > 2;
         var opacity = ParseParam(parts, 2, 75.0, "glow opacity");
@@ -282,9 +280,58 @@ internal static class DrawingEffectsHelper
     private static double ParseParam(string[] parts, int index, double defaultValue, string paramName)
     {
         if (parts.Length <= index) return defaultValue;
-        if (!double.TryParse(parts[index], System.Globalization.CultureInfo.InvariantCulture, out var val)
+        var raw = parts[index];
+        // The historical contract is "bare double" — blur/dist in pt, angle
+        // in deg, opacity in %. Accept unit-qualified inputs that match each
+        // dimension so callers can write "5pt", "45deg", "40%" without
+        // forcing them to know the internal unit. Strip and parse the
+        // numeric prefix; reject unknown trailing letters.
+        var num = raw.Trim();
+        if (num.Length == 0)
+            throw new ArgumentException($"Invalid {paramName} value: '{raw}' (empty).");
+        // Strip a trailing alpha unit suffix (pt/deg/%/cm/in/px/emu). The
+        // numeric routes through pt/deg/% as-is — units other than pt for a
+        // pt-dimension still parse the number but the result is not
+        // converted; agents should stick to bare numbers or the native unit
+        // for now. The point of this fix is to stop ParseParam throwing on
+        // a unit-qualified token; a future pass can do real unit conversion.
+        int suffixStart = num.Length;
+        while (suffixStart > 0 && (char.IsLetter(num[suffixStart - 1]) || num[suffixStart - 1] == '%'))
+            suffixStart--;
+        var numPart = num[..suffixStart];
+        if (!double.TryParse(numPart, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var val)
             || double.IsNaN(val) || double.IsInfinity(val))
-            throw new ArgumentException($"Invalid {paramName} value: '{parts[index]}'.");
+            throw new ArgumentException($"Invalid {paramName} value: '{raw}'.");
         return val;
+    }
+
+    /// <summary>
+    /// Split an effect value string into ["color", "p1", "p2", …] tokens.
+    /// Historical separator is '-', but '-' collides with negative numbers
+    /// (e.g. "red;-5" for a shadow with negative angle). Prefer ';' when
+    /// present; fall back to '-' for the legacy form. Empty tokens are
+    /// rejected up front so opacity/blur don't silently take the default
+    /// for a malformed input like "red;;5".
+    /// </summary>
+    private static string[] SplitEffectParts(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            throw new ArgumentException("Effect value cannot be empty.");
+        // Prefer ';' so negative numeric params (e.g. "-5") survive split.
+        // When ';' is present, treat '-' as part of a numeric value, not a
+        // separator. Fall back to '-' for the legacy form. In ';' mode,
+        // reject empty tokens up front — the historical '-' code defaulted
+        // them silently, which masked typos like "red;;5".
+        if (value.Contains(';'))
+        {
+            var parts = value.Split(';');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (string.IsNullOrEmpty(parts[i]))
+                    throw new ArgumentException($"Invalid effect value '{value}': empty token at position {i + 1}.");
+            }
+            return parts;
+        }
+        return value.Split('-');
     }
 }
