@@ -28,7 +28,7 @@
       "type": "string",
       "description": "start-point shape reference (Add/Set only). Accepts /slide[N]/shape[M] (positional) or /slide[N]/shape[@id=M] (as returned by 'query shape'). Reverse path resolution is not implemented.",
       "add": true, "set": true, "get": false,
-      "examples": ["--prop from=/slide[1]/shape[1]", "--prop from=/slide[1]/shape[@id=10001]"],
+      "examples": ["--prop from='/slide[1]/shape[1]'", "--prop from='/slide[1]/shape[@id=10001]'"],
       "readback": "see startShape/endShape get-only properties for resolved endpoint shape ids",
       "enforcement": "report"
     },
@@ -36,7 +36,7 @@
       "type": "string",
       "description": "end-point shape reference (Add/Set only). Accepts /slide[N]/shape[M] (positional) or /slide[N]/shape[@id=M] (as returned by 'query shape'). Reverse path resolution is not implemented.",
       "add": true, "set": true, "get": false,
-      "examples": ["--prop to=/slide[1]/shape[2]", "--prop to=/slide[1]/shape[@id=10002]"],
+      "examples": ["--prop to='/slide[1]/shape[2]'", "--prop to='/slide[1]/shape[@id=10002]'"],
       "readback": "see startShape/endShape get-only properties for resolved endpoint shape ids",
       "enforcement": "report"
     },

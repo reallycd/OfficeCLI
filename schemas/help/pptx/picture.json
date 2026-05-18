@@ -105,7 +105,7 @@
       "get": true,
       "examples": [
         "--prop link=https://example.com",
-        "--prop link=slide[3]",
+        "--prop link='slide[3]'",
         "--prop link=nextslide"
       ],
       "readback": "URL, slide[N], or named action",

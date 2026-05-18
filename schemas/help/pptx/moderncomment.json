@@ -73,7 +73,7 @@
       "add": true,
       "set": false,
       "get": true,
-      "examples": ["--prop parent=/slide[1]/modernComment[1]"],
+      "examples": ["--prop parent='/slide[1]/modernComment[1]'"],
       "readback": "parent comment path, or null for top-level",
       "enforcement": "report"
     },
