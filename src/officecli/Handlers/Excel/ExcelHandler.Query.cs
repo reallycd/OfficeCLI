@@ -66,6 +66,49 @@ public partial class ExcelHandler
             return node;
         }
 
+        // Bare /namedrange (no index): list all defined names as children
+        // instead of falling through to the sheet-name lookup, where the
+        // literal word "namedrange" was treated as a missing sheet and
+        // produced a confusing "sheet not found" error.
+        var bareNamedRange = Regex.Match(path.TrimStart('/'), @"^namedrange$", RegexOptions.IgnoreCase);
+        if (bareNamedRange.Success)
+        {
+            var listNode = new DocumentNode { Path = "/namedrange", Type = "namedrange_list" };
+            var workbook = GetWorkbook();
+            var allDefs = workbook.GetFirstChild<DefinedNames>()?.Elements<DefinedName>().ToList()
+                ?? new List<DefinedName>();
+            for (int i = 0; i < allDefs.Count; i++)
+            {
+                var dn = allDefs[i];
+                var nrNode = new DocumentNode
+                {
+                    Path = $"/namedrange[{i + 1}]",
+                    Type = "namedrange",
+                    Text = dn.InnerText ?? dn.Name?.Value ?? "",
+                    Preview = dn.InnerText
+                };
+                nrNode.Format["name"] = dn.Name?.Value ?? "";
+                nrNode.Format["ref"] = dn.InnerText ?? "";
+                if (dn.LocalSheetId?.HasValue == true)
+                {
+                    var sheets = workbook.GetFirstChild<Sheets>()?.Elements<Sheet>().ToList();
+                    if (sheets != null && (int)dn.LocalSheetId.Value < sheets.Count)
+                        nrNode.Format["scope"] = sheets[(int)dn.LocalSheetId.Value].Name?.Value ?? "";
+                }
+                else
+                {
+                    nrNode.Format["scope"] = "workbook";
+                }
+                if (!string.IsNullOrEmpty(dn.Comment?.Value))
+                    nrNode.Format["comment"] = dn.Comment.Value;
+                if (dn.Function?.Value == true)
+                    nrNode.Format["volatile"] = true;
+                listNode.Children.Add(nrNode);
+            }
+            listNode.ChildCount = listNode.Children.Count;
+            return listNode;
+        }
+
         // Handle /namedrange[N] or /namedrange[Name] or /namedrange[@name=X]
         var namedRangeMatch = Regex.Match(path.TrimStart('/'), @"^namedrange\[(.+?)\]$", RegexOptions.IgnoreCase);
         if (namedRangeMatch.Success)
