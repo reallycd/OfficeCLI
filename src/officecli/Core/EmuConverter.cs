@@ -21,19 +21,31 @@ internal static class EmuConverter
     public static long ParseEmu(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
-            throw new ArgumentException("EMU value cannot be null or empty.");
+            throw new ArgumentException("Invalid length value: input is null or empty.");
 
         value = value.Trim();
 
         long result;
 
-        if (value.EndsWith("cm", StringComparison.OrdinalIgnoreCase))
+        // mm = cm/10. CSS-natural sibling of cm; AI assistants reach for mm
+        // before pt/in. Test in longer-suffix order so "mm" is matched before
+        // any bare-number fallback. ("Q" = mm/4 in CSS, also accepted.)
+        if (value.EndsWith("mm", StringComparison.OrdinalIgnoreCase))
+        {
+            result = ParseWithUnit(value, 2, 36000.0, "mm");
+        }
+        else if (value.EndsWith("cm", StringComparison.OrdinalIgnoreCase))
         {
             result = ParseWithUnit(value, 2, 360000.0, "cm");
         }
         else if (value.EndsWith("in", StringComparison.OrdinalIgnoreCase))
         {
             result = ParseWithUnit(value, 2, 914400.0, "in");
+        }
+        else if (value.EndsWith("pc", StringComparison.OrdinalIgnoreCase))
+        {
+            // pica = 12pt (CSS / typographic standard).
+            result = ParseWithUnit(value, 2, 12.0 * 12700.0, "pc");
         }
         else if (value.EndsWith("pt", StringComparison.OrdinalIgnoreCase))
         {
@@ -43,24 +55,55 @@ internal static class EmuConverter
         {
             result = ParseWithUnit(value, 2, 9525.0, "px");
         }
+        else if (value.EndsWith("Q", StringComparison.OrdinalIgnoreCase))
+        {
+            // CSS quarter-millimeter (Q = mm/4). Rare but harmless to support.
+            result = ParseWithUnit(value, 1, 9000.0, "Q");
+        }
         else if (value.EndsWith("emu", StringComparison.OrdinalIgnoreCase))
         {
             // Explicit emu suffix — symmetric with FormatEmu's tiny-value fallback.
             var numberPart = value[..^3];
             if (string.IsNullOrWhiteSpace(numberPart))
-                throw new ArgumentException($"Missing numeric value before 'emu' unit in '{value}'.");
+                throw new ArgumentException($"Invalid length value '{value}': missing numeric value before 'emu' unit.");
             if (!long.TryParse(numberPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out result))
-                throw new ArgumentException($"Invalid integer value '{numberPart}' before 'emu' unit in '{value}'.");
+                throw new ArgumentException($"Invalid length value '{value}': '{numberPart}' before 'emu' unit is not an integer.");
         }
         else if (HasKnownUnitSuffix(value, out var unit))
         {
-            throw new ArgumentException($"Unsupported unit '{unit}' in dimension value '{value}'. Supported units: cm, in, pt, px, emu (or raw EMU integer).");
+            // 'em' / 'ex' / 'rem' depend on font context that ParseEmu does not have.
+            throw new ArgumentException(
+                $"Invalid length value '{value}': unit '{unit}' is not supported (requires font context). " +
+                $"Supported units: cm, mm, in, pt, pc, px, Q, emu (or raw EMU integer).");
         }
         else
         {
-            // Raw EMU integer
-            if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out result))
-                throw new ArgumentException($"Invalid EMU value '{value}'. Expected a number with optional unit suffix (cm, in, pt, px, emu).");
+            // Raw EMU value: integer form preferred. Bare scientific notation
+            // ("1e6", "1.5e2") is also accepted for parity with ParseFontSize
+            // — but a plain decimal like "0.0001" is NOT (fractional EMU is
+            // meaningless; users wanting sub-EMU sizes have unit suffixes).
+            // Reject NaN/Infinity early so downstream emit never produces a
+            // "NaNpt" / "Infinitypt" string.
+            if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out result))
+            {
+                // already parsed
+            }
+            else if ((value.Contains('e') || value.Contains('E'))
+                     && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
+            {
+                if (double.IsNaN(d) || double.IsInfinity(d))
+                    throw new ArgumentException(
+                        $"Invalid length value '{value}': must be a finite number.");
+                if (d > long.MaxValue || d < long.MinValue)
+                    throw new ArgumentException(
+                        $"Invalid length value '{value}': exceeds the maximum EMU range.");
+                result = (long)Math.Round(d);
+            }
+            else
+            {
+                throw new ArgumentException(
+                    $"Invalid length value '{value}': expected a number with optional unit suffix (cm, mm, in, pt, pc, px, Q, emu).");
+            }
         }
 
         return result;
@@ -87,13 +130,18 @@ internal static class EmuConverter
     public static int ParseLineWidth(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
-            throw new ArgumentException("Line width value cannot be null or empty.");
+            throw new ArgumentException("Invalid line width value: input is null or empty.");
 
         var trimmed = value.Trim();
-        // If bare integer/decimal with no unit suffix, treat as points
-        if (double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
+        // If bare integer/decimal with no unit suffix, treat as points.
+        // Reject NaN/Infinity here so we never construct a "NaNpt" / "Infinitypt"
+        // string that would slip past ParseEmu's suffix branch with a misleading
+        // error tail.
+        if (double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var bare)
             && !HasKnownUnitSuffix(trimmed, out _))
         {
+            if (double.IsNaN(bare) || double.IsInfinity(bare))
+                throw new ArgumentException($"Invalid line width value '{value}': must be a finite number.");
             trimmed += "pt";
         }
         return ParseEmuAsInt(trimmed);
@@ -167,8 +215,12 @@ internal static class EmuConverter
 
     private static bool HasKnownUnitSuffix(string value, out string unit)
     {
-        // Check for common but unsupported units
-        string[] unsupported = { "mm", "rem", "em", "ex", "pc", "vw", "vh" };
+        // Font-relative or viewport-relative units that ParseEmu cannot resolve
+        // (no font / viewport context at this layer). Listed so the bare-number
+        // fallback rejects them with a "not supported" message instead of
+        // silently re-interpreting "5em" as raw EMU.
+        // Order matters: longer suffixes first so "rem" doesn't shadow "em".
+        string[] unsupported = { "rem", "em", "ex", "vw", "vh" };
         foreach (var u in unsupported)
         {
             if (value.EndsWith(u, StringComparison.OrdinalIgnoreCase))
