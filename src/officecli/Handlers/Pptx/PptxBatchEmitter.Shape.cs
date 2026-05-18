@@ -29,6 +29,17 @@ public static partial class PptxBatchEmitter
             props.Remove("link");
     }
 
+    // R24 — a:pPr accepts none of these (ECMA-376 §21.1.2.2.7 lvlLPr /
+    // §21.1.2.2.6 defaultLevelParagraphProperties — language is part of
+    // a:rPr only). The single-run-collapse path used to spill these onto
+    // the paragraph set bag, which Set then routed into `unsupported`.
+    private static readonly HashSet<string> RunOnlyRprAttrs =
+        new(StringComparer.OrdinalIgnoreCase)
+    {
+        "lang", "altLang", "kern", "kumimoji", "normalizeH",
+        "smtClean", "smtId", "bmk", "dirty", "err", "baseline",
+    };
+
     // Pull a `link=slide[N]` prop out of the bag and queue a deferred `set`
     // BatchItem so the link write runs after every slide has been added.
     // External URLs and named actions stay in the prop bag for the normal
@@ -260,12 +271,28 @@ public static partial class PptxBatchEmitter
         {
             var runProps = FilterEmittableProps(runs[0].Format);
             DummyCtxStripSlideJump(runProps);
+            // R24 — run-only rPr attributes (lang, altLang, kern, kumimoji,
+            // normalizeH, smtClean, smtId, bmk, dirty, err, baseline) are not
+            // valid on a:pPr. The collapse used to dump them onto the
+            // paragraph set, which then routed them into `unsupported`. Split
+            // them out and apply them via a follow-up `set …/run[1]` so the
+            // round-trip still captures the rPr attribute on the right node.
+            var runOnly = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var k in RunOnlyRprAttrs)
+            {
+                if (runProps.TryGetValue(k, out var v))
+                {
+                    runOnly[k] = v;
+                    runProps.Remove(k);
+                }
+            }
             foreach (var (k, v) in runProps)
             {
                 if (!props.ContainsKey(k)) props[k] = v;
             }
             if (!string.IsNullOrEmpty(runs[0].Text))
                 props["text"] = runs[0].Text!;
+            string collapsedParaPath;
             if (firstParagraph)
             {
                 items.Add(new BatchItem
@@ -274,6 +301,7 @@ public static partial class PptxBatchEmitter
                     Path = $"{shapeParent}/paragraph[1]",
                     Props = props.Count > 0 ? props : null,
                 });
+                collapsedParaPath = $"{shapeParent}/paragraph[1]";
             }
             else
             {
@@ -283,6 +311,16 @@ public static partial class PptxBatchEmitter
                     Parent = shapeParent,
                     Type = "paragraph",
                     Props = props.Count > 0 ? props : null,
+                });
+                collapsedParaPath = $"{shapeParent}/paragraph[{paraIdx}]";
+            }
+            if (runOnly.Count > 0)
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "set",
+                    Path = $"{collapsedParaPath}/run[1]",
+                    Props = runOnly,
                 });
             }
             return;
