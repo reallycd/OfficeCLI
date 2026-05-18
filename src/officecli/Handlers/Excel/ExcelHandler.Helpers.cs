@@ -4748,6 +4748,10 @@ public partial class ExcelHandler
         {
             var name = child.LocalName;
             if (string.IsNullOrEmpty(name)) continue;
+            // OpenXmlMiscNode (XML comments, processing instructions, CDATA)
+            // surfaces with synthetic LocalNames like "#comment" / "#text". They
+            // are not OOXML elements and must not appear as Format keys.
+            if (name.StartsWith("#") || child is DocumentFormat.OpenXml.OpenXmlMiscNode) continue;
             if (curatedNames.Contains(name)) continue;
             var key = prefix + name;
             if (node.Format.ContainsKey(key)) continue;
