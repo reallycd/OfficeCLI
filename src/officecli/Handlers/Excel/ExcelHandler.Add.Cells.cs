@@ -181,6 +181,15 @@ public partial class ExcelHandler
 
         var rowIdx = index ?? ((int)(sheetData.Elements<Row>().LastOrDefault()?.RowIndex?.Value ?? 0) + 1);
 
+        // Excel's row space tops out at 1048576 (2^20). The append branch
+        // above silently produced row[1048577+] when row[1048576] already
+        // existed, writing a file Excel rejects on open. Mirror the Set
+        // path's bound check (ExcelHandler.Set.cs row index guard) so the
+        // overflow surfaces as a clean invalid_value at Add time.
+        if (rowIdx < 1 || rowIdx > 1048576)
+            throw new ArgumentException(
+                $"Invalid row index {rowIdx}. Valid row range is 1-1048576.");
+
         // If inserting at an existing position, shift rows down first
         bool needsShift = index.HasValue && sheetData.Elements<Row>().Any(r => r.RowIndex?.Value >= (uint)rowIdx);
         if (needsShift)
