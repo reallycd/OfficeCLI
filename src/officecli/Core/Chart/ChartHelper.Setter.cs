@@ -850,6 +850,35 @@ internal static partial class ChartHelper
                     // "Updated" while the underlying XML was untouched. Report unsupported
                     // instead so the operator gets a clear signal.
                     if (allSer.Count == 0) { unsupported.Add(key); break; }
+
+                    // R24 — accept boolean forms. "false"/"none" removes the
+                    // GradientFill from every series (back to solid). "true"
+                    // is the degraded fallback when the dump emitter couldn't
+                    // resolve a spec (e.g. theme-color-only stops); fade each
+                    // series's solid color to white so dump→replay produces
+                    // something visually similar instead of being rejected.
+                    if (value.Equals("false", StringComparison.OrdinalIgnoreCase)
+                        || value.Equals("none", StringComparison.OrdinalIgnoreCase))
+                    {
+                        foreach (var ser in allSer)
+                        {
+                            var spPr = ser.GetFirstChild<C.ChartShapeProperties>();
+                            spPr?.RemoveAllChildren<Drawing.GradientFill>();
+                        }
+                        break;
+                    }
+                    if (value.Equals("true", StringComparison.OrdinalIgnoreCase))
+                    {
+                        for (int si = 0; si < allSer.Count; si++)
+                        {
+                            var spPr = allSer[si].GetFirstChild<C.ChartShapeProperties>();
+                            var solid = spPr?.GetFirstChild<Drawing.SolidFill>();
+                            var baseColor = ReadColorFromFill(solid)?.TrimStart('#')
+                                ?? DefaultSeriesColors[si % DefaultSeriesColors.Length];
+                            ApplySeriesGradient(allSer[si], $"{baseColor}-FFFFFF");
+                        }
+                        break;
+                    }
                     for (int si = 0; si < allSer.Count; si++)
                         ApplySeriesGradient(allSer[si], value);
                     break;

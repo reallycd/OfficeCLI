@@ -464,8 +464,18 @@ internal static partial class ChartHelper
         // (schema declares gradient/marker get:true on chart-scope).
         var allSer = plotArea.Descendants<OpenXmlCompositeElement>()
             .Where(e => e.LocalName == "ser").ToList();
-        if (allSer.Any(s => s.GetFirstChild<C.ChartShapeProperties>()?.GetFirstChild<Drawing.GradientFill>() != null))
-            node.Format["gradient"] = "true";
+        // R24 — emit the chart-level gradient as the same spec form the Setter
+        // accepts ("colorA-colorB[:angle]") so dump→replay round-trips. Reading
+        // the first series's GradientFill is sufficient because chart-scope
+        // Set fans the same spec to every series (line 853 in Setter).
+        var firstGradFill = allSer
+            .Select(s => s.GetFirstChild<C.ChartShapeProperties>()?.GetFirstChild<Drawing.GradientFill>())
+            .FirstOrDefault(g => g != null);
+        if (firstGradFill != null)
+        {
+            var spec = ReadGradientSpec(firstGradFill);
+            node.Format["gradient"] = spec ?? "true";
+        }
         var firstMarkerSym = allSer
             .Select(s => s.GetFirstChild<C.Marker>()?.GetFirstChild<C.Symbol>()?.Val)
             .FirstOrDefault(v => v?.HasValue == true);
@@ -540,9 +550,10 @@ internal static partial class ChartHelper
                         seriesNode.Format["transparency"] = 100000 - alphaUnits;
                     }
                 }
-                // Gradient
+                // Gradient — emit the round-trippable spec form when possible.
                 var gradFill = serSpPr?.GetFirstChild<Drawing.GradientFill>();
-                if (gradFill != null) seriesNode.Format["gradient"] = "true";
+                if (gradFill != null)
+                    seriesNode.Format["gradient"] = ReadGradientSpec(gradFill) ?? "true";
                 // Line width
                 var outline = serSpPr?.GetFirstChild<Drawing.Outline>();
                 if (outline?.Width?.HasValue == true)
@@ -956,6 +967,33 @@ internal static partial class ChartHelper
         var scheme = solidFill.GetFirstChild<Drawing.SchemeColor>()?.Val;
         if (scheme?.HasValue == true) return scheme.InnerText;
         return null;
+    }
+
+    /// <summary>
+    /// Read a GradientFill as the dump/replay spec form
+    /// "colorA-colorB[-colorC][:angle]". Returns null if no stops can be
+    /// resolved. Drops alpha; preserves stop order. Mirrors the input format
+    /// accepted by ApplySeriesGradient in the Setter.
+    /// </summary>
+    internal static string? ReadGradientSpec(Drawing.GradientFill gradFill)
+    {
+        var stops = gradFill.GetFirstChild<Drawing.GradientStopList>()
+            ?.Elements<Drawing.GradientStop>().ToList();
+        if (stops == null || stops.Count < 2) return null;
+        var parts = new List<string>();
+        foreach (var stop in stops)
+        {
+            var rgb = stop.GetFirstChild<Drawing.RgbColorModelHex>()?.Val?.Value;
+            var scheme = stop.GetFirstChild<Drawing.SchemeColor>()?.Val;
+            if (rgb != null) parts.Add(rgb);
+            else if (scheme?.HasValue == true) parts.Add(scheme.InnerText!);
+            else return null;
+        }
+        var spec = string.Join("-", parts);
+        var linear = gradFill.GetFirstChild<Drawing.LinearGradientFill>();
+        if (linear?.Angle?.HasValue == true && linear.Angle.Value != 0)
+            spec += ":" + (linear.Angle.Value / 60000);
+        return spec;
     }
 
     /// <summary>
