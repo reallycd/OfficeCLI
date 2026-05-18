@@ -1540,7 +1540,12 @@ public partial class PowerPointHandler
                     _ => "center"
                 };
             }
-            return $"radial:{string.Join("-", stopStrs)}-{focus}";
+            // R24 — OOXML distinguishes "path" (shape-following) from "radial"
+            // via the @path attribute. Background.cs reader already
+            // distinguishes; this helper used to flatten everything to
+            // "radial:" so dump→replay of a path gradient became a radial.
+            var prefix = pathGrad.Path?.Value == Drawing.PathShadeValues.Shape ? "path" : "radial";
+            return $"{prefix}:{string.Join("-", stopStrs)}-{focus}";
         }
 
         var linear = gradFill.GetFirstChild<Drawing.LinearGradientFill>();
