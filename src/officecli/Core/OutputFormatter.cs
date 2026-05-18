@@ -354,6 +354,15 @@ internal static class OutputFormatter
             return;
         }
 
+        // Pattern: "<Type> requires a '<prop>' property" — handler-side
+        // pre-condition check that a creation/Set call is missing a required
+        // property. Maps to missing_property like "X property is required".
+        if (System.Text.RegularExpressions.Regex.IsMatch(msg, @"requires a '\w+' property"))
+        {
+            result.Code = "missing_property";
+            return;
+        }
+
         // Pattern: "<thing> already exists: <name>" — uniqueness violation
         // (duplicate sheet name, defined name, etc). Distinct from
         // invalid_value: the value is well-formed but collides with an
