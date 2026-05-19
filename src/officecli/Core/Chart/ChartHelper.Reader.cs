@@ -1111,7 +1111,7 @@ internal static partial class ChartHelper
         }
         var spec = string.Join("-", parts);
         var linear = gradFill.GetFirstChild<Drawing.LinearGradientFill>();
-        if (linear?.Angle?.HasValue == true && linear.Angle.Value != 0)
+        if (linear?.Angle?.HasValue == true)
             spec += ":" + (linear.Angle.Value / 60000);
         return spec;
     }
