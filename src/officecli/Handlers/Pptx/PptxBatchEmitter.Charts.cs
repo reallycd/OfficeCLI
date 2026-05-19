@@ -16,7 +16,7 @@ public static partial class PptxBatchEmitter
     // round-trips, chart workbook does not.
     private static void EmitChart(PowerPointHandler ppt, DocumentNode chartNode,
                                   string parentSlidePath, List<BatchItem> items,
-                                  SlideEmitContext ctx)
+                                  SlideEmitContext ctx, int chartOrdinal)
     {
         // depth=1 so series children materialize with their name/values.
         var fullChart = ppt.Get(chartNode.Path, depth: 1);
@@ -157,7 +157,14 @@ public static partial class PptxBatchEmitter
         // `set /slide[N]/chart[K]/axis[@role=ROLE]` row carrying the non-default
         // keys. Missing roles (pie / doughnut / treemap have no axes) are
         // silently skipped.
-        EmitChartAxesIfDifferent(ppt, fullChart.Path, items);
+        // Pass BOTH paths: the @id= path (or whatever Get returned) for
+        // reading axes on the live file, and the positional `chart[K]` path
+        // for the emitted `set` row — at replay the chart is freshly added
+        // and gets a NEW cNvPr.Id, so an @id= selector from the source file
+        // would no longer match. Positional index is stable (chart-only,
+        // 1-based within the slide, same ordering as ResolveChart).
+        var replayChartPath = $"{parentSlidePath}/chart[{chartOrdinal}]";
+        EmitChartAxesIfDifferent(ppt, fullChart.Path, replayChartPath, items);
     }
 
     // Keys BuildAxisNode emits with synthetic defaults that match a freshly-
@@ -184,15 +191,16 @@ public static partial class PptxBatchEmitter
         };
 
     private static void EmitChartAxesIfDifferent(PowerPointHandler ppt,
-        string chartPath, List<BatchItem> items)
+        string readChartPath, string replayChartPath, List<BatchItem> items)
     {
-        if (string.IsNullOrEmpty(chartPath)) return;
+        if (string.IsNullOrEmpty(readChartPath)) return;
 
         foreach (var role in new[] { "category", "value", "value2", "series" })
         {
-            var axisPath = $"{chartPath}/axis[@role={role}]";
+            var readAxisPath = $"{readChartPath}/axis[@role={role}]";
+            var replayAxisPath = $"{replayChartPath}/axis[@role={role}]";
             DocumentNode? axisNode;
-            try { axisNode = ppt.Get(axisPath); }
+            try { axisNode = ppt.Get(readAxisPath); }
             catch { continue; } // axis missing on this chart type — skip
 
             var setProps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -208,17 +216,15 @@ public static partial class PptxBatchEmitter
                 if (AxisDefaultValueSkips.TryGetValue(k, out var def)
                     && string.Equals(s, def, StringComparison.OrdinalIgnoreCase))
                     continue;
-                // Gridlines false: the BuildAxisNode reader always emits both
-                // majorGridlines and minorGridlines (true|false). The
-                // category/series axes never carry gridlines under AddChart's
-                // default, so a "false" value matches the synthetic default
-                // regardless of which axis role surfaced it. Skip it
-                // unconditionally to keep dumps lean. Genuinely user-disabled
-                // gridlines on a value axis re-emit explicitly via the chart-
-                // level gridlines=false prop, which already round-trips.
-                if ((k.Equals("majorGridlines", StringComparison.OrdinalIgnoreCase)
+                // Gridlines on/off (and color/width siblings) are owned by the
+                // chart-level `add` row — emitting `set axis minorGridlines=true`
+                // here causes ChartHelper.Setter to RemoveAllChildren<MinorGridlines>
+                // and re-add a bare one, nuking the color/width siblings that
+                // the chart-level minorGridlineColor / minorGridlineWidth props
+                // had just installed. Drop both boolean keys from axis emit
+                // entirely; the chart-level keys round-trip the full state.
+                if (k.Equals("majorGridlines", StringComparison.OrdinalIgnoreCase)
                   || k.Equals("minorGridlines", StringComparison.OrdinalIgnoreCase))
-                    && s!.Equals("false", StringComparison.OrdinalIgnoreCase))
                     continue;
                 // visible=true is BuildAxisNode's "always-emit" default.
                 if (k.Equals("visible", StringComparison.OrdinalIgnoreCase)
@@ -231,7 +237,7 @@ public static partial class PptxBatchEmitter
             items.Add(new BatchItem
             {
                 Command = "set",
-                Path = axisPath,
+                Path = replayAxisPath,
                 Props = setProps,
             });
         }

@@ -460,7 +460,7 @@ public static partial class PptxBatchEmitter
                     break;
                 case "chart":
                     ord["chart"] = ord.GetValueOrDefault("chart", 0) + 1;
-                    EmitChart(ppt, child, slidePath, items, ctx);
+                    EmitChart(ppt, child, slidePath, items, ctx, ord["chart"]);
                     break;
                 case "ole":
                 case "video":
