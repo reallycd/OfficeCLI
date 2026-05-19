@@ -889,12 +889,16 @@ internal static partial class ChartHelper
                             var solid = spPr?.GetFirstChild<Drawing.SolidFill>();
                             var baseColor = ReadColorFromFill(solid)?.TrimStart('#')
                                 ?? DefaultSeriesColors[si % DefaultSeriesColors.Length];
-                            ApplySeriesGradient(allSer[si], $"{baseColor}-FFFFFF");
+                            // Fan-out: preserveExisting so per-series gradient set before
+                            // chart-level gradient= is not overwritten. Mirrors 2778017a.
+                            ApplySeriesGradient(allSer[si], $"{baseColor}-FFFFFF", preserveExisting: true);
                         }
                         break;
                     }
                     for (int si = 0; si < allSer.Count; si++)
-                        ApplySeriesGradient(allSer[si], value);
+                        // Fan-out: preserveExisting so per-series gradient set before
+                        // chart-level gradient= is not overwritten. Mirrors 2778017a.
+                        ApplySeriesGradient(allSer[si], value, preserveExisting: true);
                     break;
                 }
 
@@ -2937,10 +2941,22 @@ internal static partial class ChartHelper
 
     // ==================== #6 Gradient Fill Helper ====================
 
-    internal static void ApplySeriesGradient(OpenXmlCompositeElement series, string gradientSpec)
+    internal static void ApplySeriesGradient(OpenXmlCompositeElement series, string gradientSpec,
+        bool preserveExisting = false)
     {
         // Format: "color1-color2" or "color1-color2-color3" optionally ":angle"
         // e.g. "FF0000-0000FF", "FF0000-00FF00-0000FF:90"
+        //
+        // preserveExisting=true: fan-out path — if this series already has a
+        // per-series GradientFill (set before the chart-level gradient= key),
+        // skip so the per-series value wins. Mirrors the ApplySeriesMarker
+        // snapshot/restore pattern from 2778017a.
+        if (preserveExisting)
+        {
+            var existingSpPr = series.GetFirstChild<C.ChartShapeProperties>();
+            if (existingSpPr?.GetFirstChild<Drawing.GradientFill>() != null)
+                return;
+        }
         var anglePart = 0;
         var colorsPart = gradientSpec;
         var colonIdx = gradientSpec.LastIndexOf(':');
