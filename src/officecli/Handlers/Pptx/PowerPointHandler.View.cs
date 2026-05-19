@@ -613,6 +613,37 @@ public partial class PowerPointHandler
             }
             catch { /* probe is best-effort; never break view issues */ }
 
+            // Resident-mode parity: when a chart/picture/etc. is added via the
+            // long-lived resident, the new IdPartPair lives in the SDK's
+            // in-memory part tree before the rels XML stream gets flushed to
+            // the package. The disk-rels XML probe above then doesn't see the
+            // newly-declared rId, and view issues falsely reports
+            // broken_part_ref. Mirror the in-memory state by also accepting
+            // any rId the SDK currently exposes via Parts /
+            // HyperlinkRelationships / ExternalRelationships /
+            // DataPartReferenceRelationships. Disk-only state still flags
+            // genuinely-broken rels because brokenRelIds is populated from
+            // the disk probe above.
+            try
+            {
+                foreach (var pair in slidePart.Parts)
+                    if (!string.IsNullOrEmpty(pair.RelationshipId))
+                    {
+                        declaredRelIds.Add(pair.RelationshipId);
+                        // The part exists in-memory under this rId — clear
+                        // any stale "broken" verdict the disk probe inferred
+                        // before the SDK flushed the new IdPartPair.
+                        brokenRelIds.Remove(pair.RelationshipId);
+                    }
+                foreach (var hr in slidePart.HyperlinkRelationships)
+                    if (!string.IsNullOrEmpty(hr.Id)) declaredRelIds.Add(hr.Id);
+                foreach (var er in slidePart.ExternalRelationships)
+                    if (!string.IsNullOrEmpty(er.Id)) declaredRelIds.Add(er.Id);
+                foreach (var dr in slidePart.DataPartReferenceRelationships)
+                    if (!string.IsNullOrEmpty(dr.Id)) declaredRelIds.Add(dr.Id);
+            }
+            catch { /* probe is best-effort */ }
+
             const string relNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
             // R8-2: walk the raw slide XML, not the SDK's parsed Slide. The
             // SDK silently drops elements whose rels don't resolve (e.g. a
