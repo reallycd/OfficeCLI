@@ -48,6 +48,13 @@ internal static partial class ChartHelper
         bool needsSerAxis = false;
 
         var colors = ParseSeriesColors(properties);
+        // CONSISTENCY(chart-series-color): for single-series chart kinds
+        // (pie/doughnut/stock), the merged `colors[]` is consumed as per-point
+        // dPt overrides. A user typing `series1.color=#FF0000` expects the
+        // whole series tinted (matches `set chart` ApplySeriesColor), which
+        // would otherwise be silently dropped. Capture the dotted-only spec so
+        // those builders can call ApplySeriesColor in addition to per-point.
+        var dottedSeriesColors = ParseDottedSeriesColorsOnly(properties);
 
         switch (kind)
         {
@@ -151,6 +158,7 @@ internal static partial class ChartHelper
                     var series = BuildPieSeries(0, seriesData[0].name,
                         categories, seriesData[0].values);
                     ApplyDataPointColors(series, seriesData[0].values.Length, colors);
+                    ApplyDottedSeriesColors(new[] { (OpenXmlCompositeElement)series }, dottedSeriesColors);
                     pie3d.AppendChild(series);
                 }
                 chartElement = pie3d;
@@ -159,6 +167,7 @@ internal static partial class ChartHelper
             }
             case "pie":
                 chartElement = BuildPieChart(categories, seriesData, colors);
+                ApplyDottedSeriesColors(((C.PieChart)chartElement).Elements<C.PieChartSeries>().Cast<OpenXmlCompositeElement>().ToArray(), dottedSeriesColors);
                 needsAxes = false;
                 break;
             case "pieofpie":
@@ -166,10 +175,12 @@ internal static partial class ChartHelper
                 chartElement = BuildOfPieChart(
                     kind == "barofpie" ? C.OfPieValues.Bar : C.OfPieValues.Pie,
                     categories, seriesData, colors);
+                ApplyDottedSeriesColors(((C.OfPieChart)chartElement).Elements<C.PieChartSeries>().Cast<OpenXmlCompositeElement>().ToArray(), dottedSeriesColors);
                 needsAxes = false;
                 break;
             case "doughnut":
                 chartElement = BuildDoughnutChart(categories, seriesData, colors);
+                ApplyDottedSeriesColors(((C.DoughnutChart)chartElement).Elements<C.PieChartSeries>().Cast<OpenXmlCompositeElement>().ToArray(), dottedSeriesColors);
                 needsAxes = false;
                 break;
             case "scatter":
@@ -188,6 +199,10 @@ internal static partial class ChartHelper
             // Note: column3d/bar3d are handled by "column when is3D" / "bar when is3D" above
             case "stock":
                 chartElement = BuildStockChart(categories, seriesData, catAxisId, valAxisId);
+                // Stock series default to NoFill outline (hi-lo lines carry the
+                // visual). series{N}.color must still be honored — apply after
+                // build so user-chosen tints reach the LineChartSeries spPr.
+                ApplyDottedSeriesColors(((C.StockChart)chartElement).Elements<C.LineChartSeries>().Cast<OpenXmlCompositeElement>().ToArray(), dottedSeriesColors);
                 needsAxes = true;
                 break;
             case "waterfall":
@@ -1034,6 +1049,21 @@ internal static partial class ChartHelper
         OfficeDefaultThemeColors.DefaultChartSeriesPalette;
 
     // ==================== Series Color ====================
+
+    /// <summary>
+    /// Apply per-series dotted colors (`series{N}.color=<hex>`) to the
+    /// provided series elements. Used by single-series chart builders
+    /// (pie/doughnut/stock) where positional `colors=` is per-data-point.
+    /// </summary>
+    internal static void ApplyDottedSeriesColors(OpenXmlCompositeElement[] seriesElems, Dictionary<int, string> dotted)
+    {
+        if (dotted == null || dotted.Count == 0) return;
+        for (int i = 0; i < seriesElems.Length; i++)
+        {
+            if (dotted.TryGetValue(i + 1, out var c) && !string.IsNullOrEmpty(c))
+                ApplySeriesColor(seriesElems[i], c);
+        }
+    }
 
     internal static void ApplySeriesColor(OpenXmlCompositeElement series, string color)
     {

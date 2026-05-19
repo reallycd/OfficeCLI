@@ -379,6 +379,29 @@ internal static partial class ChartHelper
         return merged;
     }
 
+    /// <summary>
+    /// Like ParseSeriesColors but returns ONLY the per-series dotted color
+    /// keys (`series{N}.color=<hex>`), without merging the positional
+    /// `colors=` array. Used by single-series chart builders
+    /// (pie/doughnut/stock) where positional `colors=` is per-data-point but
+    /// `series{N}.color` should still tint the whole series.
+    /// </summary>
+    internal static Dictionary<int, string> ParseDottedSeriesColorsOnly(Dictionary<string, string> properties)
+    {
+        var dotted = new Dictionary<int, string>();
+        foreach (var kv in properties)
+        {
+            var k = kv.Key;
+            if (!k.StartsWith("series", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!k.EndsWith(".color", StringComparison.OrdinalIgnoreCase)) continue;
+            var mid = k.Substring(6, k.Length - 6 - ".color".Length);
+            if (!int.TryParse(mid, out var idx) || idx < 1) continue;
+            if (!string.IsNullOrWhiteSpace(kv.Value))
+                dotted[idx] = kv.Value.Trim();
+        }
+        return dotted;
+    }
+
     // ==================== ManualLayout Helpers ====================
 
     /// <summary>
