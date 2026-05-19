@@ -379,7 +379,7 @@
         "--prop lineDash=sysDash",
         "--prop line=FF0000:1.5:dash"
       ],
-      "readback": "canonical OOXML prstDash token (solid | dot | dash | dashDot | lgDash | lgDashDot | lgDashDotDot | sysDot | sysDash | sysDashDot | sysDashDotDot). 'longdash'/'longdashdot' are accepted on input as aliases for lgDash/lgDashDot.",
+      "readback": "canonical OOXML prstDash token (solid | dot | dash | dashDot | lgDash | lgDashDot | lgDashDotDot | sysDot | sysDash | sysDashDot | sysDashDotDot). 'longdash'/'longdashdot' are accepted on input as aliases for lgDash/lgDashDot. 'dashDotDot' has no native enum member; it is accepted as an alias for sysDashDotDot (Get readback returns sysDashDotDot).",
       "enforcement": "report"
     },
     "lineCap": {

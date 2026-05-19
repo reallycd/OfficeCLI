@@ -93,7 +93,7 @@
       "aliases": [
         "dash"
       ],
-      "description": "series line dash style. Set accepts user-friendly aliases (dash/dot/dashDot/longDash); Get returns OOXML token (sysDash/sysDot/sysDashDot/lgDash). 'solid' is the only round-trip-stable value.",
+      "description": "series line dash style. Set accepts user-friendly aliases (dash/dot/dashDot/longDash); Get returns OOXML token (sysDash/sysDot/sysDashDot/lgDash). 'dashDotDot' has no native enum member and is accepted as an alias for sysDashDotDot — Get readback will return sysDashDotDot. 'solid' is the only round-trip-stable value.",
       "examples": [
         "--prop lineDash=dash",
         "--prop lineDash=solid"

@@ -2783,6 +2783,14 @@ internal static partial class ChartHelper
             "dash" => Drawing.PresetLineDashValues.Dash,
             "sysdash" => Drawing.PresetLineDashValues.SystemDash,
             "dashdot" => Drawing.PresetLineDashValues.DashDot,
+            // dashDotDot has no native CT_PresetLineDashValues enum member —
+            // ECMA-376 (DrawingML) defines only dash/dashDot plus the sys*/lg*
+            // dot-dot variants. Tolerate the natural extrapolation as an
+            // explicit alias for sysDashDotDot (the closest visual match)
+            // rather than silently falling through to Solid. Documented in
+            // schemas/help/_shared/chart-series.json lineDash and pptx
+            // shape/connector lineDash so users know Get readback will be
+            // sysDashDotDot, not dashDotDot.
             "dashdotdot" => Drawing.PresetLineDashValues.SystemDashDotDot,
             "sysdashdot" or "sysdash_dot" => Drawing.PresetLineDashValues.SystemDashDot,
             "sysdashdotdot" or "sysdash_dot_dot" => Drawing.PresetLineDashValues.SystemDashDotDot,
