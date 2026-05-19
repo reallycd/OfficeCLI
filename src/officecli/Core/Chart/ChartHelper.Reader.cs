@@ -707,6 +707,12 @@ internal static partial class ChartHelper
                 }
 
                 var serSpPr = serEl?.GetFirstChild<C.ChartShapeProperties>();
+                // NoFill round-trip: when ApplySeriesColor wrote <a:noFill/>
+                // (color=none), Reader previously skipped emit and dump→replay
+                // reverted to the default auto color. Surface "none" so the
+                // setter side re-applies NoFill.
+                if (serSpPr?.GetFirstChild<Drawing.NoFill>() != null)
+                    seriesNode.Format["color"] = "none";
                 var serColor = serSpPr?.GetFirstChild<Drawing.SolidFill>();
                 if (serColor != null)
                 {
@@ -843,7 +849,10 @@ internal static partial class ChartHelper
                     {
                         var ptIdx = dPt.Index?.Val?.Value;
                         if (ptIdx == null) continue;
-                        var ptFill = dPt.GetFirstChild<C.ChartShapeProperties>()?.GetFirstChild<Drawing.SolidFill>();
+                        var ptSpPr = dPt.GetFirstChild<C.ChartShapeProperties>();
+                        if (ptSpPr?.GetFirstChild<Drawing.NoFill>() != null)
+                            seriesNode.Format[$"point{ptIdx.Value + 1}.color"] = "none";
+                        var ptFill = ptSpPr?.GetFirstChild<Drawing.SolidFill>();
                         if (ptFill != null)
                         {
                             var ptColor = ReadColorFromFill(ptFill);
