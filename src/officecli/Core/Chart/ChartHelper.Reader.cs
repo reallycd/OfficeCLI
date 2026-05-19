@@ -645,11 +645,22 @@ internal static partial class ChartHelper
         // Including them caused chart-level `marker=none` to be emitted on
         // any chart whose first real series had no explicit marker, then
         // dump→replay applied marker=none to series 1.
-        var firstMarkerSym = allSer
+        var firstRealMarker = allSer
             .Where(s => !IsReferenceLineSeries(s))
-            .Select(s => s.GetFirstChild<C.Marker>()?.GetFirstChild<C.Symbol>()?.Val)
-            .FirstOrDefault(v => v?.HasValue == true);
+            .Select(s => s.GetFirstChild<C.Marker>())
+            .FirstOrDefault(m => m?.GetFirstChild<C.Symbol>()?.Val?.HasValue == true);
+        var firstMarkerSym = firstRealMarker?.GetFirstChild<C.Symbol>()?.Val;
         if (firstMarkerSym != null) node.Format["marker"] = firstMarkerSym.InnerText;
+        // markerColor fan-out: Setter accepts `marker=symbol:size:color`
+        // but tests assert the bare-symbol readback, so emit color on a
+        // separate key (mirrors markerSize). Reads the marker's spPr/solidFill.
+        var firstMarkerFill = firstRealMarker?.GetFirstChild<C.ChartShapeProperties>()
+            ?.GetFirstChild<Drawing.SolidFill>();
+        if (firstMarkerFill != null)
+        {
+            var mColor = ReadColorFromFill(firstMarkerFill);
+            if (mColor != null) node.Format["markerColor"] = mColor;
+        }
 
         var cats = ReadCategories(plotArea);
         if (cats != null) node.Format["categories"] = string.Join(",", cats);
@@ -769,6 +780,16 @@ internal static partial class ChartHelper
                 var markerSize = marker?.GetFirstChild<C.Size>()?.Val;
                 if (markerSize?.HasValue == true)
                     seriesNode.Format["markerSize"] = (int)markerSize.Value;
+                // markerColor: marker fill ships on its own key (see
+                // chart-level fan-out above) so the bare `marker=symbol`
+                // readback expected by tests is preserved.
+                var markerFill = marker?.GetFirstChild<C.ChartShapeProperties>()
+                    ?.GetFirstChild<Drawing.SolidFill>();
+                if (markerFill != null)
+                {
+                    var mColor = ReadColorFromFill(markerFill);
+                    if (mColor != null) seriesNode.Format["markerColor"] = mColor;
+                }
                 // Smooth
                 var serSmooth = serEl?.GetFirstChild<C.Smooth>()?.Val;
                 if (serSmooth?.HasValue == true) seriesNode.Format["smooth"] = serSmooth.Value ? "true" : "false";

@@ -817,6 +817,22 @@ internal static partial class ChartHelper
                     break;
                 }
 
+                case "markercolor":
+                {
+                    var plotArea2 = chart.GetFirstChild<C.PlotArea>();
+                    if (plotArea2 == null) { unsupported.Add(key); break; }
+                    foreach (var ser in plotArea2.Descendants<OpenXmlCompositeElement>().Where(e => e.LocalName == "ser"))
+                    {
+                        if (ser is not (C.LineChartSeries or C.ScatterChartSeries or C.RadarChartSeries))
+                            continue;
+                        // Reuse the per-series dotted-property handler so
+                        // symbol/size are preserved and schema-order insertion
+                        // stays in one place.
+                        HandleSeriesDottedProperty(ser, "markercolor", value);
+                    }
+                    break;
+                }
+
                 // ---- #4 Chart style ID ----
                 case "style" or "styleid":
                 {

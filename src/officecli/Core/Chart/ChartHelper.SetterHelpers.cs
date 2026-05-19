@@ -439,6 +439,35 @@ internal static partial class ChartHelper
                 return true;
             }
 
+            case "markercolor":
+            case "marker.color":
+            {
+                // CONSISTENCY(marker-dotted): mirror markersize — write fill on
+                // the existing marker's spPr, preserving symbol/size so the
+                // dumped marker= / markerSize= / markerColor= triplet round-trips
+                // without one key clobbering another.
+                var existing = ser.GetFirstChild<C.Marker>();
+                var existingSym = existing?.GetFirstChild<C.Symbol>()?.CloneNode(true) as C.Symbol;
+                var existingSize = existing?.GetFirstChild<C.Size>()?.CloneNode(true) as C.Size;
+                if (existing != null) existing.Remove();
+                var marker = new C.Marker();
+                if (existingSym != null) marker.AppendChild(existingSym);
+                else marker.AppendChild(new C.Symbol { Val = C.MarkerStyleValues.Circle });
+                if (existingSize != null) marker.AppendChild(existingSize);
+                var mSpPr = new C.ChartShapeProperties();
+                var fill = new Drawing.SolidFill();
+                fill.AppendChild(BuildChartColorElement(value));
+                mSpPr.AppendChild(fill);
+                marker.AppendChild(mSpPr);
+                var insertBefore = (OpenXmlElement?)ser.Elements().FirstOrDefault(e =>
+                    e.LocalName is "xVal" or "yVal" or "cat" or "val" or "bubbleSize"
+                        or "smooth" or "extLst")
+                    ?? ser.Elements().FirstOrDefault(e => e.LocalName == "trendline");
+                if (insertBefore != null) ser.InsertBefore(marker, insertBefore);
+                else ser.AppendChild(marker);
+                return true;
+            }
+
             case "marker.style":
             {
                 // CONSISTENCY(marker-dotted): mirror "marker=circle" but accept the

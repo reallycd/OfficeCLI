@@ -135,6 +135,20 @@
       "readback": "integer",
       "enforcement": "report"
     },
+    "markerColor": {
+      "type": "string",
+      "aliases": [
+        "marker.color"
+      ],
+      "set": true,
+      "get": true,
+      "description": "per-series marker fill color (line/scatter/radar). Preserves existing symbol and size — pair with marker=/markerSize= to set the triplet independently. Round-trips via Reader's spPr/solidFill probe.",
+      "examples": [
+        "--prop markerColor=FF0000"
+      ],
+      "readback": "hex color, e.g. #FF0000",
+      "enforcement": "report"
+    },
     "name": {
       "type": "string",
       "description": "series name shown in legend and data labels.",

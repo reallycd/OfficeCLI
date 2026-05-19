@@ -945,6 +945,19 @@
         "--prop markersize=8"
       ]
     },
+    "markercolor": {
+      "type": "string",
+      "aliases": [
+        "marker.color"
+      ],
+      "set": true,
+      "get": true,
+      "description": "marker fill color (line/scatter/radar series only). Fans out to every applicable series; preserves existing marker symbol/size. Read back from the first series' marker spPr/solidFill.",
+      "examples": [
+        "--prop markerColor=FF0000"
+      ],
+      "readback": "as emitted by handler (hex color, e.g. #FF0000)"
+    },
     "minorGridlines": {
       "type": "bool",
       "aliases": [
