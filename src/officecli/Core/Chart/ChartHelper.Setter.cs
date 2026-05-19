@@ -2295,7 +2295,9 @@ internal static partial class ChartHelper
 
                 case "referenceline" or "refline" or "targetline":
                 {
-                    // Format: "value" or "value:color" or "value:color:label" or "value:color:label:dash"
+                    // Format: "value" or "value:color" or "value:color:label" or
+                    // "value:color:label:dash". Multiple lines = semicolon-joined
+                    // (matches Reader output format).
                     if (value.Equals("none", StringComparison.OrdinalIgnoreCase))
                     {
                         var plotArea2 = chart.GetFirstChild<C.PlotArea>();
@@ -2303,7 +2305,16 @@ internal static partial class ChartHelper
                             RemoveExistingReferenceLines(plotArea2);
                         break;
                     }
-                    AddReferenceLine(chart, value);
+                    var specs = value.Split(';', StringSplitOptions.RemoveEmptyEntries);
+                    // Remove existing once, then add each spec without further
+                    // sweeps so multi-line input accumulates instead of leaving
+                    // only the last one (which broke dump→replay of charts with
+                    // 2+ reference lines).
+                    var plotAreaRl = chart.GetFirstChild<C.PlotArea>();
+                    if (plotAreaRl != null)
+                        RemoveExistingReferenceLines(plotAreaRl);
+                    foreach (var spec in specs)
+                        AddReferenceLine(chart, spec.Trim(), removeExisting: false);
                     break;
                 }
 
