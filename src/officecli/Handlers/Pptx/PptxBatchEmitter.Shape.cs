@@ -162,7 +162,12 @@ public static partial class PptxBatchEmitter
             Props = props.Count > 0 ? props : null,
         });
 
-        EmitTextBody(ppt, full, replayPath, items);
+        // AddPlaceholder seeds the first paragraph with <a:endParaRPr> only —
+        // no <a:r>. Emitting the first run via `set run[1]` (the shape/textbox
+        // path) targets a non-existent run and fails the batch. Tell
+        // EmitTextBody the seeded paragraph has zero runs so it issues `add
+        // run` for the first run instead.
+        EmitTextBody(ppt, full, replayPath, items, seededFirstParaHasRun: false);
     }
 
     private static void EmitConnector(PowerPointHandler ppt, DocumentNode cxnNode, string parentSlidePath,
@@ -287,7 +292,8 @@ public static partial class PptxBatchEmitter
     // paragraph (with text carried as the canonical "text" prop). Single-run
     // paragraphs collapse run props onto the paragraph itself, mirroring the
     // docx single-run optimization.
-    private static void EmitTextBody(PowerPointHandler ppt, DocumentNode shapeNode, string shapeParent, List<BatchItem> items)
+    private static void EmitTextBody(PowerPointHandler ppt, DocumentNode shapeNode, string shapeParent, List<BatchItem> items,
+                                     bool seededFirstParaHasRun = true)
     {
         if (shapeNode.Children == null) return;
         var paragraphs = shapeNode.Children.Where(c => c.Type == "paragraph" || c.Type == "p").ToList();
@@ -308,12 +314,15 @@ public static partial class PptxBatchEmitter
             // subsequent paragraphs append via `add`. docx body has no
             // equivalent auto-empty seed (AddSection initializes an empty body
             // and AddParagraph appends), so WordBatchEmitter uses pure `add`.
-            EmitParagraph(ppt, para, shapeParent, pIdx, items, firstParagraph: pIdx == 1);
+            EmitParagraph(ppt, para, shapeParent, pIdx, items,
+                firstParagraph: pIdx == 1,
+                seededParaHasRun: pIdx == 1 && seededFirstParaHasRun);
         }
     }
 
     private static void EmitParagraph(PowerPointHandler ppt, DocumentNode paraNode, string shapeParent,
-                                      int paraIdx, List<BatchItem> items, bool firstParagraph)
+                                      int paraIdx, List<BatchItem> items, bool firstParagraph,
+                                      bool seededParaHasRun = true)
     {
         var props = FilterEmittableProps(paraNode.Format);
         // CONSISTENCY(slide-jump-defer): the shape-level emit already deferred
@@ -379,12 +388,38 @@ public static partial class PptxBatchEmitter
             }
             if (runOnly.Count > 0)
             {
-                items.Add(new BatchItem
+                // Placeholder's seeded first paragraph has no <a:r>, so target
+                // `set run[1]` would miss. The collapsed paragraph set already
+                // wrote text, which causes AddParagraph/PowerPoint to materialize
+                // a run, but only when text is non-empty. When the seeded
+                // paragraph has no run, prefer `add run` (Set on a missing run
+                // would fail; AddRun on a paragraph that already has one created
+                // by the set-with-text is harmless — placeholder paragraph after
+                // text-set still has only the run we just authored, the run-only
+                // attrs apply to that run via Set targeting run[1]). For the
+                // no-text collapsed case where the seeded paragraph still has
+                // zero runs, switch to `add run` so the run-only attrs land on
+                // a freshly added run instead of failing.
+                bool collapseHasText = props.ContainsKey("text");
+                if (firstParagraph && !seededParaHasRun && !collapseHasText)
                 {
-                    Command = "set",
-                    Path = $"{collapsedParaPath}/run[1]",
-                    Props = runOnly,
-                });
+                    items.Add(new BatchItem
+                    {
+                        Command = "add",
+                        Parent = collapsedParaPath,
+                        Type = "run",
+                        Props = runOnly,
+                    });
+                }
+                else
+                {
+                    items.Add(new BatchItem
+                    {
+                        Command = "set",
+                        Path = $"{collapsedParaPath}/run[1]",
+                        Props = runOnly,
+                    });
+                }
             }
             return;
         }
@@ -427,7 +462,10 @@ public static partial class PptxBatchEmitter
         // and drifts by +1 run per round-trip. Mirror the single-paragraph
         // rewrite: the FIRST run of the FIRST paragraph rewrites the seeded
         // empty run via `set .../run[1]` rather than `add run`.
-        bool firstRunOnSeededParagraph = firstParagraph && runs.Count > 0;
+        // AddPlaceholder's seeded paragraph has zero <a:r> elements (only
+        // <a:endParaRPr>), so `set run[1]` would target a missing run. Only
+        // rewrite-the-seed when an actual run was seeded (shape/textbox path).
+        bool firstRunOnSeededParagraph = firstParagraph && runs.Count > 0 && seededParaHasRun;
         for (int ri = 0; ri < runs.Count; ri++)
         {
             if (ri == 0 && firstRunOnSeededParagraph)
