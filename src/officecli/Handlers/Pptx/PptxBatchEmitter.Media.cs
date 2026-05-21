@@ -50,6 +50,23 @@ public static partial class PptxBatchEmitter
         if (!string.IsNullOrEmpty(altRaw) && altRaw != "(missing)")
             props["alt"] = altRaw;
 
+        // Schema declares brightness/contrast/shadow/glow as add:false, set:true
+        // on pptx/picture. AddPicture rejects them with UNSUPPORTED on replay
+        // and the values are silently lost. Lift them out of the add bag and
+        // defer to a follow-up `set` on the same replay path. Mirrors the
+        // DeferSlideJumpLink pattern (deferred-set after every add).
+        // Hard-coded picture-level drop list — same precedent as `image=true`,
+        // `background=image`, `fill=gradient` drops elsewhere in this emitter.
+        var deferredEffects = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in PictureSetOnlyEffectKeys)
+        {
+            if (props.TryGetValue(key, out var val))
+            {
+                deferredEffects[key] = val;
+                props.Remove(key);
+            }
+        }
+
         items.Add(new BatchItem
         {
             Command = "add",
@@ -57,5 +74,23 @@ public static partial class PptxBatchEmitter
             Type = "picture",
             Props = props.Count > 0 ? props : null,
         });
+
+        if (deferredEffects.Count > 0)
+        {
+            ctx.DeferredLinks.Add(new BatchItem
+            {
+                Command = "set",
+                Path = replayPath,
+                Props = deferredEffects,
+            });
+        }
     }
+
+    // Picture effect props with schema `add: false, set: true`. Must NOT ride
+    // along inside the add picture op props bag — AddPicture rejects them.
+    private static readonly HashSet<string> PictureSetOnlyEffectKeys =
+        new(StringComparer.OrdinalIgnoreCase)
+    {
+        "brightness", "contrast", "shadow", "glow",
+    };
 }
