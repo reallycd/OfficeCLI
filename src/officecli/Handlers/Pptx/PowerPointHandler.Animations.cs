@@ -1191,6 +1191,11 @@ public partial class PowerPointHandler
                 StartConditionList = new StartConditionList(new Condition { Delay = "0" }),
                 ChildTimeNodeList = tplChildList
             };
+            // Mirror the non-template path (line ~1344): store duration on the
+            // effectCTn itself so PopulateAnimationNode can recover the actual
+            // value instead of falling through to the hardcoded 500ms default.
+            if (durationMs > 0)
+                tplEffectCTn.Duration = durationMs.ToString();
             var tplEffectPar = new ParallelTimeNode { CommonTimeNode = tplEffectCTn };
             var tplMidId = nextId++;
             var tplMidCTn = new CommonTimeNode
