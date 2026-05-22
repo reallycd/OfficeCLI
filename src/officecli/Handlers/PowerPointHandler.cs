@@ -506,9 +506,72 @@ public partial class PowerPointHandler : IDocumentHandler
                 var chartIdx = slidePart.ChartParts.ToList().IndexOf(chartPart);
                 return (relId, $"/slide[{slideIdx}]/chart[{chartIdx + 1}]");
 
+            case "smartart":
+                // SmartArt graphicFrame references four separate OOXML
+                // sub-parts under the owning SlidePart: data (dgm:dataModel),
+                // layout (dgm:layoutDef), colors (dgm:colorsDef), style
+                // (dgm:styleDef). The graphicFrame's <dgm:relIds> carries the
+                // four rIds, so dump→batch→replay byte-equality requires that
+                // the rIds match the source's. Callers MAY pass explicit rIds
+                // via properties {data, layout, colors, quickStyle}; when
+                // omitted the SDK allocates fresh ones. Each part is seeded
+                // with a minimal typed root so subsequent raw-set replace
+                // ops can target /dgm:dataModel etc.
+                var saSlideMatch = System.Text.RegularExpressions.Regex.Match(
+                    parentPartPath, @"^/slide\[(\d+)\]$");
+                if (!saSlideMatch.Success)
+                    throw new ArgumentException(
+                        "SmartArt must be added under a slide: add-part <file> '/slide[N]' --type smartart");
+                var saSlideIdx = int.Parse(saSlideMatch.Groups[1].Value);
+                var saSlideParts = GetSlideParts().ToList();
+                if (saSlideIdx < 1 || saSlideIdx > saSlideParts.Count)
+                    throw new ArgumentException($"Slide index {saSlideIdx} out of range");
+                var saSlidePart = saSlideParts[saSlideIdx - 1];
+
+                string? dataRid     = properties != null && properties.TryGetValue("data", out var dv) ? dv : null;
+                string? layoutRid   = properties != null && properties.TryGetValue("layout", out var lv) ? lv : null;
+                string? colorsRid   = properties != null && properties.TryGetValue("colors", out var cv) ? cv : null;
+                string? qsRid       = properties != null && properties.TryGetValue("quickStyle", out var qv) ? qv : null;
+
+                DiagramDataPart   dataPart   = !string.IsNullOrEmpty(dataRid)
+                    ? saSlidePart.AddNewPart<DiagramDataPart>(dataRid)
+                    : saSlidePart.AddNewPart<DiagramDataPart>();
+                DiagramLayoutDefinitionPart layoutPart = !string.IsNullOrEmpty(layoutRid)
+                    ? saSlidePart.AddNewPart<DiagramLayoutDefinitionPart>(layoutRid)
+                    : saSlidePart.AddNewPart<DiagramLayoutDefinitionPart>();
+                DiagramColorsPart colorsPart = !string.IsNullOrEmpty(colorsRid)
+                    ? saSlidePart.AddNewPart<DiagramColorsPart>(colorsRid)
+                    : saSlidePart.AddNewPart<DiagramColorsPart>();
+                DiagramStylePart  stylePart  = !string.IsNullOrEmpty(qsRid)
+                    ? saSlidePart.AddNewPart<DiagramStylePart>(qsRid)
+                    : saSlidePart.AddNewPart<DiagramStylePart>();
+
+                // Minimal typed roots — raw-set replace immediately overwrites.
+                dataPart.DataModelRoot = new DocumentFormat.OpenXml.Drawing.Diagrams.DataModelRoot(
+                    new DocumentFormat.OpenXml.Drawing.Diagrams.PointList(),
+                    new DocumentFormat.OpenXml.Drawing.Diagrams.ConnectionList());
+                dataPart.DataModelRoot.Save(dataPart);
+                layoutPart.LayoutDefinition = new DocumentFormat.OpenXml.Drawing.Diagrams.LayoutDefinition();
+                layoutPart.LayoutDefinition.Save(layoutPart);
+                colorsPart.ColorsDefinition = new DocumentFormat.OpenXml.Drawing.Diagrams.ColorsDefinition();
+                colorsPart.ColorsDefinition.Save(colorsPart);
+                stylePart.StyleDefinition = new DocumentFormat.OpenXml.Drawing.Diagrams.StyleDefinition();
+                stylePart.StyleDefinition.Save(stylePart);
+
+                // Encode all four rIds in the RelId field — callers (batch
+                // emit / replay) need to know each part's id to write the
+                // matching dgm:relIds on the graphicFrame. Format:
+                // "data=rIdX;layout=rIdY;colors=rIdZ;quickStyle=rIdW".
+                var dataActualRid   = saSlidePart.GetIdOfPart(dataPart);
+                var layoutActualRid = saSlidePart.GetIdOfPart(layoutPart);
+                var colorsActualRid = saSlidePart.GetIdOfPart(colorsPart);
+                var styleActualRid  = saSlidePart.GetIdOfPart(stylePart);
+                var encoded = $"data={dataActualRid};layout={layoutActualRid};colors={colorsActualRid};quickStyle={styleActualRid}";
+                return (encoded, parentPartPath);
+
             default:
                 throw new ArgumentException(
-                    $"Unknown part type: {partType}. Supported: chart");
+                    $"Unknown part type: {partType}. Supported: chart, smartart");
         }
     }
 
@@ -566,6 +629,106 @@ public partial class PowerPointHandler : IDocumentHandler
         var parts = GetSlideParts().ToList();
         if (slideIdx < 1 || slideIdx > parts.Count) return false;
         return parts[slideIdx - 1].NotesSlidePart != null;
+    }
+
+    /// <summary>
+    /// Per-slide SmartArt info for PptxBatchEmitter passthrough. Returns
+    /// one entry per <p:graphicFrame> on the slide that carries a
+    /// <dgm:relIds> child (= SmartArt host frame). Each entry includes the
+    /// source's four rIds and the four diagram parts' XML so the emitter
+    /// can issue an `add-part smartart` + four `raw-set` rows that
+    /// round-trip byte-equal.
+    /// </summary>
+    internal readonly record struct SmartArtInfo(
+        string GraphicFrameXml,
+        string DataRelId,
+        string LayoutRelId,
+        string ColorsRelId,
+        string QuickStyleRelId,
+        string DataXml,
+        string LayoutXml,
+        string ColorsXml,
+        string QuickStyleXml);
+
+    internal IReadOnlyList<SmartArtInfo> GetSmartArtsOnSlide(int slideIdx)
+    {
+        var result = new List<SmartArtInfo>();
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return result;
+        var slidePart = parts[slideIdx - 1];
+        var slide = GetSlide(slidePart);
+        var spTree = slide.CommonSlideData?.ShapeTree;
+        if (spTree == null) return result;
+
+        var ns = "http://schemas.openxmlformats.org/drawingml/2006/diagram";
+        foreach (var gf in spTree.Descendants<DocumentFormat.OpenXml.Presentation.GraphicFrame>())
+        {
+            var relIds = gf.Descendants().FirstOrDefault(e =>
+                e.LocalName == "relIds" && e.NamespaceUri == ns);
+            if (relIds == null) continue;
+
+            string? dRid = null, lRid = null, cRid = null, qRid = null;
+            foreach (var a in relIds.GetAttributes())
+            {
+                var ln = a.LocalName;
+                var v = a.Value;
+                if (ln == "dm") dRid = v;
+                else if (ln == "lo") lRid = v;
+                else if (ln == "cs") cRid = v;
+                else if (ln == "qs") qRid = v;
+            }
+            if (dRid == null || lRid == null || cRid == null || qRid == null) continue;
+
+            string? xmlFor(string rid)
+            {
+                try
+                {
+                    var part = slidePart.GetPartById(rid);
+                    if (part is DiagramDataPart d) return d.DataModelRoot?.OuterXml;
+                    if (part is DiagramLayoutDefinitionPart l) return l.LayoutDefinition?.OuterXml;
+                    if (part is DiagramColorsPart c) return c.ColorsDefinition?.OuterXml;
+                    if (part is DiagramStylePart s) return s.StyleDefinition?.OuterXml;
+                }
+                catch { }
+                return null;
+            }
+
+            var dXml = xmlFor(dRid);
+            var lXml = xmlFor(lRid);
+            var cXml = xmlFor(cRid);
+            var qXml = xmlFor(qRid);
+            if (dXml == null || lXml == null || cXml == null || qXml == null) continue;
+
+            result.Add(new SmartArtInfo(
+                GraphicFrameXml: gf.OuterXml,
+                DataRelId: dRid, LayoutRelId: lRid, ColorsRelId: cRid, QuickStyleRelId: qRid,
+                DataXml: dXml, LayoutXml: lXml, ColorsXml: cXml, QuickStyleXml: qXml));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Resolve a SmartArt sub-part's zip-URI for raw-set targeting. Given a
+    /// slide index and a rId (data/layout/colors/quickStyle), returns
+    /// e.g. "/ppt/diagrams/data1.xml". Returns null if the rId does not
+    /// resolve to a known diagram part type.
+    /// </summary>
+    internal string? GetSmartArtPartUri(int slideIdx, string relId)
+    {
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return null;
+        var slidePart = parts[slideIdx - 1];
+        try
+        {
+            var part = slidePart.GetPartById(relId);
+            if (part is DiagramDataPart or DiagramLayoutDefinitionPart
+                or DiagramColorsPart or DiagramStylePart)
+            {
+                return part.Uri.OriginalString;
+            }
+        }
+        catch { }
+        return null;
     }
 
     // Resolve a /slide[N]/picture[M] path's image bytes for base64-inline emit.

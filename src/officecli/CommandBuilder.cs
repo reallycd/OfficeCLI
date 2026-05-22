@@ -702,6 +702,15 @@ static partial class CommandBuilder
                 handler.RawSet(partPath, xpath, action, item.Xml);
                 return $"raw-set {action} applied";
             }
+            case "add-part":
+            {
+                if (string.IsNullOrEmpty(item.Parent))
+                    throw new ArgumentException("'add-part' command requires 'parent' field. Example: {\"command\": \"add-part\", \"parent\": \"/slide[1]\", \"type\": \"smartart\", \"props\": {\"data\": \"rId2\"}}");
+                if (string.IsNullOrEmpty(item.Type))
+                    throw new ArgumentException("'add-part' command requires 'type' field. Supported (pptx): chart, smartart.");
+                var (relId, partOut) = handler.AddPart(item.Parent, item.Type, props);
+                return $"Created {item.Type} part: relId={relId} path={partOut}";
+            }
             case "validate":
             {
                 var errors = handler.Validate();

@@ -524,6 +524,15 @@ public static partial class PptxBatchEmitter
         if (exotic.HasExoticTiming && exotic.TimingXml != null)
             EmitRawSlideSlice(slidePath, "p:timing", exotic.TimingXml, items, ctx);
 
+        // SmartArt graphicFrames live in /p:sld/p:cSld/p:spTree but are
+        // skipped by NodeBuilder (table/chart-only routing). Phase 3b emits
+        // them as add-part smartart (creates the four diagram sub-parts with
+        // caller-pinned rIds) followed by raw-set rows that fill each part's
+        // XML, and a final raw-set append on /p:sld/p:cSld/p:spTree with the
+        // graphicFrame XML. Caller-pinned rIds make the graphicFrame's
+        // <dgm:relIds> round-trip byte-equal.
+        EmitSmartArtsForSlide(ppt, slideNum, slidePath, items, ctx);
+
         // Notes body content — stub for PR1. Notes part presence does not
         // surface in the slide subtree's children today (notes live under
         // /slide[N]/notes); PR2 will reach in and emit them.
@@ -557,9 +566,11 @@ public static partial class PptxBatchEmitter
         // are silently dropped.
 
         // SmartArt sits inside a graphicFrame as a dgm:relIds element.
-        if (xml.Contains("dgm:relIds", StringComparison.Ordinal))
-            ctx.Unsupported.Add(new UnsupportedWarning("smartArt", slidePath,
-                "diagram (SmartArt) graphic frame present"));
+        // Phase 3b: handled by EmitSmartArtsForSlide via add-part smartart +
+        // raw-set passthrough; no warning is raised when we can extract the
+        // four diagram parts. If extraction fails the SmartArt emit silently
+        // falls back to a missing slice — caller sees a degraded slide but
+        // no crash.
 
         // OLE / video / audio / 3D — element names are distinctive enough.
         if (xml.Contains("<p:oleObj", StringComparison.Ordinal))
@@ -847,6 +858,111 @@ public static partial class PptxBatchEmitter
         var closeIdx = xml.IndexOf(closeTag, gtIdx, StringComparison.Ordinal);
         if (closeIdx < 0) return -1;
         return closeIdx + closeTag.Length;
+    }
+
+    // SmartArt passthrough: per slide, scan for <p:graphicFrame> hosts that
+    // carry <dgm:relIds>; emit an `add-part smartart` row that creates the
+    // four diagram sub-parts (data/layout/colors/quickStyle) under the
+    // slide with the SOURCE's rIds pinned via --prop. Then emit four
+    // raw-set replace rows (one per diagram part) and one raw-set append
+    // on /p:sld/p:cSld/p:spTree carrying the graphicFrame XML verbatim.
+    //
+    // rId stability: pinning the rIds on add-part makes the graphicFrame's
+    // <dgm:relIds dm=... lo=... cs=... qs=...> attributes resolve to the
+    // same diagram parts after replay. Without pinning, AddNewPart<T>()
+    // would allocate rId{slide+K} sequentially which would NOT match the
+    // source's rIds and the SDK's serialized graphicFrame would drift on
+    // re-emit.
+    //
+    // Diagram part XML canonicalization is the same shape-stripping/canon
+    // pass as the slide-slice path; both passes need to be idempotent so
+    // first emit (raw XML from source) and second emit (raw XML from
+    // post-replay SDK-roundtripped doc) compare byte-equal.
+    private static void EmitSmartArtsForSlide(PowerPointHandler ppt, int slideNum,
+                                              string slidePath, List<BatchItem> items,
+                                              SlideEmitContext ctx)
+    {
+        IReadOnlyList<PowerPointHandler.SmartArtInfo> smartArts;
+        try { smartArts = ppt.GetSmartArtsOnSlide(slideNum); }
+        catch { return; }
+        if (smartArts.Count == 0) return;
+
+        foreach (var sa in smartArts)
+        {
+            // add-part smartart with pinned rIds. Props carry the source's
+            // rIds; replay's AddPart calls AddNewPart<T>(rId) for each.
+            items.Add(new BatchItem
+            {
+                Command = "add-part",
+                Parent = slidePath,
+                Type = "smartart",
+                Props = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["data"] = sa.DataRelId,
+                    ["layout"] = sa.LayoutRelId,
+                    ["colors"] = sa.ColorsRelId,
+                    ["quickStyle"] = sa.QuickStyleRelId,
+                },
+            });
+
+            // Resolve each rId to its part URI for raw-set targeting.
+            // The post-replay file will have the same URIs because the
+            // SlidePart's part-name allocator is deterministic for a
+            // freshly created sub-part (e.g. /ppt/diagrams/data1.xml).
+            string? dUri = ppt.GetSmartArtPartUri(slideNum, sa.DataRelId);
+            string? lUri = ppt.GetSmartArtPartUri(slideNum, sa.LayoutRelId);
+            string? cUri = ppt.GetSmartArtPartUri(slideNum, sa.ColorsRelId);
+            string? qUri = ppt.GetSmartArtPartUri(slideNum, sa.QuickStyleRelId);
+            if (dUri == null || lUri == null || cUri == null || qUri == null)
+            {
+                ctx.Unsupported.Add(new UnsupportedWarning(
+                    Element: "smartArt", SlidePath: slidePath,
+                    Reason: "SmartArt diagram part URIs could not be resolved; graphicFrame appended without populated parts"));
+            }
+            else
+            {
+                EmitDiagramPart(dUri, "dgm:dataModel", sa.DataXml, items);
+                EmitDiagramPart(lUri, "dgm:layoutDef", sa.LayoutXml, items);
+                EmitDiagramPart(cUri, "dgm:colorsDef", sa.ColorsXml, items);
+                EmitDiagramPart(qUri, "dgm:styleDef", sa.QuickStyleXml, items);
+            }
+
+            // Append the graphicFrame into /p:sld/p:cSld/p:spTree. The
+            // slice carries the <dgm:relIds> with the source's rIds, which
+            // resolve to the just-created diagram parts via the pinned rIds.
+            string gfCanon;
+            try { gfCanon = NormalizeSlideRawSlice(sa.GraphicFrameXml); }
+            catch { gfCanon = sa.GraphicFrameXml; }
+            items.Add(new BatchItem
+            {
+                Command = "raw-set",
+                Part = slidePath,
+                Xpath = "/p:sld/p:cSld/p:spTree",
+                Action = "append",
+                Xml = gfCanon,
+            });
+        }
+    }
+
+    private static void EmitDiagramPart(string partUri, string rootName,
+                                        string sliceXml, List<BatchItem> items)
+    {
+        // Canonicalize for round-trip stability: same canonicalizer as the
+        // slide slice path. The diagram parts only carry dgm: / a: ambient
+        // ns most of the time; NormalizeSlideRawSlice's ambient set covers
+        // a:/r:/mc: which is a superset. Extension prefixes specific to the
+        // part travel verbatim.
+        string canon;
+        try { canon = NormalizeSlideRawSlice(sliceXml); }
+        catch { canon = sliceXml; }
+        items.Add(new BatchItem
+        {
+            Command = "raw-set",
+            Part = partUri,
+            Xpath = "/" + rootName,
+            Action = "replace",
+            Xml = canon,
+        });
     }
 
     private static void EmitRawSlideSlice(string slidePath, string localName,
