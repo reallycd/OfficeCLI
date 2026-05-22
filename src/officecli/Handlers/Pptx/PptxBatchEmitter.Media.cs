@@ -93,4 +93,72 @@ public static partial class PptxBatchEmitter
     {
         "brightness", "contrast", "shadow", "glow",
     };
+
+    // Phase 3c-media. Mirrors EmitSmartArtsForSlide (Phase 3b). Per slide,
+    // scan for <p:pic> hosts that carry <a:videoFile> or <a:audioFile>;
+    // emit an `add-part video|audio` row that creates the underlying
+    // MediaDataPart + Video/AudioReferenceRelationship + MediaReferenceRel
+    // + thumbnail ImagePart with SOURCE rIds pinned via --prop. Then emit
+    // one raw-set append on /p:sld/p:cSld/p:spTree carrying the <p:pic>
+    // XML verbatim — the pinned rIds make the videoFile/audioFile/p14:media/
+    // blip references all resolve to the just-created parts.
+    //
+    // Skipped by the typed walk: the dispatch in EmitSlide's switch routes
+    // child.Type == "video"|"audio" away from EmitPicture (which would
+    // re-emit a plain picture without the media rels) into a no-op,
+    // letting THIS pass own the entire <p:pic> emit.
+    //
+    // Audit caveat: the SDK's CreateMediaDataPart allocates a URI like
+    // /ppt/media/media1.mp4, NOT the source's /media/mediadata.mp4
+    // (legacy zip-root layout). The binary content survives byte-equal;
+    // the audit's content-loss check is by content hash (see
+    // tools/pptx-roundtrip-audit.py).
+    internal static void EmitMediaForSlide(PowerPointHandler ppt, int slideNum,
+                                           string slidePath, List<BatchItem> items,
+                                           SlideEmitContext ctx)
+    {
+        IReadOnlyList<PowerPointHandler.MediaInfo> medias;
+        try { medias = ppt.GetMediaOnSlide(slideNum); }
+        catch { return; }
+        if (medias.Count == 0) return;
+
+        foreach (var m in medias)
+        {
+            var partType = m.IsVideo ? "video" : "audio";
+            var ridKey   = m.IsVideo ? "video-rid" : "audio-rid";
+            var props = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["data"] = Convert.ToBase64String(m.MediaBytes),
+                ["content-type"] = m.MediaContentType,
+                ["extension"] = m.MediaExtension,
+                ["thumbnail-data"] = Convert.ToBase64String(m.ThumbnailBytes),
+                ["thumbnail-content-type"] = m.ThumbnailContentType,
+                [ridKey] = m.LinkRelId,
+                ["media-rid"] = m.MediaEmbedRelId,
+                ["thumbnail-rid"] = m.ThumbnailRelId,
+            };
+            items.Add(new BatchItem
+            {
+                Command = "add-part",
+                Parent = slidePath,
+                Type = partType,
+                Props = props,
+            });
+
+            // Append the <p:pic> verbatim into the spTree. Canonicalise
+            // via the slide-slice canonicaliser so post-replay re-emit
+            // hits byte-equal (same trick SmartArt uses).
+            string picCanon;
+            try { picCanon = NormalizeSlideRawSlice(m.PicXml); }
+            catch { picCanon = m.PicXml; }
+            items.Add(new BatchItem
+            {
+                Command = "raw-set",
+                Part = slidePath,
+                Xpath = "/p:sld/p:cSld/p:spTree",
+                Action = "append",
+                Xml = picCanon,
+            });
+        }
+    }
 }

@@ -569,9 +569,140 @@ public partial class PowerPointHandler : IDocumentHandler
                 var encoded = $"data={dataActualRid};layout={layoutActualRid};colors={colorsActualRid};quickStyle={styleActualRid}";
                 return (encoded, parentPartPath);
 
+            case "video":
+            case "audio":
+                // Phase 3c-media. Mirror Phase 3b SmartArt: create the
+                // underlying parts (MediaDataPart + ImagePart thumbnail)
+                // and pin all three rIds via properties so the post-replay
+                // <p:pic> appended by raw-set finds the same rIds it carried
+                // in the source. The graphicFrame analogue here is the
+                // <p:pic> referencing <a:videoFile r:link=…/> +
+                // <p14:media r:embed=…/> in nvPr, plus <a:blip r:embed=…/>
+                // in blipFill for the thumbnail.
+                //
+                // Props (all optional except data + thumbnail-data):
+                //   data                   = base64 binary (mp4/m4a/…)
+                //   content-type           = "video/mp4" / "audio/mpeg" / …
+                //   extension              = ".mp4" / ".m4a" (for the
+                //                            MediaDataPart URI extension;
+                //                            best-effort from content-type
+                //                            when omitted)
+                //   thumbnail-data         = base64 image binary
+                //   thumbnail-content-type = "image/png" / "image/jpeg"
+                //   video-rid / audio-rid  = pinned VideoReference / AudioReference rId
+                //   media-rid              = pinned p14:media MediaReference rId
+                //   thumbnail-rid          = pinned ImagePart rId
+                //
+                // Audio uses AddAudioReferenceRelationship; video uses
+                // AddVideoReferenceRelationship. Both ALSO add a
+                // MediaReferenceRelationship (the p14:media r:embed is
+                // distinct from the legacy r:link).
+                var mediaSlideMatch = System.Text.RegularExpressions.Regex.Match(
+                    parentPartPath, @"^/slide\[(\d+)\]$");
+                if (!mediaSlideMatch.Success)
+                    throw new ArgumentException(
+                        $"{partType} must be added under a slide: add-part <file> '/slide[N]' --type {partType}");
+                var mediaSlideIdx = int.Parse(mediaSlideMatch.Groups[1].Value);
+                var mediaSlidePartsList = GetSlideParts().ToList();
+                if (mediaSlideIdx < 1 || mediaSlideIdx > mediaSlidePartsList.Count)
+                    throw new ArgumentException($"Slide index {mediaSlideIdx} out of range");
+                var mediaSlidePart = mediaSlidePartsList[mediaSlideIdx - 1];
+
+                if (properties == null || !properties.TryGetValue("data", out var mediaB64) || string.IsNullOrEmpty(mediaB64))
+                    throw new ArgumentException(
+                        $"add-part {partType} requires property 'data' (base64 binary)");
+                byte[] mediaBytes;
+                try { mediaBytes = Convert.FromBase64String(mediaB64); }
+                catch (FormatException) { throw new ArgumentException($"add-part {partType}: 'data' is not valid base64"); }
+
+                var mediaContentType = properties.TryGetValue("content-type", out var mct) && !string.IsNullOrEmpty(mct)
+                    ? mct
+                    : (partType == "video" ? "video/mp4" : "audio/mpeg");
+                var mediaExt = properties.TryGetValue("extension", out var mxt) && !string.IsNullOrEmpty(mxt)
+                    ? mxt
+                    : mediaContentType switch {
+                        "video/mp4" => ".mp4", "video/x-msvideo" => ".avi",
+                        "video/x-ms-wmv" => ".wmv", "video/mpeg" => ".mpg",
+                        "video/quicktime" => ".mov",
+                        "audio/mpeg" => ".mp3", "audio/wav" => ".wav",
+                        "audio/x-ms-wma" => ".wma", "audio/mp4" => ".m4a",
+                        _ => ".bin" };
+
+                var mediaDataPart = _doc.CreateMediaDataPart(mediaContentType, mediaExt);
+                using (var inStream = new MemoryStream(mediaBytes))
+                    mediaDataPart.FeedData(inStream);
+
+                string? pinnedVideoRid = properties.TryGetValue("video-rid", out var vr) ? vr : null;
+                string? pinnedAudioRid = properties.TryGetValue("audio-rid", out var ar) ? ar : null;
+                string? pinnedMediaRid = properties.TryGetValue("media-rid", out var mr) ? mr : null;
+                string? pinnedThumbRid = properties.TryGetValue("thumbnail-rid", out var tr) ? tr : null;
+
+                string linkRelId;
+                if (partType == "video")
+                {
+                    linkRelId = !string.IsNullOrEmpty(pinnedVideoRid)
+                        ? mediaSlidePart.AddVideoReferenceRelationship(mediaDataPart, pinnedVideoRid).Id
+                        : mediaSlidePart.AddVideoReferenceRelationship(mediaDataPart).Id;
+                }
+                else
+                {
+                    linkRelId = !string.IsNullOrEmpty(pinnedAudioRid)
+                        ? mediaSlidePart.AddAudioReferenceRelationship(mediaDataPart, pinnedAudioRid).Id
+                        : mediaSlidePart.AddAudioReferenceRelationship(mediaDataPart).Id;
+                }
+                var mediaEmbedRid = !string.IsNullOrEmpty(pinnedMediaRid)
+                    ? mediaSlidePart.AddMediaReferenceRelationship(mediaDataPart, pinnedMediaRid).Id
+                    : mediaSlidePart.AddMediaReferenceRelationship(mediaDataPart).Id;
+
+                // Thumbnail (poster) — required so the <a:blip r:embed> in
+                // the <p:pic>'s blipFill resolves on replay. Caller MAY
+                // omit thumbnail-data; we then seed a 1x1 transparent PNG
+                // (mirrors the AddMedia helper's placeholder path).
+                byte[] thumbBytes;
+                PartTypeInfo thumbType;
+                if (properties.TryGetValue("thumbnail-data", out var tdB64) && !string.IsNullOrEmpty(tdB64))
+                {
+                    try { thumbBytes = Convert.FromBase64String(tdB64); }
+                    catch (FormatException) { throw new ArgumentException($"add-part {partType}: 'thumbnail-data' is not valid base64"); }
+                    var thumbCT = properties.TryGetValue("thumbnail-content-type", out var tct) && !string.IsNullOrEmpty(tct)
+                        ? tct
+                        : "image/png";
+                    thumbType = thumbCT switch {
+                        "image/png" => ImagePartType.Png, "image/jpeg" => ImagePartType.Jpeg,
+                        "image/gif" => ImagePartType.Gif, "image/bmp" => ImagePartType.Bmp,
+                        "image/tiff" => ImagePartType.Tiff, _ => ImagePartType.Png };
+                }
+                else
+                {
+                    thumbBytes = new byte[]
+                    {
+                        0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,
+                        0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,
+                        0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x01,0x08,0x06,0x00,0x00,0x00,0x1F,0x15,0xC4,0x89,
+                        0x00,0x00,0x00,0x0D,0x49,0x44,0x41,0x54,
+                        0x08,0xD7,0x63,0x60,0x60,0x60,0x60,0x00,0x00,0x00,0x05,0x00,0x01,0x87,0xA1,0x4E,0xD4,
+                        0x00,0x00,0x00,0x00,0x49,0x45,0x4E,0x44,0xAE,0x42,0x60,0x82
+                    };
+                    thumbType = ImagePartType.Png;
+                }
+                var thumbImagePart = !string.IsNullOrEmpty(pinnedThumbRid)
+                    ? mediaSlidePart.AddImagePart(thumbType, pinnedThumbRid)
+                    : mediaSlidePart.AddImagePart(thumbType);
+                using (var thumbStream = new MemoryStream(thumbBytes))
+                    thumbImagePart.FeedData(thumbStream);
+                var thumbActualRid = mediaSlidePart.GetIdOfPart(thumbImagePart);
+
+                // Encode three rIds — emitter / replay caller may use any
+                // of them when writing the <p:pic> XML via raw-set. The
+                // (RelId, PartPath) tuple's RelId is consumed by callers
+                // who do their own bookkeeping; format mirrors smartart.
+                var mediaKey = partType == "video" ? "video" : "audio";
+                var encodedMedia = $"{mediaKey}={linkRelId};media={mediaEmbedRid};thumbnail={thumbActualRid}";
+                return (encodedMedia, parentPartPath);
+
             default:
                 throw new ArgumentException(
-                    $"Unknown part type: {partType}. Supported: chart, smartart");
+                    $"Unknown part type: {partType}. Supported: chart, smartart, video, audio");
         }
     }
 
@@ -729,6 +860,126 @@ public partial class PowerPointHandler : IDocumentHandler
         }
         catch { }
         return null;
+    }
+
+    /// <summary>
+    /// Per-slide video/audio info for PptxBatchEmitter Phase 3c-media
+    /// passthrough. Returns one entry per &lt;p:pic&gt; on the slide whose
+    /// nvPr carries &lt;a:videoFile&gt; or &lt;a:audioFile&gt;. Each entry
+    /// includes the &lt;p:pic&gt; XML verbatim plus the source's three rIds
+    /// (link/media/thumbnail) and the underlying binary streams, so the
+    /// emitter can issue an `add-part video` (or `audio`) + a `raw-set`
+    /// append on /p:sld/p:cSld/p:spTree that round-trips byte-equal.
+    /// </summary>
+    internal readonly record struct MediaInfo(
+        string PicXml,
+        bool IsVideo,
+        string LinkRelId,
+        string MediaEmbedRelId,
+        string ThumbnailRelId,
+        byte[] MediaBytes,
+        string MediaContentType,
+        string MediaExtension,
+        byte[] ThumbnailBytes,
+        string ThumbnailContentType);
+
+    internal IReadOnlyList<MediaInfo> GetMediaOnSlide(int slideIdx)
+    {
+        var result = new List<MediaInfo>();
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return result;
+        var slidePart = parts[slideIdx - 1];
+        var slide = GetSlide(slidePart);
+        var spTree = slide.CommonSlideData?.ShapeTree;
+        if (spTree == null) return result;
+
+        foreach (var pic in spTree.Descendants<Picture>())
+        {
+            var nvPr = pic.NonVisualPictureProperties?.ApplicationNonVisualDrawingProperties;
+            if (nvPr == null) continue;
+
+            var videoFile = nvPr.GetFirstChild<DocumentFormat.OpenXml.Drawing.VideoFromFile>();
+            var audioFile = nvPr.GetFirstChild<DocumentFormat.OpenXml.Drawing.AudioFromFile>();
+            bool isVideo = videoFile != null;
+            bool isAudio = audioFile != null;
+            if (!isVideo && !isAudio) continue;
+
+            string? linkRid = isVideo ? videoFile?.Link?.Value : audioFile?.Link?.Value;
+            if (string.IsNullOrEmpty(linkRid)) continue;
+
+            // Locate the p14:media extension carrying the MediaReference rId.
+            string? mediaEmbedRid = null;
+            var p14Media = nvPr.Descendants<DocumentFormat.OpenXml.Office2010.PowerPoint.Media>().FirstOrDefault();
+            if (p14Media?.Embed?.Value != null) mediaEmbedRid = p14Media.Embed.Value;
+            if (string.IsNullOrEmpty(mediaEmbedRid)) continue;
+
+            // Thumbnail rId from blipFill.
+            var blip = pic.BlipFill?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Blip>();
+            var thumbRid = blip?.Embed?.Value;
+            if (string.IsNullOrEmpty(thumbRid)) continue;
+
+            // Resolve media binary via either rId. Both VideoReference and
+            // MediaReference point at the same MediaDataPart.
+            byte[]? mediaBytes = null;
+            string? mediaCT = null;
+            string? mediaExt = null;
+            try
+            {
+                MediaDataPart? mdp = null;
+                foreach (var rel in slidePart.DataPartReferenceRelationships)
+                {
+                    if (rel.Id == linkRid || rel.Id == mediaEmbedRid)
+                    {
+                        if (rel.DataPart is MediaDataPart mdp2) { mdp = mdp2; break; }
+                    }
+                }
+                if (mdp != null)
+                {
+                    using var s = mdp.GetStream();
+                    using var ms = new MemoryStream();
+                    s.CopyTo(ms);
+                    mediaBytes = ms.ToArray();
+                    mediaCT = mdp.ContentType;
+                    // Extract extension from the part Uri.
+                    var u = mdp.Uri.OriginalString;
+                    var dot = u.LastIndexOf('.');
+                    mediaExt = dot > 0 ? u[dot..] : (isVideo ? ".mp4" : ".mp3");
+                }
+            }
+            catch { }
+            if (mediaBytes == null || mediaCT == null || mediaExt == null) continue;
+
+            // Resolve thumbnail binary.
+            byte[]? thumbBytes = null;
+            string? thumbCT = null;
+            try
+            {
+                var p = slidePart.GetPartById(thumbRid);
+                if (p is ImagePart ip)
+                {
+                    using var s = ip.GetStream();
+                    using var ms = new MemoryStream();
+                    s.CopyTo(ms);
+                    thumbBytes = ms.ToArray();
+                    thumbCT = ip.ContentType;
+                }
+            }
+            catch { }
+            if (thumbBytes == null || thumbCT == null) continue;
+
+            result.Add(new MediaInfo(
+                PicXml: pic.OuterXml,
+                IsVideo: isVideo,
+                LinkRelId: linkRid,
+                MediaEmbedRelId: mediaEmbedRid,
+                ThumbnailRelId: thumbRid,
+                MediaBytes: mediaBytes,
+                MediaContentType: mediaCT,
+                MediaExtension: mediaExt,
+                ThumbnailBytes: thumbBytes,
+                ThumbnailContentType: thumbCT));
+        }
+        return result;
     }
 
     // Resolve a /slide[N]/picture[M] path's image bytes for base64-inline emit.

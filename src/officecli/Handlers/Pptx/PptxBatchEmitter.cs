@@ -488,16 +488,24 @@ public static partial class PptxBatchEmitter
                     ord["chart"] = ord.GetValueOrDefault("chart", 0) + 1;
                     EmitChart(ppt, child, slidePath, items, ctx, ord["chart"]);
                     break;
-                case "ole":
                 case "video":
                 case "audio":
+                    // Phase 3c-media: routed through EmitMediaForSlide (a
+                    // per-slide pass at slide-end) so the entire <p:pic>
+                    // including <a:videoFile>/<a:audioFile>/p14:media rel
+                    // references survive via add-part + raw-set passthrough.
+                    // The typed walk skips them here to avoid double-emit
+                    // (EmitPicture would only re-emit the picture shape
+                    // without the media wiring).
+                    break;
+                case "ole":
                 case "3dmodel":
                 case "model3d":
                 case "zoom":
                     // PR3+ scope. ProbeUnsupportedOnSlide already records the
-                    // OLE/video/audio/3D markers via raw-XML sniff; this branch
-                    // catches the children that surfaced via the typed Get
-                    // tree (when NodeBuilder learns to tag them).
+                    // OLE/3D markers via raw-XML sniff; this branch catches
+                    // the children that surfaced via the typed Get tree
+                    // (when NodeBuilder learns to tag them).
                     ctx.Unsupported.Add(new UnsupportedWarning(
                         Element: child.Type ?? "unknown",
                         SlidePath: slidePath,
@@ -532,6 +540,11 @@ public static partial class PptxBatchEmitter
         // graphicFrame XML. Caller-pinned rIds make the graphicFrame's
         // <dgm:relIds> round-trip byte-equal.
         EmitSmartArtsForSlide(ppt, slideNum, slidePath, items, ctx);
+
+        // Phase 3c-media: video/audio <p:pic> hosts with their underlying
+        // MediaDataPart + thumbnail ImagePart, mirroring the SmartArt
+        // passthrough. The typed walk skipped video/audio children above.
+        EmitMediaForSlide(ppt, slideNum, slidePath, items, ctx);
 
         // Notes body content — stub for PR1. Notes part presence does not
         // surface in the slide subtree's children today (notes live under
@@ -576,10 +589,11 @@ public static partial class PptxBatchEmitter
         if (xml.Contains("<p:oleObj", StringComparison.Ordinal))
             ctx.Unsupported.Add(new UnsupportedWarning("oleObj", slidePath,
                 "embedded OLE object present"));
-        if (xml.Contains("<p:video", StringComparison.Ordinal))
-            ctx.Unsupported.Add(new UnsupportedWarning("video", slidePath, "video element present"));
-        if (xml.Contains("<p:audio", StringComparison.Ordinal))
-            ctx.Unsupported.Add(new UnsupportedWarning("audio", slidePath, "audio element present"));
+        // Phase 3c-media: video/audio <p:pic> hosts round-trip via
+        // EmitMediaForSlide (add-part + raw-set). No probe warning here —
+        // even if the slide carries a <p:video>/<p:audio> timing node, the
+        // <p:pic> shape itself surfaces in the typed Get tree as
+        // child.Type = "video"/"audio" and is now handled.
         // Real-world 3D models live inside <mc:AlternateContent>/<mc:Choice
         // Requires="am3d"> with element <am3d:model3d ...>. The legacy probe
         // checked only the bare <p:model3d ...> form which never appears in
