@@ -68,98 +68,65 @@ public partial class PowerPointHandler
         string parentPathPrefix,
         bool isSlideRoot)
     {
-        int shapeIdx = 0;
-        foreach (var shape in container.Elements<Shape>())
-        {
-            children.Add(ShapeToNode(shape, slideNum, shapeIdx + 1, depth, slidePart, parentPathPrefix));
-            shapeIdx++;
-        }
-
-        int tblIdx = 0;
-        int chartIdx = 0;
-        foreach (var gf in container.Elements<GraphicFrame>())
-        {
-            if (gf.Descendants<Drawing.Table>().Any())
-            {
-                tblIdx++;
-                children.Add(TableToNode(gf, slideNum, tblIdx, depth, parentPathPrefix));
-            }
-            else if (gf.Descendants<C.ChartReference>().Any() || IsExtendedChartFrame(gf))
-            {
-                chartIdx++;
-                children.Add(ChartToNode(gf, slidePart, slideNum, chartIdx, depth, parentPathPrefix));
-            }
-        }
-
-        int picIdx = 0;
-        foreach (var pic in container.Elements<Picture>())
-        {
-            children.Add(PictureToNode(pic, slideNum, picIdx + 1, slidePart, parentPathPrefix));
-            picIdx++;
-        }
-
+        // CONSISTENCY(spTree-order): walk container.ChildElements ONCE in
+        // declared order so the Children list mirrors true spTree stacking.
+        // Per-type positional indices (shapeIdx, picIdx, tblIdx, chartIdx,
+        // grpIdx, cxnIdx) are still per-element-type (matching ResolveShape /
+        // ResolvePicture / etc. path semantics), but emission order is the
+        // raw spTree order. Previously this routine bucketed by element type
+        // (all Shapes first, then GraphicFrames, then Pictures, then Groups,
+        // then ConnectionShapes), so dump/replay reordered a kitchen-sink slide
+        // built as shape→textbox→picture→table→chart→equation into shape→
+        // textbox→equation→table→chart→picture — zorder values on table/chart/
+        // equation shifted on every round-trip even though geometry preserved
+        // visual stacking. Bug A from round-trip strong-conclusion audit.
         var contentElements = container.ChildElements
             .Where(e => e is Shape or Picture or GraphicFrame or GroupShape or ConnectionShape).ToList();
 
-        int grpIdx = 0;
-        foreach (var grp in container.Elements<GroupShape>())
+        int shapeIdx = 0, picIdx = 0, tblIdx = 0, chartIdx = 0, grpIdx = 0, cxnIdx = 0;
+        // First pass: just allocate per-type positional indices in element order
+        // for nodes other than groups (groups need recursion handled inline
+        // below, but their positional index is also assigned during this walk).
+        foreach (var el in container.ChildElements)
         {
-            grpIdx++;
-            var grpName = grp.NonVisualGroupShapeProperties?.NonVisualDrawingProperties?.Name?.Value ?? "Group";
-            var grpPathSeg = BuildElementPathSegment("group", grp, grpIdx);
-            var grpNode = new DocumentNode
+            switch (el)
             {
-                Path = $"{parentPathPrefix}/{grpPathSeg}",
-                Type = "group",
-                Preview = grpName,
-                ChildCount = grp.Elements<Shape>().Count() + grp.Elements<Picture>().Count()
-                    + grp.Elements<GraphicFrame>().Count() + grp.Elements<ConnectionShape>().Count()
-                    + grp.Elements<GroupShape>().Count()
-            };
-            grpNode.Format["name"] = grpName;
-            var grpXfrm = grp.GroupShapeProperties?.TransformGroup;
-            if (grpXfrm?.Offset?.X != null) grpNode.Format["x"] = FormatEmu(grpXfrm.Offset.X.Value);
-            if (grpXfrm?.Offset?.Y != null) grpNode.Format["y"] = FormatEmu(grpXfrm.Offset.Y.Value);
-            if (grpXfrm?.Extents?.Cx != null) grpNode.Format["width"] = FormatEmu(grpXfrm.Extents.Cx.Value);
-            if (grpXfrm?.Extents?.Cy != null) grpNode.Format["height"] = FormatEmu(grpXfrm.Extents.Cy.Value);
-            if (grpXfrm?.Rotation != null && grpXfrm.Rotation.Value != 0)
-                grpNode.Format["rotation"] = $"{grpXfrm.Rotation.Value / 60000.0:0.######}";
-            var grpFillColor = ReadColorFromFill(grp.GroupShapeProperties?.GetFirstChild<Drawing.SolidFill>());
-            if (grpFillColor != null) grpNode.Format["fill"] = grpFillColor;
-            else if (grp.GroupShapeProperties?.GetFirstChild<Drawing.NoFill>() != null) grpNode.Format["fill"] = "none";
-            else if (grp.GroupShapeProperties?.GetFirstChild<Drawing.GradientFill>() != null) grpNode.Format["fill"] = "gradient";
-            var grpZIdx = contentElements.IndexOf(grp);
-            if (grpZIdx >= 0) grpNode.Format["zorder"] = grpZIdx + 1;
-            // Hyperlink (nvGrpSpPr/cNvPr/a:hlinkClick) — same slot as shape/picture.
-            var grpHl = grp.NonVisualGroupShapeProperties?.NonVisualDrawingProperties?
-                .GetFirstChild<Drawing.HyperlinkOnClick>();
-            var grpLinkUrl = ReadHyperlinkOnClickUrl(grpHl, slidePart);
-            if (grpLinkUrl != null) grpNode.Format["link"] = grpLinkUrl;
-            var grpTip = grpHl?.Tooltip?.Value;
-            if (!string.IsNullOrEmpty(grpTip)) grpNode.Format["tooltip"] = grpTip!;
-
-            // Recurse into the group's contents when depth allows, so callers
-            // see the same iceberg-free view through Get that Query already
-            // provides. Group content paths become /slide[N]/group[K]/<type>[L].
-            if (depth > 0)
-            {
-                BuildChildNodesIntoContainer(
-                    grpNode.Children, grp, slidePart, slideNum, depth - 1,
-                    $"{parentPathPrefix}/{grpPathSeg}", isSlideRoot: false);
+                case Shape shape:
+                    shapeIdx++;
+                    children.Add(ShapeToNode(shape, slideNum, shapeIdx, depth, slidePart, parentPathPrefix));
+                    break;
+                case GraphicFrame gf:
+                    if (gf.Descendants<Drawing.Table>().Any())
+                    {
+                        tblIdx++;
+                        children.Add(TableToNode(gf, slideNum, tblIdx, depth, parentPathPrefix));
+                    }
+                    else if (gf.Descendants<C.ChartReference>().Any() || IsExtendedChartFrame(gf))
+                    {
+                        chartIdx++;
+                        children.Add(ChartToNode(gf, slidePart, slideNum, chartIdx, depth, parentPathPrefix));
+                    }
+                    break;
+                case Picture pic:
+                    picIdx++;
+                    children.Add(PictureToNode(pic, slideNum, picIdx, slidePart, parentPathPrefix));
+                    break;
+                case GroupShape grp:
+                    grpIdx++;
+                    children.Add(BuildGroupNode(grp, slidePart, slideNum, depth, parentPathPrefix, grpIdx, contentElements));
+                    break;
+                case ConnectionShape cxn:
+                    cxnIdx++;
+                    children.Add(ConnectorToNode(cxn, slideNum, cxnIdx, parentPathPrefix));
+                    break;
             }
-            children.Add(grpNode);
-        }
-
-        int cxnIdx = 0;
-        foreach (var cxn in container.Elements<ConnectionShape>())
-        {
-            cxnIdx++;
-            children.Add(ConnectorToNode(cxn, slideNum, cxnIdx, parentPathPrefix));
         }
 
         // Zoom and 3D model are slide-level only; they are not valid
         // children of a GroupShape per the OOXML schema, so only enumerate
-        // them when we're at the slide root.
+        // them when we're at the slide root. These are appended AFTER the
+        // shape-tree walk because they live in <p:ext> sections, not in
+        // spTree native order.
         if (isSlideRoot && container is ShapeTree rootShapeTree)
         {
             var zoomElements = GetZoomElements(rootShapeTree);
@@ -178,6 +145,54 @@ public partial class PowerPointHandler
                 children.Add(Model3DToNode(m3dEl, slideNum, m3dIdx));
             }
         }
+    }
+
+    private DocumentNode BuildGroupNode(GroupShape grp, SlidePart slidePart, int slideNum,
+        int depth, string parentPathPrefix, int grpIdx, List<OpenXmlElement> contentElements)
+    {
+        var grpName = grp.NonVisualGroupShapeProperties?.NonVisualDrawingProperties?.Name?.Value ?? "Group";
+        var grpPathSeg = BuildElementPathSegment("group", grp, grpIdx);
+        var grpNode = new DocumentNode
+        {
+            Path = $"{parentPathPrefix}/{grpPathSeg}",
+            Type = "group",
+            Preview = grpName,
+            ChildCount = grp.Elements<Shape>().Count() + grp.Elements<Picture>().Count()
+                + grp.Elements<GraphicFrame>().Count() + grp.Elements<ConnectionShape>().Count()
+                + grp.Elements<GroupShape>().Count()
+        };
+        grpNode.Format["name"] = grpName;
+        var grpXfrm = grp.GroupShapeProperties?.TransformGroup;
+        if (grpXfrm?.Offset?.X != null) grpNode.Format["x"] = FormatEmu(grpXfrm.Offset.X.Value);
+        if (grpXfrm?.Offset?.Y != null) grpNode.Format["y"] = FormatEmu(grpXfrm.Offset.Y.Value);
+        if (grpXfrm?.Extents?.Cx != null) grpNode.Format["width"] = FormatEmu(grpXfrm.Extents.Cx.Value);
+        if (grpXfrm?.Extents?.Cy != null) grpNode.Format["height"] = FormatEmu(grpXfrm.Extents.Cy.Value);
+        if (grpXfrm?.Rotation != null && grpXfrm.Rotation.Value != 0)
+            grpNode.Format["rotation"] = $"{grpXfrm.Rotation.Value / 60000.0:0.######}";
+        var grpFillColor = ReadColorFromFill(grp.GroupShapeProperties?.GetFirstChild<Drawing.SolidFill>());
+        if (grpFillColor != null) grpNode.Format["fill"] = grpFillColor;
+        else if (grp.GroupShapeProperties?.GetFirstChild<Drawing.NoFill>() != null) grpNode.Format["fill"] = "none";
+        else if (grp.GroupShapeProperties?.GetFirstChild<Drawing.GradientFill>() != null) grpNode.Format["fill"] = "gradient";
+        var grpZIdx = contentElements.IndexOf(grp);
+        if (grpZIdx >= 0) grpNode.Format["zorder"] = grpZIdx + 1;
+        // Hyperlink (nvGrpSpPr/cNvPr/a:hlinkClick) — same slot as shape/picture.
+        var grpHl = grp.NonVisualGroupShapeProperties?.NonVisualDrawingProperties?
+            .GetFirstChild<Drawing.HyperlinkOnClick>();
+        var grpLinkUrl = ReadHyperlinkOnClickUrl(grpHl, slidePart);
+        if (grpLinkUrl != null) grpNode.Format["link"] = grpLinkUrl;
+        var grpTip = grpHl?.Tooltip?.Value;
+        if (!string.IsNullOrEmpty(grpTip)) grpNode.Format["tooltip"] = grpTip!;
+
+        // Recurse into the group's contents when depth allows, so callers
+        // see the same iceberg-free view through Get that Query already
+        // provides. Group content paths become /slide[N]/group[K]/<type>[L].
+        if (depth > 0)
+        {
+            BuildChildNodesIntoContainer(
+                grpNode.Children, grp, slidePart, slideNum, depth - 1,
+                $"{parentPathPrefix}/{grpPathSeg}", isSlideRoot: false);
+        }
+        return grpNode;
     }
 
     private static DocumentNode TableToNode(GraphicFrame gf, int slideNum, int tblIdx, int depth, string? parentPathPrefix = null)
