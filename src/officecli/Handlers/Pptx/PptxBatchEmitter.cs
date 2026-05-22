@@ -580,7 +580,15 @@ public static partial class PptxBatchEmitter
             ctx.Unsupported.Add(new UnsupportedWarning("video", slidePath, "video element present"));
         if (xml.Contains("<p:audio", StringComparison.Ordinal))
             ctx.Unsupported.Add(new UnsupportedWarning("audio", slidePath, "audio element present"));
-        if (xml.Contains("p:model3d", StringComparison.Ordinal))
+        // Real-world 3D models live inside <mc:AlternateContent>/<mc:Choice
+        // Requires="am3d"> with element <am3d:model3d ...>. The legacy probe
+        // checked only the bare <p:model3d ...> form which never appears in
+        // PowerPoint-authored decks, so a 3D-bearing pptx silently produced
+        // no warning AND no semantic emit AND no raw-set — the part was
+        // dropped without trace. Match both forms.
+        if (xml.Contains("p:model3d", StringComparison.Ordinal) ||
+            xml.Contains("am3d:model3d", StringComparison.Ordinal) ||
+            xml.Contains("am3d=", StringComparison.Ordinal))
             ctx.Unsupported.Add(new UnsupportedWarning("model3D", slidePath, "3D model present"));
 
         // Exotic transitions (morph, p15:prstTrans gallery, p14:* like flip/
