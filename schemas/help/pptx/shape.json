@@ -17,7 +17,7 @@
       "/slide[N]/shape[N]"
     ]
   },
-  "note": "Positional /shape[N] enumerates ALL shapes on the slide including layout-inherited placeholders (title, body, etc.) — newly added shapes typically land at the end, not at /shape[1]. The 'add' command echoes back the canonical /shape[@id=ID] path; prefer that for follow-up Set/Get rather than guessing the positional index.\n\neffective.* keys (direction, size, font, color, bold) are read-only resolved values walked up the placeholder→layout→master→presentation defaults inheritance chain. They appear only when the direct key is absent on this shape; once a direct value is set, the corresponding effective.* is suppressed. Each effective.* key has a paired effective.*.src key (e.g. effective.bold.src) naming the cascade layer that supplied the value (placeholder|layout|master|defaults).",
+  "note": "Positional /shape[N] enumerates ALL shapes on the slide including layout-inherited placeholders — new shapes typically land at the end, not at /shape[1]. `add` echoes the canonical /shape[@id=ID] path; prefer that for follow-up Set/Get. effective.* keys (direction, size, font, color, bold) are read-only inheritance-resolved values walked up the placeholder→layout→master→defaults chain; suppressed when the corresponding direct key is set. Each pairs with effective.*.src naming the writing layer.",
   "extends": "_shared/shape",
   "properties": {
     "evaluated": {
@@ -25,6 +25,13 @@
       "description": "cross-handler protocol flag — emitted on shapes whose body contains an <a:fld> dynamic field (slide number, date-time, footer, etc.). True when every dynamic field has cached text the renderer can show; false when at least one is empty (view text substitutes #OCLI_NOTEVAL!{type}; view issues emits subtype slide_field_not_evaluated). PowerPoint always re-renders fields on open, so there is no cache_stale equivalent. Read this via get --json instead of pattern-matching the sentinel.",
       "add": false, "set": false, "get": true,
       "readback": "true|false (true ⇒ all <a:fld> shapes on this node carry display text)",
+      "enforcement": "report"
+    },
+    "isTitle": {
+      "type": "bool",
+      "description": "true when this shape is the slide title placeholder (or a content placeholder configured as title). Always emitted on every shape so query selectors like `shape[isTitle=true]` and `shape[isTitle=false]` resolve uniformly. Read-only — title-ness is determined by placeholder type at Add time, not as a settable property.",
+      "add": false, "set": false, "get": true,
+      "readback": "true|false (always present)",
       "enforcement": "report"
     },
     "opacity": {
