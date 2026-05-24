@@ -1916,6 +1916,53 @@ public partial class WordHandler
                 wrapper.AppendChild(newRun);
             }
         }
+        // moveFrom / moveTo: low-level OOXML synthesis primitives for
+        // dump/replay round-trip. The two sides MUST share the same w:id +
+        // w:author + w:date to be recognised as a single move operation by
+        // Word — across two independent `add run` calls the CLI cannot infer
+        // which pair the caller means, so trackChange.id is REQUIRED here.
+        // (For interactive authoring the high-level shape would be a single
+        // compound `word move` command that emits both sides atomically.)
+        if (trackChangeKind == "movefrom" || trackChangeKind == "moveto")
+        {
+            if (string.IsNullOrEmpty(trackChangeId))
+                throw new InvalidOperationException(
+                    $"trackChange={trackChangeKind} requires an explicit trackChange.id; "
+                    + "moveFrom and moveTo must share the same id to be recognised as a "
+                    + "pair by Word. Pass --prop trackChange.id=<n> on both sides.");
+
+            var parentEl = newRun.Parent;
+            if (parentEl != null)
+            {
+                OpenXmlElement wrapper = trackChangeKind == "movefrom"
+                    ? new MoveFromRun()
+                    : new MoveToRun();
+                if (!string.IsNullOrEmpty(trackChangeAuthor))
+                {
+                    if (wrapper is MoveFromRun mfA) mfA.Author = trackChangeAuthor;
+                    else if (wrapper is MoveToRun mtA) mtA.Author = trackChangeAuthor;
+                }
+                if (!string.IsNullOrEmpty(trackChangeDate)
+                    && DateTime.TryParse(trackChangeDate, out var mvDate))
+                {
+                    if (wrapper is MoveFromRun mfD) mfD.Date = mvDate;
+                    else if (wrapper is MoveToRun mtD) mtD.Date = mvDate;
+                }
+                if (wrapper is MoveFromRun mfI) mfI.Id = trackChangeId;
+                else if (wrapper is MoveToRun mtI) mtI.Id = trackChangeId;
+                // MoveFrom uses w:delText (same rule as w:del); MoveTo keeps w:t.
+                if (trackChangeKind == "movefrom")
+                {
+                    foreach (var t in newRun.Elements<Text>().ToList())
+                    {
+                        var dt = new DeletedText(t.Text ?? "") { Space = t.Space };
+                        t.Parent?.ReplaceChild(dt, t);
+                    }
+                }
+                parentEl.ReplaceChild(wrapper, newRun);
+                wrapper.AppendChild(newRun);
+            }
+        }
 
         // Refresh textId since paragraph content changed
         targetPara.TextId = GenerateParaId();
