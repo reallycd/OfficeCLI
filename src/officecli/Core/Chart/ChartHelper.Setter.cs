@@ -2874,17 +2874,49 @@ internal static partial class ChartHelper
 
     private static C.TextProperties BuildLabelTextProperties(string spec)
     {
+        // Format: size[:color[:bold-or-fontname[:fontname]]]
+        // The 3rd slot accepts either a bool ("true"/"false") for bold OR a
+        // typeface name (e.g. "Arial"). Earlier this slot was bool-only,
+        // which silently dropped fontname inputs like
+        // `labelFont=14:#FF0000:Arial`. Reader emits the fontname via
+        // `labelFont.name` (dotted subkey), so the round-trip path now also
+        // matches `BuildDefaultRunPropertiesFromCompoundSpec` (axisFont/
+        // legendFont) — compound 3rd slot = fontname unless it parses as a
+        // bool. A 4th slot is honored as the explicit fontname when the
+        // 3rd is the bold flag.
         var parts = spec.Split(':');
-        var fontSize = parts.Length > 0 && int.TryParse(parts[0], out var fs) ? fs * 100 : 1000;
+        var sizeStr = parts.Length > 0
+            ? (parts[0].EndsWith("pt", StringComparison.OrdinalIgnoreCase) ? parts[0][..^2] : parts[0])
+            : "";
+        var fontSize = sizeStr.Length > 0 && double.TryParse(sizeStr,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var fs)
+            ? (int)System.Math.Round(fs * 100) : 1000;
         var color = parts.Length > 1 ? parts[1] : null;
-        var bold = parts.Length > 2 && parts[2].Equals("true", StringComparison.OrdinalIgnoreCase);
 
-        var defRp = new Drawing.DefaultRunProperties { FontSize = fontSize, Bold = bold };
+        bool bold = false;
+        string? fontName = null;
+        if (parts.Length > 2 && !string.IsNullOrEmpty(parts[2]))
+        {
+            if (parts[2].Equals("true", StringComparison.OrdinalIgnoreCase)) bold = true;
+            else if (parts[2].Equals("false", StringComparison.OrdinalIgnoreCase)) bold = false;
+            else fontName = parts[2];
+        }
+        if (parts.Length > 3 && !string.IsNullOrEmpty(parts[3]))
+            fontName = parts[3];
+
+        var defRp = new Drawing.DefaultRunProperties { FontSize = fontSize };
+        if (bold) defRp.Bold = true;
         if (!string.IsNullOrEmpty(color))
         {
             var solidFill = new Drawing.SolidFill();
             solidFill.AppendChild(BuildChartColorElement(color));
             defRp.AppendChild(solidFill);
+        }
+        if (!string.IsNullOrEmpty(fontName))
+        {
+            defRp.AppendChild(new Drawing.LatinFont { Typeface = fontName });
+            defRp.AppendChild(new Drawing.EastAsianFont { Typeface = fontName });
         }
 
         return new C.TextProperties(
