@@ -457,6 +457,132 @@ public partial class WordHandler
         }
     }
 
+    /// <summary>Pull the most representative human-readable text snippet for
+    /// a revision marker. Mirrors what `query revision` shipped historically
+    /// for ins/del/rPrChange/pPrChange and extends to the rest of the marker
+    /// families. Empty when the marker has no associated text (e.g. structural
+    /// section/table property changes that don't pin a specific run).</summary>
+    private static string ExtractRevisionText(RevisionRef rev)
+    {
+        switch (rev.Kind)
+        {
+            case "insertion":
+                return string.Join("", rev.Element.Descendants<Text>().Select(t => t.Text));
+            case "deletion":
+            case "moveFrom":
+                return string.Join("", rev.Element.Descendants<DeletedText>().Select(t => t.Text));
+            case "moveTo":
+                return string.Join("", rev.Element.Descendants<Text>().Select(t => t.Text));
+            case "formatChange":
+                {
+                    var run = rev.Element.Ancestors<Run>().FirstOrDefault();
+                    return run != null
+                        ? string.Join("", run.Descendants<Text>().Select(t => t.Text))
+                        : "";
+                }
+            case "paragraphChange":
+            case "paragraphMarkInsertion":
+            case "paragraphMarkDeletion":
+                {
+                    var para = rev.Element.Ancestors<Paragraph>().FirstOrDefault();
+                    return para != null
+                        ? string.Join("", para.Descendants<Text>().Select(t => t.Text))
+                        : "";
+                }
+            case "rowInsertion":
+            case "rowDeletion":
+            case "rowChange":
+                {
+                    var row = rev.Element.Ancestors<TableRow>().FirstOrDefault();
+                    return row != null
+                        ? string.Join(" | ",
+                            row.Elements<TableCell>().Select(c =>
+                                string.Join("", c.Descendants<Text>().Select(t => t.Text))))
+                        : "";
+                }
+            case "cellInsertion":
+            case "cellDeletion":
+            case "cellChange":
+                {
+                    var cell = rev.Element.Ancestors<TableCell>().FirstOrDefault();
+                    return cell != null
+                        ? string.Join("", cell.Descendants<Text>().Select(t => t.Text))
+                        : "";
+                }
+            case "tableChange":
+            case "sectionChange":
+                return "";
+            default:
+                return "";
+        }
+    }
+
+    /// <summary>Compute the OOXML DOM path of the closest navigable ancestor
+    /// of a revision marker. Useful for "where in the document is this
+    /// revision" — agents can map a `/revision[N]` synthetic path back to a
+    /// real `/body/p[@paraId=…]/r[K]` or `/body/tbl[N]/tr[M]/tc[K]` location
+    /// for downstream `get` / cross-referencing.
+    ///
+    /// Path is best-effort and read-only: callers must NOT use it as a Set
+    /// target to drive accept/reject (the legitimate path for that is
+    /// `set /revision[N]` or a filtered selector — those go through the
+    /// same EnumerateRevisions enumerator and are guaranteed to address
+    /// the right marker even when revisions overlap on the same anchor).
+    /// Empty when no navigable ancestor exists.</summary>
+    private static string ComputeRevisionNativePath(OpenXmlElement marker)
+    {
+        // Walk up to find the closest "anchor" — a Run / Paragraph / TableCell
+        // / TableRow / Table. The path is built from /body downward.
+        var anchor = (OpenXmlElement?)marker;
+        while (anchor != null
+               && anchor is not Run
+               && anchor is not Paragraph
+               && anchor is not TableCell
+               && anchor is not TableRow
+               && anchor is not Table
+               && anchor is not SectionProperties)
+        {
+            anchor = anchor.Parent;
+        }
+        if (anchor == null) return "";
+
+        // Build segments root-down by walking back up.
+        var segments = new List<string>();
+        var current = anchor;
+        while (current != null && current is not Body)
+        {
+            string? seg = current switch
+            {
+                Run r => $"r[{IndexOfSiblingsByType<Run>(r)}]",
+                Paragraph p when !string.IsNullOrEmpty(p.ParagraphId?.Value)
+                    => $"p[@paraId={p.ParagraphId!.Value}]",
+                Paragraph p => $"p[{IndexOfSiblingsByType<Paragraph>(p)}]",
+                TableCell tc => $"tc[{IndexOfSiblingsByType<TableCell>(tc)}]",
+                TableRow tr => $"tr[{IndexOfSiblingsByType<TableRow>(tr)}]",
+                Table tbl => $"tbl[{IndexOfSiblingsByType<Table>(tbl)}]",
+                SectionProperties => "sectPr",
+                _ => null,
+            };
+            if (seg != null) segments.Insert(0, seg);
+            current = current.Parent;
+        }
+        if (segments.Count == 0) return "";
+        return "/body/" + string.Join("/", segments);
+    }
+
+    private static int IndexOfSiblingsByType<T>(OpenXmlElement element) where T : OpenXmlElement
+    {
+        var parent = element.Parent;
+        if (parent == null) return 1;
+        int idx = 0;
+        foreach (var sib in parent.Elements<T>())
+        {
+            idx++;
+            if (ReferenceEquals(sib, element)) return idx;
+        }
+        return idx;
+    }
+
     /// <summary>Common shape for <c>*PrChange</c> rejection: the change
     /// element's parent is the current pPr/rPr/etc.; the change's first child
     /// is the snapshot of the prior state. Replace the parent with a fresh
