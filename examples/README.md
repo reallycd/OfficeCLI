@@ -11,7 +11,8 @@ examples/
 │   ├── formulas.sh / formulas.docx
 │   ├── tables.sh / tables.docx
 │   ├── textbox.sh
-│   └── numbering-showcase.sh / numbering-showcase.docx
+│   ├── numbering-showcase.sh / numbering-showcase.docx
+│   └── revisions.{sh,md,docx}         # tracked-change (revision) API
 ├── excel/                             # 📊 Excel examples
 │   ├── charts.sh / charts.xlsx        # Master chart showcase
 │   ├── charts/                        # Per-type chart scripts
@@ -63,6 +64,7 @@ bash formulas.sh             # LaTeX math formulas
 bash tables.sh               # Styled tables
 bash textbox.sh              # Formatted text boxes
 bash numbering-showcase.sh   # List/numbering styles
+bash revisions.sh            # Tracked-change (revision) API — ins/del/format/move/cellChange
 ```
 
 **Excel (.xlsx):**
