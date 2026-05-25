@@ -164,4 +164,69 @@ public static partial class PptxBatchEmitter
         });
         return true;
     }
+
+    // Presentation-level structural children that the typed Add/Set/EmitPresentationProps
+    // surface does not round-trip: custShowLst (custom slide shows) and extLst
+    // (extension children — sectionLst / modifyVerifier / etc.). Both reference
+    // slides by rId; `add slide` on replay mints fresh rIds, so a verbatim
+    // raw-set replace would point at stale targets and PowerPoint would refuse
+    // to open. Honest path: emit the source XML as a best-effort append AND
+    // record an UnsupportedWarning so callers know the references may need
+    // manual rewiring. Mirrors the "loud not silent" rule for content we cannot
+    // faithfully serialize through the typed vocabulary.
+    private static void EmitPresentationExtras(
+        PowerPointHandler ppt, List<BatchItem> items, SlideEmitContext ctx)
+    {
+        string presXml;
+        try { presXml = ppt.Raw("/presentation"); }
+        catch { return; }
+        if (string.IsNullOrEmpty(presXml) || !presXml.StartsWith("<")) return;
+
+        System.Xml.Linq.XDocument doc;
+        try { doc = System.Xml.Linq.XDocument.Parse(presXml); }
+        catch { return; }
+        if (doc.Root == null) return;
+
+        var pNs = System.Xml.Linq.XNamespace.Get(
+            "http://schemas.openxmlformats.org/presentationml/2006/main");
+
+        // custShowLst — `<p:custShowLst><p:custShow><p:sldLst><p:sld r:id="…"/>`.
+        var custShow = doc.Root.Element(pNs + "custShowLst");
+        if (custShow != null)
+        {
+            var xml = CanonicalizeRawXml(custShow.ToString(System.Xml.Linq.SaveOptions.DisableFormatting));
+            items.Add(new BatchItem
+            {
+                Command = "raw-set",
+                Part = "/presentation",
+                Xpath = "/p:presentation",
+                Action = "append",
+                Xml = xml,
+            });
+            ctx.Unsupported.Add(new UnsupportedWarning(
+                Element: "presentation.custShowLst",
+                SlidePath: "/presentation",
+                Reason: "Custom slide shows reference slides by relationship id; replay's `add slide` mints fresh rIds, so the custShow targets may point at stale relationships. Verify in PowerPoint before relying on the round-tripped show."));
+        }
+
+        // extLst — `<p:extLst><p:ext uri="…">…</p:ext>` (sectionLst, modifyVerifier,
+        // misc 2010+ extensions).
+        var ext = doc.Root.Element(pNs + "extLst");
+        if (ext != null)
+        {
+            var xml = CanonicalizeRawXml(ext.ToString(System.Xml.Linq.SaveOptions.DisableFormatting));
+            items.Add(new BatchItem
+            {
+                Command = "raw-set",
+                Part = "/presentation",
+                Xpath = "/p:presentation",
+                Action = "append",
+                Xml = xml,
+            });
+            ctx.Unsupported.Add(new UnsupportedWarning(
+                Element: "presentation.extLst",
+                SlidePath: "/presentation",
+                Reason: "Presentation extensions (sectionLst / modifyVerifier / …) may reference slides by rId; replay mints fresh rIds, so references can go stale. Section names survive; section → slide membership may need manual rewiring."));
+        }
+    }
 }

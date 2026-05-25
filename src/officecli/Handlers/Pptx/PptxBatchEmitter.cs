@@ -140,6 +140,13 @@ public static partial class PptxBatchEmitter
         if (ctx.DeferredLinks.Count > 0)
             items.AddRange(ctx.DeferredLinks);
 
+        // Best-effort passthrough for presentation-level structural children
+        // that the typed emit path doesn't model — custShowLst, extLst
+        // (sectionLst / modifyVerifier / …). Runs LAST so the raw-set append
+        // lands after `add slide` has populated sldIdLst. References by rId
+        // may go stale on replay; UnsupportedWarning surfaces that risk.
+        EmitPresentationExtras(ppt, items, ctx);
+
         return (items, ctx.Unsupported);
     }
 
