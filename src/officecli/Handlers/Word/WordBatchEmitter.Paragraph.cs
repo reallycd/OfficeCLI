@@ -243,7 +243,7 @@ public static partial class WordBatchEmitter
             if (TryEmitTabRun(run, paraTargetPath, items)) continue;
             if (TryEmitPtabRun(run, paraTargetPath, items)) continue;
             if (TryEmitEquationRun(run, paraTargetPath, items)) continue;
-            if (TryEmitFieldRun(run, paraTargetPath, items)) continue;
+            if (TryEmitFieldRun(run, paraTargetPath, items, ctx)) continue;
             // R10-bug1: OLE/embedded-object runs surface as type="ole" (see
             // CreateOleNode in WordHandler.ImageHelpers.cs). The Add side
             // requires --prop src=<external file> to recreate the embedded
@@ -677,7 +677,7 @@ public static partial class WordBatchEmitter
         return true;
     }
 
-    private static bool TryEmitFieldRun(DocumentNode run, string paraTargetPath, List<BatchItem> items)
+    private static bool TryEmitFieldRun(DocumentNode run, string paraTargetPath, List<BatchItem> items, BodyEmitContext? ctx = null)
     {
         // Synthetic field entry from CollapseFieldChains. Format carries
         // `instruction` (raw fldSimple/instrText) and Text holds the cached
@@ -689,6 +689,71 @@ public static partial class WordBatchEmitter
         // (BUG-DUMP9-03 fldSimple-only hyperlinks never surface a hyperlink
         // row, and routing the field there would fail path lookup on replay).
         if (run.Type != "field") return false;
+        // R10-bug7: CollapseFieldChains flagged a nested field (IF/REF with
+        // an inner DATE/PAGE/MERGEFIELD branch). AddField rebuilds a flat
+        // begin/instr/separate/display/end chain and cannot model the
+        // nested branches — emitting an `add field` row here would either
+        // throw (parser sees garbage), drop the inner branches, OR merge
+        // the inner instruction into the outer expression. Backlog item:
+        // teach AddField to accept a tree representation. Until then, the
+        // cheapest correct behavior is to flag the loss in envelope
+        // warnings — same model as the OLE warning above — so callers
+        // don't ship a doc with the IF false-branch silently stripped.
+        // R10-bug8: malformed field (begin without matching end) surfaces as
+        // a synth from CollapseFieldChains with _unmatchedFieldBegin=true.
+        // Same warning model as _nestedField — preserve cached display,
+        // flag the partial instruction in envelope.warnings.
+        if (run.Format.TryGetValue("_unmatchedFieldBegin", out var ufbObj) && ufbObj is bool ufbB && ufbB)
+        {
+            if (ctx != null)
+            {
+                var partialInstr = run.Format.TryGetValue("instruction", out var pIv)
+                    ? pIv?.ToString() ?? "" : "";
+                ctx.Warnings.Add(new DocxUnsupportedWarning(
+                    Element: "field.unmatched_begin",
+                    Path: run.Path,
+                    Reason: $"fldChar(begin) without matching end; partial instruction='{partialInstr}' dropped"));
+            }
+            if (!string.IsNullOrEmpty(run.Text))
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "add",
+                    Parent = paraTargetPath,
+                    Type = "r",
+                    Props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["text"] = run.Text!
+                    }
+                });
+            }
+            return true;
+        }
+        if (run.Format.TryGetValue("_nestedField", out var nfObj) && nfObj is bool nfB && nfB)
+        {
+            if (ctx != null)
+            {
+                ctx.Warnings.Add(new DocxUnsupportedWarning(
+                    Element: "field.nested",
+                    Path: run.Path,
+                    Reason: "nested field (begin inside a field's branch) cannot round-trip through add field; cached display preserved but inner field codes dropped"));
+            }
+            // Still emit the cached display so the paragraph isn't empty.
+            if (!string.IsNullOrEmpty(run.Text))
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "add",
+                    Parent = paraTargetPath,
+                    Type = "r",
+                    Props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["text"] = run.Text!
+                    }
+                });
+            }
+            return true;
+        }
         var instr = run.Format.TryGetValue("instruction", out var iv)
             ? iv?.ToString() ?? "" : "";
         var fieldProps = BuildFieldAddProps(instr, run.Text ?? "");

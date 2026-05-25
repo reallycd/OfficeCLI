@@ -24,44 +24,125 @@ public static partial class WordBatchEmitter
             }
 
             // Walk forward to find instruction text and end marker.
+            // R10-bug7: track nesting depth so an inner field (e.g. DATE
+            // wrapped inside an outer IF's true/false branch) does NOT have
+            // its instrText flattened into the outer instruction string —
+            // that flattening silently merged the inner field's code into
+            // the outer IF's expression, destroyed the false-branch
+            // boundary, and produced an instruction the IF parser could
+            // not round-trip.
             string instruction = "";
             string display = "";
             bool sawSeparate = false;
+            bool sawNestedField = false;
             int end = -1;
+            int depth = 1;
             for (int j = i + 1; j < children.Count; j++)
             {
                 var k = children[j];
                 if (k.Type == "instrText")
                 {
-                    if (k.Format.TryGetValue("instruction", out var iv) && iv != null)
-                        instruction += iv.ToString();
-                    else if (!string.IsNullOrEmpty(k.Text))
-                        instruction += k.Text;
+                    // Only the OUTERMOST instrText belongs in this field's
+                    // instruction. Inner instrText (depth > 1) is part of a
+                    // nested field whose collapse target is the outer
+                    // begin/end pair we're walking inside.
+                    if (depth == 1)
+                    {
+                        if (k.Format.TryGetValue("instruction", out var iv) && iv != null)
+                            instruction += iv.ToString();
+                        else if (!string.IsNullOrEmpty(k.Text))
+                            instruction += k.Text;
+                    }
                 }
                 else if (k.Type == "fieldChar"
                     && k.Format.TryGetValue("fieldCharType", out var ft))
                 {
                     var ftStr = ft?.ToString();
-                    if (string.Equals(ftStr, "separate", StringComparison.OrdinalIgnoreCase))
-                        sawSeparate = true;
+                    if (string.Equals(ftStr, "begin", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Nested field opens. The outer field can no longer
+                        // round-trip through AddField (AddField rebuilds a
+                        // flat begin/instr/sep/display/end chain and has no
+                        // model for nested branches). Mark and keep
+                        // counting until the matching outer end.
+                        sawNestedField = true;
+                        depth++;
+                    }
+                    else if (string.Equals(ftStr, "separate", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (depth == 1) sawSeparate = true;
+                    }
                     else if (string.Equals(ftStr, "end", StringComparison.OrdinalIgnoreCase))
                     {
-                        end = j;
-                        break;
+                        depth--;
+                        if (depth == 0)
+                        {
+                            end = j;
+                            break;
+                        }
                     }
                 }
-                else if (k.Type == "run" || k.Type == "r")
+                else if ((k.Type == "run" || k.Type == "r") && depth == 1)
                 {
                     // Cached display segments after fldChar(separate). Concatenate
                     // their text — formatting on the display run is dropped (the
-                    // field renders fresh on replay).
+                    // field renders fresh on replay). At depth>1 the run belongs
+                    // to the nested field's cached display and is consumed by
+                    // its own collapse pass after the outer field is rolled back.
                     if (!string.IsNullOrEmpty(k.Text)) display += k.Text;
                 }
             }
             if (end < 0)
             {
-                // Malformed (no end marker) — fall back to passing through.
-                result.Add(c);
+                // R10-bug8: malformed field — fldChar(begin) with no matching
+                // end. The previous "fall back to passing through" path
+                // returned the bare fldChar(begin) node, which the run-list
+                // filter in EmitParagraph then silently dropped (fieldChar
+                // is not in the allowlist). Surface a synthetic field
+                // entry carrying the partial instruction so TryEmitFieldRun
+                // can attach an envelope warning instead. The cached
+                // display (any runs accumulated before we ran out of input)
+                // is preserved so the paragraph keeps its visible text.
+                var malformedSynth = new DocumentNode
+                {
+                    Path = c.Path,
+                    Type = "field",
+                    Text = display,
+                    Format = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["instruction"] = instruction.Trim(),
+                        ["_unmatchedFieldBegin"] = true,
+                    }
+                };
+                result.Add(malformedSynth);
+                continue;
+            }
+            if (sawNestedField)
+            {
+                // Nested-field branch: the AddField rebuild path cannot
+                // represent IF/REF/MERGEFIELD with embedded child fields.
+                // Round-trip through a raw-set passthrough so the nested
+                // structure survives byte-for-byte. The host paragraph's
+                // emit already creates the paragraph; the raw-set append
+                // is wired below in TryEmitFieldRun via the
+                // `_rawFieldSlice` Format hint. Synthesize a sentinel
+                // entry that the field-emit branch routes to raw-set
+                // instead of AddField.
+                var rawSynth = new DocumentNode
+                {
+                    Path = c.Path,
+                    Type = "field",
+                    Text = display,
+                    Format = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["instruction"] = instruction.Trim(),
+                        ["_nestedField"] = true,
+                        ["_fieldChildStart"] = i,
+                        ["_fieldChildEnd"] = end,
+                    }
+                };
+                result.Add(rawSynth);
+                i = end;
                 continue;
             }
             var synth = new DocumentNode
