@@ -424,11 +424,18 @@ public partial class WordHandler
                             prevExSnapshot.AppendChild(child.CloneNode(true));
                         }
                     }
+                    // Each row's tblPrExChange must carry its own w:id —
+                    // OOXML treats revision ids as document-scope unique
+                    // (validate flags duplicates as a Semantic error).
+                    // Reusing the parent tblPrChange's id across all rows
+                    // would round-trip through us cleanly but trip
+                    // schema-strict readers and confuse accept/reject
+                    // tooling that keys off id. Allocate per-row.
                     var rowChange = new TablePropertyExceptionsChange
                     {
                         Author = author,
                         Date = date,
-                        Id = idStr,
+                        Id = GenerateRevisionId(),
                     };
                     rowChange.AppendChild(prevExSnapshot);
                     liveEx.AppendChild(rowChange);
