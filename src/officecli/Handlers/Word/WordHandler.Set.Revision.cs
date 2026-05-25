@@ -134,19 +134,38 @@ public partial class WordHandler
         }
 
         // ---- extract revision.* sub-keys (case-insensitive) ----
-        string? tcAuthor = null, tcDate = null, tcId = null;
+        string? tcAuthor = null, tcDate = null, tcId = null, tcType = null;
         foreach (var (k, v) in properties)
         {
             var lk = k.ToLowerInvariant();
             if (lk == "revision.author") tcAuthor = v;
             else if (lk == "revision.date") tcDate = v;
             else if (lk == "revision.id") tcId = v;
+            else if (lk == "revision.type") tcType = v;
         }
         var author = string.IsNullOrEmpty(tcAuthor) ? "OfficeCLI" : tcAuthor!;
         DateTime date = DateTime.UtcNow;
         if (!string.IsNullOrEmpty(tcDate) && DateTime.TryParse(tcDate, out var parsed))
             date = parsed;
         var idStr = string.IsNullOrEmpty(tcId) ? GenerateRevisionId() : tcId!;
+
+        // Normalise revision.type into the canonical kind. `null` = "no
+        // type given" (legacy bare-attribution form → format-change, same
+        // as before this change). Aliases accepted on input: `insertion`,
+        // `deletion`, `formatChange` — symmetric with the readback names
+        // surfaced on get/query.
+        string? kind = (tcType?.Trim().ToLowerInvariant()) switch
+        {
+            null or "" => null,
+            "ins" or "insertion" => "ins",
+            "del" or "deletion" => "del",
+            "format" or "formatchange" => "format",
+            "movefrom" => "moveFrom",
+            "moveto" => "moveTo",
+            _ => throw new ArgumentException(
+                $"revision.type=`{tcType}` is not recognised "
+                + "(valid: ins, del, format, moveFrom, moveTo)"),
+        };
 
         // ---- strip revision.* creation keys from the dict passed to SetElement ----
         // (revision.action never reaches this decorator — it's routed in Set.cs
@@ -160,6 +179,57 @@ public partial class WordHandler
                 continue;
             stripped[k] = v;
         }
+
+        // Run + ins/del/moveFrom/moveTo: wrap the run in the matching
+        // tracked-change element instead of producing an rPrChange. The
+        // legacy code path treated every `revision.type` on a Run as
+        // format-change (silently misrouting `revision.type=ins` into
+        // an rPrChange tagged with the user's author/date) — bug. Add-side
+        // (WordHandler.Add.Text.cs:1948 onwards) already does this
+        // correctly; Set now matches.
+        if (element is Run runWrap && kind is "ins" or "del" or "moveFrom" or "moveTo")
+        {
+            // Reject if the run already lives inside a track-change
+            // wrapper — same shape as the rPrChange-already-pending
+            // guard further down: a stacked wrap would silently muddy
+            // accept/reject semantics.
+            if (runWrap.Ancestors<InsertedRun>().Any()
+                || runWrap.Ancestors<DeletedRun>().Any()
+                || runWrap.Ancestors<MoveFromRun>().Any()
+                || runWrap.Ancestors<MoveToRun>().Any())
+                throw new InvalidOperationException(
+                    "run is already inside a track-change wrapper; "
+                    + "accept/reject the existing revision first");
+            // moveFrom/moveTo demand an explicit id so the pair binds
+            // (mirrors WordHandler.Add.Text.cs:2007).
+            if (kind is "moveFrom" or "moveTo" && string.IsNullOrEmpty(tcId))
+                throw new ArgumentException(
+                    $"revision.type={kind} requires an explicit revision.id "
+                    + "so the moveFrom/moveTo halves can be paired");
+
+            Action wrapRun = kind switch
+            {
+                "ins" => () => WrapRunAsInserted(runWrap, author, date, idStr),
+                "del" => () => WrapRunAsDeleted(runWrap, author, date, idStr),
+                "moveFrom" => () => WrapRunAsMoveFrom(runWrap, author, date, idStr),
+                "moveTo" => () => WrapRunAsMoveTo(runWrap, author, date, idStr),
+                _ => throw new InvalidOperationException("unreachable"),
+            };
+            return (stripped, wrapRun);
+        }
+
+        // Non-Run host + ins/del/moveFrom/moveTo: reject explicitly
+        // rather than silently degrading to *PrChange (which would
+        // record the change as a *format* revision, not the requested
+        // kind). Paragraph paraMarkIns / row+cell ins/del are real
+        // OOXML concepts but creating them on a pre-existing element via
+        // Set is not implemented yet; the right surface today is `add`.
+        if (element is not Run && kind is "ins" or "del" or "moveFrom" or "moveTo")
+            throw new InvalidOperationException(
+                $"revision.type={kind} on {element.GetType().Name.ToLowerInvariant()} "
+                + "is not supported via set; use `add` to create new tracked content, "
+                + "or apply the change to an inner run. "
+                + "(revision.type=format remains supported on this element kind.)");
 
         // ---- snapshot + plan the wrap based on element kind ----
         if (element is Run run)

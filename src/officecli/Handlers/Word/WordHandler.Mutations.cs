@@ -981,6 +981,56 @@ public partial class WordHandler
         wrapper.AppendChild(run);
     }
 
+    /// <summary>Wrap a single Run in a w:ins marker (no text conversion —
+    /// inserted runs keep w:t). Mirrors <see cref="WrapRunAsDeleted"/>;
+    /// used from <c>BeginTrackChangeIfRequested</c> so `set <run>
+    /// --prop revision.type=ins` produces an InsertedRun wrapper instead
+    /// of silently degrading to an rPrChange (which would tag the run as
+    /// a *format* change rather than an *insertion*).</summary>
+    private void WrapRunAsInserted(Run run, string author, DateTime date, string? explicitId)
+    {
+        var parentEl = run.Parent;
+        if (parentEl == null) return;
+        var wrapper = new InsertedRun
+        {
+            Author = author,
+            Date = date,
+            Id = !string.IsNullOrEmpty(explicitId) ? explicitId : GenerateRevisionId(),
+        };
+        parentEl.ReplaceChild(wrapper, run);
+        wrapper.AppendChild(run);
+    }
+
+    /// <summary>Wrap a single Run in a w:moveFrom marker, converting
+    /// w:t → w:delText (moveFrom carries the original deleted-from
+    /// location's text as delText, same as w:del). Caller must supply an
+    /// explicit id so the moveTo half can be paired.</summary>
+    private void WrapRunAsMoveFrom(Run run, string author, DateTime date, string id)
+    {
+        var parentEl = run.Parent;
+        if (parentEl == null) return;
+        var wrapper = new MoveFromRun { Author = author, Date = date, Id = id };
+        foreach (var t in run.Elements<Text>().ToList())
+        {
+            var dt = new DeletedText(t.Text ?? "") { Space = t.Space };
+            t.Parent?.ReplaceChild(dt, t);
+        }
+        parentEl.ReplaceChild(wrapper, run);
+        wrapper.AppendChild(run);
+    }
+
+    /// <summary>Wrap a single Run in a w:moveTo marker (no text
+    /// conversion — moveTo keeps w:t, mirrors w:ins). Caller must supply
+    /// an explicit id matching the paired moveFrom.</summary>
+    private void WrapRunAsMoveTo(Run run, string author, DateTime date, string id)
+    {
+        var parentEl = run.Parent;
+        if (parentEl == null) return;
+        var wrapper = new MoveToRun { Author = author, Date = date, Id = id };
+        parentEl.ReplaceChild(wrapper, run);
+        wrapper.AppendChild(run);
+    }
+
     public string Move(string sourcePath, string? targetParentPath, InsertPosition? position, Dictionary<string, string>? properties = null)
     {
         // Detect track-change branch: any trackChange.author/date/id signals
