@@ -21,6 +21,9 @@ on:
       - 'skills/officecli/SKILL.md'
       - '.github/workflows/skill-parity.yml'
 
+permissions:
+  contents: read
+
 jobs:
   diff:
     runs-on: ubuntu-latest
