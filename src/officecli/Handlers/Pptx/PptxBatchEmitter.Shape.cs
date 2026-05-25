@@ -106,6 +106,32 @@ public static partial class PptxBatchEmitter
         var shapeProps = FilterEmittableProps(fullShape.Format);
         DeferSlideJumpLink(shapeProps, replayPath, ctx);
 
+        // Shape image fill (blipFill) — NodeBuilder emits the marker
+        // `image=true` for shapes carrying a <a:blipFill>. The marker is
+        // dropped by FilterEmittableProps because it has no actionable
+        // value; resolve the embedded image bytes here and re-emit
+        // `image=data:<contentType>;base64,…` so AddShape's
+        // ApplyShapeImageFill can rebuild the blipFill on replay.
+        // (Mirrors EmitPicture base64-inline strategy.)
+        if (fullShape.Format.TryGetValue("image", out var imgMarker)
+            && string.Equals(imgMarker?.ToString(), "true", StringComparison.OrdinalIgnoreCase)
+            && !shapeProps.ContainsKey("image"))
+        {
+            var binary = ppt.GetShapeImageFillBinary(shapeNode.Path);
+            if (binary.HasValue)
+            {
+                var (bytes, contentType) = binary.Value;
+                shapeProps["image"] = $"data:{contentType};base64,{Convert.ToBase64String(bytes)}";
+            }
+            else
+            {
+                ctx.Unsupported.Add(new UnsupportedWarning(
+                    Element: "shape",
+                    SlidePath: parentSlidePath,
+                    Reason: "shape blipFill has no resolvable embedded image part"));
+            }
+        }
+
         // NodeBuilder emits `geometry=rect` for every shape with the implicit
         // <a:prstGeom prst="rect"/> body — including plain text boxes and
         // bare `--type shape` calls (no styling). Strip the rect default for

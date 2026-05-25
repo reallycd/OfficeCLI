@@ -1577,6 +1577,53 @@ public partial class PowerPointHandler : IDocumentHandler
         catch { return null; }
     }
 
+    // Resolve a shape path's blipFill image bytes (image fill on a non-Picture
+    // <p:sp>). Mirrors GetImageBinary but walks <p:sp> (Shape) instead of
+    // <p:pic> (Picture). Accepts /slide[N]/shape[K] and /slide[N]/shape[@id=ID]
+    // path forms (group-nested shape paths are NOT supported in this initial
+    // pass — covers the common slide-level blipFill case used by examples).
+    public (byte[] Bytes, string ContentType)? GetShapeImageFillBinary(string shapePath)
+    {
+        var m = Regex.Match(shapePath,
+            @"^/slide\[(\d+)\]/shape\[(@id=)?(\d+)\]$");
+        if (!m.Success) return null;
+        var slideIdx = int.Parse(m.Groups[1].Value);
+        var byId = m.Groups[2].Success;
+        var idOrIdx = int.Parse(m.Groups[3].Value);
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return null;
+        var slidePart = parts[slideIdx - 1];
+        var shapeTree = GetSlide(slidePart).CommonSlideData?.ShapeTree;
+        if (shapeTree == null) return null;
+        var shapes = shapeTree.Elements<Shape>().ToList();
+        Shape? shape = null;
+        if (byId)
+        {
+            shape = shapes.FirstOrDefault(s =>
+            {
+                var sid = s.NonVisualShapeProperties?.NonVisualDrawingProperties?.Id?.Value;
+                return sid.HasValue && sid.Value == (uint)idOrIdx;
+            });
+        }
+        else
+        {
+            if (idOrIdx >= 1 && idOrIdx <= shapes.Count) shape = shapes[idOrIdx - 1];
+        }
+        if (shape == null) return null;
+        var blipFill = shape.ShapeProperties?.GetFirstChild<DocumentFormat.OpenXml.Drawing.BlipFill>();
+        var embedId = blipFill?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Blip>()?.Embed?.Value;
+        if (string.IsNullOrEmpty(embedId)) return null;
+        try
+        {
+            var part = slidePart.GetPartById(embedId);
+            using var src = part.GetStream();
+            using var ms = new MemoryStream();
+            src.CopyTo(ms);
+            return (ms.ToArray(), part.ContentType);
+        }
+        catch { return null; }
+    }
+
     // ==================== Private Helpers ====================
 
     private static Slide GetSlide(SlidePart part) =>
