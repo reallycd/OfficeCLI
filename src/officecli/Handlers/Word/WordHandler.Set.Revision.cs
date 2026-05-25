@@ -485,6 +485,20 @@ public partial class WordHandler
                 }
             }
 
+            // Setting a cell's width has the side effect of mutating the
+            // parent table's <w:tblGrid> (the grid columns get resynced
+            // to the cell widths). When that happens under track-changes,
+            // OOXML expects a <w:tblGridChange> wrapping the previous
+            // grid snapshot — Word produces it; we used to skip the
+            // marker entirely, silently losing the grid-level revision
+            // history. Snapshot the parent tblGrid here; the wrap action
+            // below compares it against the post-Set state and stamps a
+            // tblGridChange only when something actually changed (e.g.
+            // skipGridSync=true suppresses the side effect, so no change
+            // ⇒ no marker — narrower than always stamping).
+            var parentTbl = tc.Ancestors<Table>().FirstOrDefault();
+            var preTblGrid = parentTbl?.GetFirstChild<TableGrid>()?.CloneNode(true);
+
             Action wrap = () =>
             {
                 var tcPr = tc.GetFirstChild<TableCellProperties>()
@@ -497,6 +511,22 @@ public partial class WordHandler
                 };
                 change.AppendChild(previous);
                 tcPr.AppendChild(change);
+
+                if (parentTbl != null && preTblGrid is TableGrid preGrid)
+                {
+                    var postGrid = parentTbl.GetFirstChild<TableGrid>();
+                    if (postGrid != null
+                        && !TableGridsEqual(preGrid, postGrid)
+                        && postGrid.GetFirstChild<TableGridChange>() == null)
+                    {
+                        var prevGrid = new PreviousTableGrid();
+                        foreach (var col in preGrid.Elements<GridColumn>())
+                            prevGrid.AppendChild(col.CloneNode(true));
+                        var gridChange = new TableGridChange { Id = idStr };
+                        gridChange.AppendChild(prevGrid);
+                        postGrid.AppendChild(gridChange);
+                    }
+                }
             };
             return (stripped, wrap);
         }
@@ -859,6 +889,21 @@ public partial class WordHandler
                 return BuildRevisionNode(all[i], i + 1, ExtractRevisionText(all[i]), sharedIds);
         }
         throw new ArgumentException($"no revision matches {path}");
+    }
+
+    /// <summary>Shallow equality between two tblGrid elements: same
+    /// gridCol count + identical w:w attributes in order. Used by the
+    /// TableCell branch of <see cref="BeginTrackChangeIfRequested"/> to
+    /// decide whether the cell-width set's grid side-effect warrants
+    /// stamping a <see cref="TableGridChange"/>.</summary>
+    private static bool TableGridsEqual(TableGrid a, TableGrid b)
+    {
+        var ac = a.Elements<GridColumn>().Select(c => c.Width?.Value ?? "").ToList();
+        var bc = b.Elements<GridColumn>().Select(c => c.Width?.Value ?? "").ToList();
+        if (ac.Count != bc.Count) return false;
+        for (int i = 0; i < ac.Count; i++)
+            if (ac[i] != bc[i]) return false;
+        return true;
     }
 
     /// <summary>Walk the document body and emit a RevisionRef for every
