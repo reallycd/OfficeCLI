@@ -354,7 +354,40 @@ public partial class PowerPointHandler
                     newShape.TextBody.Append(new Drawing.Paragraph(
                         new Drawing.EndParagraphRunProperties { Language = "en-US" }));
                 }
-                shapeTree.AppendChild(newShape);
+                // Insert in layout-defined phType order so spTree z-order is a
+                // function of the layout, not the user's set-order. OOXML spTree
+                // order == z-order; appending blindly let "set title then body"
+                // and "set body then title" produce different z-stacking on the
+                // same final state. Anchor: the last already-materialized
+                // placeholder whose layout-rank precedes newShape's; if none,
+                // insert at the head.
+                var layoutOrder = layoutPart.SlideLayout.CommonSlideData.ShapeTree
+                    .Elements<Shape>()
+                    .Select(s => s.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
+                        ?.GetFirstChild<PlaceholderShape>()?.Type?.Value)
+                    .Where(t => t != null)
+                    .Select(t => t!.Value)
+                    .ToList();
+                int newRank = layoutOrder.IndexOf(phType);
+                Shape? anchor = null;
+                if (newRank >= 0)
+                {
+                    foreach (var existing in shapeTree.Elements<Shape>())
+                    {
+                        var t = existing.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
+                            ?.GetFirstChild<PlaceholderShape>()?.Type?.Value;
+                        if (t == null) continue;
+                        int r = layoutOrder.IndexOf(t.Value);
+                        if (r >= 0 && r < newRank) anchor = existing;
+                    }
+                }
+                if (anchor != null) anchor.InsertAfterSelf(newShape);
+                else
+                {
+                    var first = shapeTree.Elements<Shape>().FirstOrDefault();
+                    if (first != null) first.InsertBeforeSelf(newShape);
+                    else shapeTree.AppendChild(newShape);
+                }
                 return newShape;
             }
         }
