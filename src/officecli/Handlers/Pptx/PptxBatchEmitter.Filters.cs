@@ -32,7 +32,7 @@ public static partial class PptxBatchEmitter
         // Per-presentation metadata that auto-restamps (last-modified-by /
         // revision / created / modified). Mirrors Word's stance on
         // similar metadata.
-        "revision", "lastModifiedBy", "created", "modified",
+        "revisionNumber", "lastModifiedBy", "created", "modified",
         // Default font + slide dimensions live at the root presentation
         // node, not slide-level — they roll up into a single root `set /`
         // bag in PR2 (or are already set on the blank-doc baseline).

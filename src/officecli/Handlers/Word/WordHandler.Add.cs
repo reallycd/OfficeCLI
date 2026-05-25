@@ -646,7 +646,7 @@ public partial class WordHandler
                 case "lastmodifiedby":
                     _doc.PackageProperties.LastModifiedBy = value;
                     break;
-                case "revision":
+                case "revisionnumber":
                     _doc.PackageProperties.Revision = value;
                     break;
 

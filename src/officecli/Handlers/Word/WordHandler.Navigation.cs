@@ -151,7 +151,7 @@ public partial class WordHandler
         if (props.Description != null) node.Format["description"] = props.Description;
         if (props.Category != null) node.Format["category"] = props.Category;
         if (props.LastModifiedBy != null) node.Format["lastModifiedBy"] = props.LastModifiedBy;
-        if (props.Revision != null) node.Format["revision"] = props.Revision;
+        if (props.Revision != null) node.Format["revisionNumber"] = props.Revision;
         if (props.Created != null) node.Format["created"] = props.Created.Value.ToString("o");
         if (props.Modified != null) node.Format["modified"] = props.Modified.Value.ToString("o");
 

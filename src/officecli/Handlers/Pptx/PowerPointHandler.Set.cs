@@ -146,7 +146,7 @@ public partial class PowerPointHandler
                         XmlTextValidator.ValidateOrThrow(value, key);
                         _doc.PackageProperties.LastModifiedBy = value;
                         break;
-                    case "revision":
+                    case "revisionnumber":
                         XmlTextValidator.ValidateOrThrow(value, key);
                         _doc.PackageProperties.Revision = value;
                         break;

@@ -78,7 +78,7 @@ public partial class ExcelHandler
                     case "category": pkg.Category = value; break;
                     case "keywords": pkg.Keywords = value; break;
                     case "lastmodifiedby": pkg.LastModifiedBy = value; break;
-                    case "revision": pkg.Revision = value; break;
+                    case "revisionnumber": pkg.Revision = value; break;
                     default:
                         var lowerKey = key.ToLowerInvariant();
                         if (!TrySetWorkbookSetting(lowerKey, value)
