@@ -610,8 +610,17 @@ internal static partial class ChartHelper
         // `.color` are consumed at build time by ParseSeriesData /
         // ParseSeriesColors and must NOT be deferred (double-apply /
         // literal-expansion regressions).
-        if (TryParseSeriesDottedKey(key, out _, out var sProp)
-            && DeferredSeriesSubkeys.Contains(sProp)) return true;
+        if (TryParseSeriesDottedKey(key, out _, out var sProp))
+        {
+            if (DeferredSeriesSubkeys.Contains(sProp)) return true;
+            // R38: per-point sub-keys (point{M}.color / .explosion / .marker
+            // / .markerSize / .markerColor) dispatch via the same
+            // HandleSeriesDottedProperty path but the sub-key carries the
+            // M index so an exact-set membership check misses them.
+            if (System.Text.RegularExpressions.Regex.IsMatch(
+                    sProp, @"^point\d+\.", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                return true;
+        }
         return false;
     }
 

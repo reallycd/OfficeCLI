@@ -175,6 +175,22 @@ public static partial class PptxBatchEmitter
                         if (key == "trendline") anySeriesTrendline = true;
                     }
                 }
+                // R38: per-point sub-keys (point{M}.color, point{M}.explosion,
+                // point{M}.marker, …) are emitted by Reader onto each series
+                // node but the allowlist above only enumerates fixed keys.
+                // Iterate the series Format dictionary and promote anything
+                // matching `point\d+\.` to series{N}.point{M}.{prop} on the
+                // chart add row so dump→replay preserves per-data-point
+                // styling.
+                foreach (var (pk, pv) in s.Format)
+                {
+                    if (pv == null) continue;
+                    if (!System.Text.RegularExpressions.Regex.IsMatch(
+                            pk, @"^point\d+\.")) continue;
+                    var psval = pv.ToString();
+                    if (string.IsNullOrEmpty(psval)) continue;
+                    props[$"series{seriesIdx}.{pk}"] = psval;
+                }
             }
             // Chart-level `trendline` is Reader's first-series summary — once
             // per-series `seriesN.trendline` rows have been emitted, the
