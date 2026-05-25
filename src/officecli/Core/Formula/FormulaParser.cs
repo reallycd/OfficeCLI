@@ -346,8 +346,17 @@ internal static class FormulaParser
             case "m": // matrix
             {
                 var matrixRows = element.ChildElements.Where(e => e.LocalName == "mr").ToList();
+                // Trim each cell's leading/trailing whitespace before joining
+                // with " & "/" \\\\ ". The tokenizer collapses runs of ordinary
+                // characters into a single Text token that includes surrounding
+                // spaces (e.g. "a " before "&", " b " between "&" and "\\\\"),
+                // so a raw join produces "a  &  b  \\\\  c" and round-trips
+                // accumulate one space per pass. Trimming at the cell boundary
+                // restores "a & b \\\\ c & d" — matrix delimiters carry their
+                // own spacing semantics in LaTeX, so cell-internal padding adds
+                // nothing.
                 var rowStrings = matrixRows.Select(mr =>
-                    string.Join(" & ", mr.ChildElements.Where(e => e.LocalName == "e").Select(ArgToLatex)));
+                    string.Join(" & ", mr.ChildElements.Where(e => e.LocalName == "e").Select(e => ArgToLatex(e).Trim())));
                 var content = string.Join(" \\\\ ", rowStrings);
                 // Standalone matrix (not inside a delimiter) needs environment wrapper
                 if (element.Parent?.LocalName != "e" || element.Parent?.Parent?.LocalName != "d")
