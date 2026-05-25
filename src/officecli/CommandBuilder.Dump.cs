@@ -91,7 +91,25 @@ static partial class CommandBuilder
             if (ext == ".docx")
             {
                 var word = (WordHandler)handler;
-                items = WordBatchEmitter.EmitWord(word, path);
+                var (dItems, dWarnings) = WordBatchEmitter.EmitWordWithWarnings(word, path);
+                items = dItems;
+                if (dWarnings.Count > 0)
+                {
+                    // R10-bug1: mirror pptx wiring exactly so docx warnings
+                    // land in the envelope's `warnings` array AND emit a
+                    // stderr line for human consumption (resident's
+                    // BuildWarnings picks the stderr line up too).
+                    dumpWarnings = new List<CliWarning>(dWarnings.Count);
+                    foreach (var w in dWarnings)
+                    {
+                        dumpWarnings.Add(new CliWarning
+                        {
+                            Message = $"skipped {w.Element} at {w.Path}: {w.Reason}",
+                            Code = "unsupported_element"
+                        });
+                        Console.Error.WriteLine($"warning: skipped {w.Element} at {w.Path}");
+                    }
+                }
             }
             else // .pptx
             {

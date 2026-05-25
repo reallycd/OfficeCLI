@@ -106,7 +106,11 @@ public static partial class WordBatchEmitter
             .Where(c => c.Type == "run" || c.Type == "r" || c.Type == "picture" || c.Type == "field" || c.Type == "ptab" || c.Type == "break"
                 || c.Type == "equation"
                 || c.Type == "tab"
-                || c.Type == "bookmark")
+                || c.Type == "bookmark"
+                // R10-bug1: include ole children so TryEmitOleRun can fire
+                // a warning instead of letting them be silently filtered
+                // out of the run list (full round-trip is a backlog item).
+                || c.Type == "ole")
             .ToList();
         var breaks = runs.Where(c => c.Type == "break").ToList();
         var bookmarks = (pNode.Children ?? new List<DocumentNode>())
@@ -240,6 +244,17 @@ public static partial class WordBatchEmitter
             if (TryEmitPtabRun(run, paraTargetPath, items)) continue;
             if (TryEmitEquationRun(run, paraTargetPath, items)) continue;
             if (TryEmitFieldRun(run, paraTargetPath, items)) continue;
+            // R10-bug1: OLE/embedded-object runs surface as type="ole" (see
+            // CreateOleNode in WordHandler.ImageHelpers.cs). The Add side
+            // requires --prop src=<external file> to recreate the embedded
+            // payload, but the emitted batch has no carrier for that file —
+            // base64-inlining the contentType+bytes the way picture runs do
+            // is a backlog item (needs round-trip on the host part-rel +
+            // VML shape geometry + ProgID + DrawAspect + alt-name; see
+            // bug1 follow-up). Until then, surface a deterministic
+            // warning so the dump envelope flags the silent loss instead
+            // of producing an OLE-stripped paragraph that looks complete.
+            if (TryEmitOleRun(run, paraTargetPath, items, ctx)) continue;
             if (TryEmitPictureRun(word, run, paraTargetPath, parentPath, targetIndex, items, ctx, sharedAttachPara)) continue;
             if (TryEmitNoteRefRun(run, paraTargetPath, items, ctx)) continue;
             EmitPlainOrHyperlinkRun(run, paraTargetPath, items);
@@ -1022,6 +1037,43 @@ public static partial class WordBatchEmitter
         if (parentPath.Contains("/tc[", StringComparison.Ordinal)
             && parentPath.EndsWith("]", StringComparison.Ordinal)) return true;
         return false;
+    }
+
+    /// <summary>
+    /// R10-bug1: detect OLE / embedded-object runs (Type=="ole") and emit
+    /// a warning into <see cref="BodyEmitContext.Warnings"/> instead of
+    /// silently dropping the run.
+    ///
+    /// Full round-trip would require carrying the embedded payload
+    /// (Excel/.docx/.pptx/etc binary) plus the VML icon image plus VML
+    /// shape geometry plus ProgID plus DrawAspect plus alt-name through
+    /// the batch stream — picture-run-style base64 inlining is the
+    /// reasonable model but the Add side currently only accepts
+    /// `--prop src=<file>` (real on-disk path) for OLE. Until that gap
+    /// closes, the warning surface is the right call: the host paragraph
+    /// still emits (so the surrounding text is intact), only the OLE
+    /// child is omitted, and the dump envelope's `warnings` array names
+    /// the affected path so the caller can decide whether to bail.
+    /// </summary>
+    private static bool TryEmitOleRun(DocumentNode run, string paraTargetPath, List<BatchItem> items, BodyEmitContext? ctx)
+    {
+        if (run.Type != "ole") return false;
+        if (ctx != null)
+        {
+            // Surface ProgID when available — it's the most useful single
+            // identifier for the caller (Excel.Sheet.12, Word.Document.12,
+            // Package, …) and lets them grep the source for the original
+            // embedded file.
+            var progId = run.Format.TryGetValue("progId", out var pid) ? pid?.ToString() : null;
+            var reason = progId != null
+                ? $"ole run dropped (progId={progId}); add-side requires --prop src=<external file> and the batch stream has no carrier for the embedded payload"
+                : "ole run dropped; add-side requires --prop src=<external file> and the batch stream has no carrier for the embedded payload";
+            ctx.Warnings.Add(new DocxUnsupportedWarning(
+                Element: "ole",
+                Path: run.Path,
+                Reason: reason));
+        }
+        return true;
     }
 
     private static bool TryEmitNoteRefRun(DocumentNode run, string paraTargetPath, List<BatchItem> items, BodyEmitContext? ctx)

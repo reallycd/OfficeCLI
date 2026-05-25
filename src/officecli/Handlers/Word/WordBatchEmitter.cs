@@ -30,6 +30,17 @@ namespace OfficeCli.Handlers;
 public static partial class WordBatchEmitter
 {
     /// <summary>
+    /// Captured at emit time when a paragraph carries content we cannot round-trip
+    /// through the existing handler vocabulary (currently: OLE/embedded-object
+    /// runs whose recreate path needs an external src file the emitted batch
+    /// has no carrier for). The host paragraph itself is emitted; the
+    /// unsupported run is dropped silently from `items` but recorded here so
+    /// the CLI can surface a warning bundle to the caller — mirroring pptx's
+    /// <see cref="PptxBatchEmitter.UnsupportedWarning"/> contract.
+    /// </summary>
+    public sealed record DocxUnsupportedWarning(string Element, string Path, string Reason);
+
+    /// <summary>
     /// Emit a batch sequence for a subtree of a Word document.
     /// <para>
     /// Path semantics: dump scopes purely to "what's under this path".
@@ -52,23 +63,34 @@ public static partial class WordBatchEmitter
     ///   is not bundled.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Back-compat overload — returns only the items, discarding the warning
+    /// list. Used by the rich test corpus that pre-dates the warning channel.
+    /// New callers (CommandBuilder.Dump, ResidentServer) should use
+    /// <see cref="EmitWordWithWarnings(WordHandler, string)"/> so the
+    /// envelope can surface unsupported-element warnings.
+    /// </summary>
     public static List<BatchItem> EmitWord(WordHandler word, string path)
+        => EmitWordWithWarnings(word, path).Items;
+
+    public static (List<BatchItem> Items, List<DocxUnsupportedWarning> Warnings) EmitWordWithWarnings(WordHandler word, string path)
     {
         if (string.IsNullOrEmpty(path))
             throw new CliException("dump path cannot be empty. Use '/' for the full document or a subtree path like /body/p[1].")
                 { Code = "invalid_path" };
-        if (path == "/") return EmitWord(word);
+        if (path == "/") return EmitWordWithWarnings(word);
 
         var items = new List<BatchItem>();
+        var warnings = new List<DocxUnsupportedWarning>();
         switch (path.ToLowerInvariant())
         {
-            case "/theme": EmitThemeRaw(word, items); return items;
-            case "/settings": EmitSettingsRaw(word, items); return items;
-            case "/numbering": EmitNumberingRaw(word, items); return items;
-            case "/styles": EmitStyles(word, items); return items;
+            case "/theme": EmitThemeRaw(word, items); return (items, warnings);
+            case "/settings": EmitSettingsRaw(word, items); return (items, warnings);
+            case "/numbering": EmitNumberingRaw(word, items); return (items, warnings);
+            case "/styles": EmitStyles(word, items); return (items, warnings);
             case "/body":
-                EmitBody(word, items, new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase));
-                return items;
+                EmitBody(word, items, warnings, new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase));
+                return (items, warnings);
         }
 
         // Reject bare /body/p and /body/tbl (no [N]). WordHandler.Get resolves
@@ -125,7 +147,8 @@ public static partial class WordBatchEmitter
             ChartCursor: new NoteCursor(),
             ParaIdToTargetIdx: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
             DeferredBookmarks: new List<BatchItem>(),
-            TextboxCounters: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase));
+            TextboxCounters: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
+            Warnings: warnings);
 
         if (node.Type == "table")
             EmitTable(word, path, 1, items, ctx);
@@ -133,13 +156,21 @@ public static partial class WordBatchEmitter
             EmitParagraph(word, path, "/body", 1, items, autoPresent: false, ctx);
 
         items.AddRange(ctx.DeferredBookmarks);
-        return items;
+        return (items, warnings);
     }
 
-    /// <summary>Emit a batch sequence for a Word document (full document, equivalent to path "/").</summary>
+    /// <summary>
+    /// Back-compat overload — returns only the items. See
+    /// <see cref="EmitWord(WordHandler, string)"/> for the rationale.
+    /// </summary>
     public static List<BatchItem> EmitWord(WordHandler word)
+        => EmitWordWithWarnings(word).Items;
+
+    /// <summary>Emit a batch sequence for a Word document (full document, equivalent to path "/").</summary>
+    public static (List<BatchItem> Items, List<DocxUnsupportedWarning> Warnings) EmitWordWithWarnings(WordHandler word)
     {
         var items = new List<BatchItem>();
+        var warnings = new List<DocxUnsupportedWarning>();
 
         // Phase order matters: resources first so body refs (style=Heading1,
         // numId=3, etc.) resolve when the paragraph adds reach them on replay.
@@ -162,7 +193,7 @@ public static partial class WordBatchEmitter
         // etc.) resolve their cross-refs at render time, not at batch-
         // apply time.
         var paraIdToTargetIdx = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        EmitBody(word, items, paraIdToTargetIdx);
+        EmitBody(word, items, warnings, paraIdToTargetIdx);
         EmitHeadersFooters(word, items);
         EmitComments(word, items, paraIdToTargetIdx);
         // CONSISTENCY(markRPr-inherit-opt-out): dump emits each run's props
@@ -179,7 +210,7 @@ public static partial class WordBatchEmitter
                     it.Props["noMarkRPrInherit"] = "true";
             }
         }
-        return items;
+        return (items, warnings);
     }
 
     private static string? ExtractParaId(string anchorPath)
@@ -306,9 +337,15 @@ public static partial class WordBatchEmitter
         // Drawing and uses the post-bump value as N for /<host>/textbox[N].
         // Matches the CountTextboxesInHost selector on the Add side so dump
         // and Add-side indexing stay in lockstep.
-        Dictionary<string, int> TextboxCounters);
+        Dictionary<string, int> TextboxCounters,
+        // R10-bug1: collected during the body walk whenever an emit helper
+        // identifies content it cannot round-trip through the existing
+        // handler vocabulary (OLE runs without a carrier for the embedded
+        // payload, etc). Mirrors pptx's <see cref="PptxBatchEmitter.SlideEmitContext.Unsupported"/>.
+        List<DocxUnsupportedWarning> Warnings);
 
     private static void EmitBody(WordHandler word, List<BatchItem> items,
+                                 List<DocxUnsupportedWarning> warnings,
                                  Dictionary<string, int>? paraIdToTargetIdx = null)
     {
         // BUG-DUMP-X6-02: word.Get("/body") raises "Path not found: /body" on
@@ -353,7 +390,8 @@ public static partial class WordBatchEmitter
             ChartCursor: new NoteCursor(),
             ParaIdToTargetIdx: paraIdToTargetIdx,
             DeferredBookmarks: new List<BatchItem>(),
-            TextboxCounters: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase));
+            TextboxCounters: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
+            Warnings: warnings);
 
         int pIndex = 0, tblIndex = 0;
         foreach (var child in bodyNode.Children)
