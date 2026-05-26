@@ -1257,11 +1257,13 @@ internal static class FormulaParser
                 };
                 if (cmd is "mathbb" or "mathcal")
                 {
-                    // Double-struck and calligraphic: use NormalText + special Unicode if available,
-                    // otherwise render as styled text with script style
-                    var rPr = new M.RunProperties(new M.NormalText());
-                    if (cmd == "mathcal")
-                        rPr = new M.RunProperties(new M.Style { Val = M.StyleValues.Plain }, new M.Script());
+                    var scriptVal = cmd == "mathbb"
+                        ? M.ScriptValues.DoubleStruck
+                        : M.ScriptValues.Script;
+                    var rPr = new M.RunProperties(
+                        new M.Script { Val = scriptVal },
+                        new M.Style { Val = M.StyleValues.Plain }
+                    );
                     return new M.Run(
                         rPr,
                         new M.Text(text) { Space = SpaceProcessingModeValues.Preserve }
@@ -1632,7 +1634,10 @@ internal static class FormulaParser
                 for (int ci = 0; ci < colCount; ci++)
                 {
                     mcs.AppendChild(new M.MatrixColumn(
-                        new M.MatrixColumnJustification { Val = M.HorizontalAlignmentValues.Left }
+                        new M.MatrixColumnProperties(
+                            new M.MatrixColumnCount { Val = 1 },
+                            new M.MatrixColumnJustification { Val = M.HorizontalAlignmentValues.Left }
+                        )
                     ));
                 }
                 mPr.AppendChild(mcs);
