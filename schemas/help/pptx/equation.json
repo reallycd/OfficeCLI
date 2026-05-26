@@ -18,6 +18,21 @@
   "note": "Aliases: formula, math. FormulaParser parses LaTeX-ish input. Adding a 'shape' or 'textbox' with 'formula' prop also routes here.",
   "extends": "_shared/equation",
   "properties": {
+    "formula": {
+      "type": "string",
+      "description": "math expression. Aliases: text.",
+      "aliases": [
+        "text"
+      ],
+      "add": true,
+      "set": true,
+      "get": true,
+      "examples": [
+        "--prop formula=\"x^2 + y^2 = z^2\""
+      ],
+      "readback": "LaTeX expression reconstructed from the <m:oMath> tree (PowerPointHandler.NodeBuilder.cs emits Format[\"formula\"]). docx does not implement this readback yet — see _shared/equation.json.",
+      "enforcement": "report"
+    },
     "x": {
       "type": "length",
       "add": true,
