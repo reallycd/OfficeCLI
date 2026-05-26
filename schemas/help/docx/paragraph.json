@@ -39,7 +39,8 @@
         "distribute"
       ],
       "aliases": [
-        "alignment"
+        "alignment",
+        "halign"
       ],
       "add": true,
       "set": true,

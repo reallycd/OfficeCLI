@@ -820,7 +820,7 @@ public partial class WordHandler
                 {
                     styleNode.Format["numId"] = numProps.NumberingId.Val.Value.ToString();
                     if (numProps.NumberingLevelReference?.Val?.Value != null)
-                        styleNode.Format["numLevel"] = numProps.NumberingLevelReference.Val.Value.ToString();
+                        styleNode.Format["ilvl"] = numProps.NumberingLevelReference.Val.Value.ToString();
                 }
 
                 // CONSISTENCY(tabs): tabs[] not yet exposed by paragraph Get.

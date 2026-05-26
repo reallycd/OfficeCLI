@@ -906,9 +906,7 @@ internal static partial class ChartHelper
                         {
                             "fixedVal" => "fixed",
                             "percentage" => "percent",
-                            "stdDev" => "stddev",
-                            "stdErr" => "stderr",
-                            _ => errValType.InnerText
+                            _ => errValType.InnerText  // OOXML camelCase: stdDev, stdErr, cust
                         };
                         // Magnitude lives in either <c:val>, or shared
                         // <c:plus>/<c:minus> NumericLiteral first point.
@@ -925,7 +923,7 @@ internal static partial class ChartHelper
                             var numStr = firstPt?.GetFirstChild<C.NumericValue>()?.Text;
                             if (!string.IsNullOrEmpty(numStr)) mag = numStr;
                         }
-                        seriesNode.Format["errbars"] = mag != null
+                        seriesNode.Format["errBars"] = mag != null
                             ? $"{typeName}:{mag}"
                             : typeName;
                     }
@@ -963,22 +961,49 @@ internal static partial class ChartHelper
                     if (!string.IsNullOrEmpty(serDlLatin))
                         seriesNode.Format["labelFont.name"] = serDlLatin;
                 }
-                // Data point colors
+                // Data point colors + per-point marker / markerSize /
+                // markerColor / explosion. Mirrors the series-level readback
+                // above (markerSymbol/Size/spPr/SolidFill) so R38-B5 writer
+                // output round-trips through dump→replay; without these the
+                // dPt children are silently dropped on Get.
                 if (serEl != null)
                 {
                     foreach (var dPt in serEl.Elements<C.DataPoint>())
                     {
                         var ptIdx = dPt.Index?.Val?.Value;
                         if (ptIdx == null) continue;
+                        var ptNum = ptIdx.Value + 1;
                         var ptSpPr = dPt.GetFirstChild<C.ChartShapeProperties>();
                         if (ptSpPr?.GetFirstChild<Drawing.NoFill>() != null)
-                            seriesNode.Format[$"point{ptIdx.Value + 1}.color"] = "none";
+                            seriesNode.Format[$"point{ptNum}.color"] = "none";
                         var ptFill = ptSpPr?.GetFirstChild<Drawing.SolidFill>();
                         if (ptFill != null)
                         {
                             var ptColor = ReadColorFromFill(ptFill);
-                            if (ptColor != null) seriesNode.Format[$"point{ptIdx.Value + 1}.color"] = ptColor;
+                            if (ptColor != null) seriesNode.Format[$"point{ptNum}.color"] = ptColor;
                         }
+                        // <c:marker> child of <c:dPt>
+                        var ptMarker = dPt.GetFirstChild<C.Marker>();
+                        if (ptMarker != null)
+                        {
+                            var ptMarkerSymbol = ptMarker.GetFirstChild<C.Symbol>()?.Val;
+                            if (ptMarkerSymbol?.HasValue == true)
+                                seriesNode.Format[$"point{ptNum}.marker"] = ptMarkerSymbol.InnerText;
+                            var ptMarkerSize = ptMarker.GetFirstChild<C.Size>()?.Val;
+                            if (ptMarkerSize?.HasValue == true)
+                                seriesNode.Format[$"point{ptNum}.markerSize"] = (int)ptMarkerSize.Value;
+                            var ptMarkerFill = ptMarker.GetFirstChild<C.ChartShapeProperties>()
+                                ?.GetFirstChild<Drawing.SolidFill>();
+                            if (ptMarkerFill != null)
+                            {
+                                var ptmColor = ReadColorFromFill(ptMarkerFill);
+                                if (ptmColor != null) seriesNode.Format[$"point{ptNum}.markerColor"] = ptmColor;
+                            }
+                        }
+                        // <c:explosion> child of <c:dPt> — pie/doughnut slice offset
+                        var ptExplosion = dPt.GetFirstChild<C.Explosion>()?.Val;
+                        if (ptExplosion?.HasValue == true)
+                            seriesNode.Format[$"point{ptNum}.explosion"] = (int)ptExplosion.Value;
                     }
                 }
                 node.Children.Add(seriesNode);

@@ -382,6 +382,12 @@ public partial class WordHandler
                 var existingPrEx = rowEl.GetFirstChild<TablePropertyExceptions>();
                 rowSnapshots.Add((rowEl, existingPrEx?.CloneNode(true)));
             }
+            // Snapshot tblGrid for the same reason the cell branch does
+            // (see below): table-level colWidths Set rewrites the gridCol
+            // widths, and OOXML expects a <w:tblGridChange> wrapping the
+            // prior grid. Without it the grid-level revision history is
+            // silently lost on accept/reject.
+            var preTblGrid = tbl.GetFirstChild<TableGrid>()?.CloneNode(true);
 
             Action wrap = () =>
             {
@@ -395,6 +401,25 @@ public partial class WordHandler
                 };
                 change.AppendChild(previous);
                 tblPr.AppendChild(change);
+
+                if (preTblGrid is TableGrid preGrid)
+                {
+                    var postGrid = tbl.GetFirstChild<TableGrid>();
+                    if (postGrid != null
+                        && !TableGridsEqual(preGrid, postGrid)
+                        && postGrid.GetFirstChild<TableGridChange>() == null)
+                    {
+                        var prevGrid = new PreviousTableGrid();
+                        foreach (var col in preGrid.Elements<GridColumn>())
+                            prevGrid.AppendChild(col.CloneNode(true));
+                        // Fresh id — tblPrChange already consumed idStr,
+                        // and per-row tblPrExChanges below also allocate
+                        // their own; document-scope w:id uniqueness.
+                        var gridChange = new TableGridChange { Id = GenerateRevisionId() };
+                        gridChange.AppendChild(prevGrid);
+                        postGrid.AppendChild(gridChange);
+                    }
+                }
 
                 // Per-row tblPrEx + tblPrExChange cascade. Word for Mac
                 // keys its reviewing pane "Formatted Table" entry off
@@ -938,6 +963,12 @@ public partial class WordHandler
             list.Add(new RevisionRef(trpc, "rowChange", trpc.Author?.Value, trpc.Date?.Value, trpc.Id?.Value?.ToString()));
         foreach (var tcpc in body.Descendants<TableCellPropertiesChange>())
             list.Add(new RevisionRef(tcpc, "cellChange", tcpc.Author?.Value, tcpc.Date?.Value, tcpc.Id?.Value?.ToString()));
+        // tblGridChange — table grid column-width revision (side effect
+        // of cell/table colWidths Set under track-changes). Author/Date
+        // are not carried on TableGridChange itself (schema only has Id);
+        // the paired tblPrChange / tcPrChange owns attribution.
+        foreach (var tgc in body.Descendants<TableGridChange>())
+            list.Add(new RevisionRef(tgc, "gridChange", null, null, tgc.Id?.Value?.ToString()));
         // trPr/ins, trPr/del — row-level insertion/deletion markers
         foreach (var trPr in body.Descendants<TableRowProperties>())
         {
@@ -1030,6 +1061,8 @@ public partial class WordHandler
             ("format", "tablechange") => true,
             ("format", "rowchange") => true,
             ("format", "cellchange") => true,
+            ("format", "gridchange") => true,
+            ("grid", "gridchange") => true,
             ("paragraph", "paragraphchange") => true,
             ("rowins", "rowinsertion") => true,
             ("rowdel", "rowdeletion") => true,
@@ -1071,6 +1104,7 @@ public partial class WordHandler
             case "tableChange":
             case "rowChange":
             case "cellChange":
+            case "gridChange":
                 rev.Element.Remove();
                 break;
             case "rowInsertion":
@@ -1201,6 +1235,14 @@ public partial class WordHandler
             case "rowChange":
                 RestorePropsFromChange<TableRowProperties, TableRowPropertiesChange, PreviousTableRowProperties>(
                     (TableRowPropertiesChange)rev.Element, () => new TableRowProperties());
+                break;
+            case "gridChange":
+                // Schema CT_TblGrid = (gridCol* + tblGridChange?), so the
+                // generic "replace parent wholesale from snapshot's children"
+                // shape is lossless here — the change element is the only
+                // non-gridCol child and we want it dropped on reject.
+                RestorePropsFromChange<TableGrid, TableGridChange, PreviousTableGrid>(
+                    (TableGridChange)rev.Element, () => new TableGrid());
                 break;
             case "rowInsertion":
                 {
