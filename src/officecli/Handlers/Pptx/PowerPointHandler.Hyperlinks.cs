@@ -140,9 +140,15 @@ public partial class PowerPointHandler
             throw new ArgumentException(
                 "hyperlink requires --prop link=<url>. Example: --prop link=https://example.com");
         var tooltip = properties.GetValueOrDefault("tooltip");
-        var (slidePart, shape) = ResolveShape(int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value));
+        var sIdx = int.Parse(m.Groups[1].Value);
+        var shIdx = int.Parse(m.Groups[2].Value);
+        var (slidePart, shape) = ResolveShape(sIdx, shIdx);
         ApplyShapeHyperlink(slidePart, shape, url, tooltip);
-        return parentPath;
+        // Echo the canonical /hyperlink sub-path (mirrors the Get path the help
+        // schema documents) rather than the bare shape parent, so a follow-up
+        // Get on the returned handle resolves the hyperlink node directly.
+        var shapePathSeg = BuildElementPathSegment("shape", shape, shIdx);
+        return $"/slide[{sIdx}]/{shapePathSeg}/hyperlink";
     }
 
     /// <summary>
@@ -255,6 +261,28 @@ public partial class PowerPointHandler
         // so the helper's ordering table is the single source of truth.
         rProps.AppendChild(BuildHyperlinkElement(target.Value, tooltip));
         ReorderDrawingRunProperties(rProps);
+    }
+
+    /// <summary>
+    /// Read the hyperlink URL + tooltip for a shape — shape-level (nvSpPr/cNvPr)
+    /// first, falling back to the first run's rPr. Mirrors the read order in
+    /// NodeBuilder's shape Get so the /hyperlink sub-path and the shape-level
+    /// link= readback agree. Returns (null, null) when the shape has no link.
+    /// </summary>
+    private static (string? url, string? tooltip) ReadShapeHyperlink(Shape shape, OpenXmlPart part)
+    {
+        var nvDp = shape.NonVisualShapeProperties?.NonVisualDrawingProperties;
+        var shapeHl = nvDp?.GetFirstChild<Drawing.HyperlinkOnClick>();
+        var url = ReadHyperlinkOnClickUrl(shapeHl, part);
+        var tooltip = shapeHl?.Tooltip?.Value;
+        if (url == null)
+        {
+            var firstRun = shape.Descendants<Drawing.Run>().FirstOrDefault();
+            var runHl = firstRun?.RunProperties?.GetFirstChild<Drawing.HyperlinkOnClick>();
+            url = ReadHyperlinkOnClickUrl(runHl, part);
+            tooltip = runHl?.Tooltip?.Value ?? tooltip;
+        }
+        return (url, string.IsNullOrEmpty(tooltip) ? null : tooltip);
     }
 
     /// <summary>

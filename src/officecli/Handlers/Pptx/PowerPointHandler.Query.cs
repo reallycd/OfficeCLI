@@ -348,6 +348,32 @@ public partial class PowerPointHandler
             return notesNode;
         }
 
+        // Try hyperlink sub-path: /slide[N]/shape[M]/hyperlink. The URL is stored
+        // on the shape (nvSpPr/cNvPr or first-run rPr) and already surfaces as
+        // link= on the shape Get; this exposes it as its own hyperlink node so
+        // the path the help schema documents resolves instead of throwing.
+        var hlinkPathMatch = Regex.Match(path, @"^/slide\[(\d+)\]/shape\[(\d+)\]/(?:hyperlink|hlink)$", RegexOptions.IgnoreCase);
+        if (hlinkPathMatch.Success)
+        {
+            var sIdx = int.Parse(hlinkPathMatch.Groups[1].Value);
+            var shIdx = int.Parse(hlinkPathMatch.Groups[2].Value);
+            var (hlSlidePart, shape) = ResolveShape(sIdx, shIdx);
+            var shapePathSeg = BuildElementPathSegment("shape", shape, shIdx);
+            var (hlUrl, hlTip) = ReadShapeHyperlink(shape, hlSlidePart);
+            if (hlUrl == null)
+                throw new ArgumentException(
+                    $"Hyperlink not found at /slide[{sIdx}]/{shapePathSeg}/hyperlink (shape has no hyperlink)");
+            var hlNode = new DocumentNode
+            {
+                Path = $"/slide[{sIdx}]/{shapePathSeg}/hyperlink",
+                Type = "hyperlink",
+                Text = hlUrl,
+            };
+            hlNode.Format["link"] = hlUrl;
+            if (!string.IsNullOrEmpty(hlTip)) hlNode.Format["tooltip"] = hlTip!;
+            return hlNode;
+        }
+
         // Try paragraph/run paths: /slide[N]/shape[M]/paragraph[P] or .../run[K] or .../paragraph[P]/run[K]
         // CONSISTENCY(path-aliases): see PowerPointHandler.Set.cs runMatch — PPT
         // accepts Word-style `/r[N]` / `/p[N]` short forms in addition to the
