@@ -280,6 +280,16 @@ public partial class ExcelHandler
         string? cellRefFromPath = null;
         if (cellSegments.Length > 1 && Regex.IsMatch(cellSegments[1], @"^[A-Z]+\d+$", RegexOptions.IgnoreCase))
             cellRefFromPath = cellSegments[1].ToUpperInvariant();
+        // R10-2: also honor a cell[<ref>] path tail (e.g. /Sheet1/cell[C5]) so
+        // `add /Sheet1/cell[C5] cell` lands at C5 instead of silently snapping
+        // to A1. Mirrors the bare-cellref tail above and the row[N] tail below;
+        // without it, "cell[C5]" matched neither regex and auto-assign chose A1.
+        else if (cellSegments.Length > 1)
+        {
+            var cellPathMatch = Regex.Match(cellSegments[1], @"^cell\[([A-Z]+\d+)\]$", RegexOptions.IgnoreCase);
+            if (cellPathMatch.Success)
+                cellRefFromPath = cellPathMatch.Groups[1].Value.ToUpperInvariant();
+        }
 
         // BUG-R41-B6: also honor a row[N] path tail (e.g. /Sheet1/row[5]) so
         // `add /Sheet1/row[5] cell` lands on row 5 instead of silently snapping
@@ -892,39 +902,44 @@ public partial class ExcelHandler
         var newRunProps = new RunProperties();
         var runText = properties.GetValueOrDefault("text", "");
 
-        foreach (var (rKey, rVal) in properties)
+        // CONSISTENCY(tracking-dict): read each prop via TryGetValue (not a
+        // foreach over the dictionary). The foreach went through
+        // IEnumerable.GetEnumerator on the Dictionary<> static type, which does
+        // NOT fire TrackingPropertyDictionary's shadow GetEnumerator — so applied
+        // keys like bold/italic were never marked accessed and surfaced as a
+        // false unsupported_property (exit 2). See CLAUDE.md tracking pitfalls.
+        // Each helper accepts the short key plus its font.* alias.
+        if ((properties.TryGetValue("bold", out var rBold) && ParseHelpers.IsTruthy(rBold)) ||
+            (properties.TryGetValue("font.bold", out var rFBold) && ParseHelpers.IsTruthy(rFBold)))
+            newRunProps.AppendChild(new Bold());
+        if ((properties.TryGetValue("italic", out var rItalic) && ParseHelpers.IsTruthy(rItalic)) ||
+            (properties.TryGetValue("font.italic", out var rFItalic) && ParseHelpers.IsTruthy(rFItalic)))
+            newRunProps.AppendChild(new Italic());
+        if (properties.TryGetValue("strike", out var rStrike) && ParseHelpers.IsTruthy(rStrike))
+            newRunProps.AppendChild(new Strike());
+        if (properties.TryGetValue("underline", out var rUl)
+            && !string.IsNullOrEmpty(rUl) && rUl != "false" && rUl != "none")
         {
-            switch (rKey.ToLowerInvariant())
-            {
-                case "bold" when ParseHelpers.IsTruthy(rVal):
-                    newRunProps.AppendChild(new Bold()); break;
-                case "italic" when ParseHelpers.IsTruthy(rVal):
-                    newRunProps.AppendChild(new Italic()); break;
-                case "strike" when ParseHelpers.IsTruthy(rVal):
-                    newRunProps.AppendChild(new Strike()); break;
-                case "underline":
-                    if (!string.IsNullOrEmpty(rVal) && rVal != "false" && rVal != "none")
-                    {
-                        var ul = new Underline();
-                        if (rVal.ToLowerInvariant() == "double") ul.Val = UnderlineValues.Double;
-                        newRunProps.AppendChild(ul);
-                    }
-                    break;
-                case "superscript" when ParseHelpers.IsTruthy(rVal):
-                    newRunProps.AppendChild(new VerticalTextAlignment { Val = VerticalAlignmentRunValues.Superscript }); break;
-                case "subscript" when ParseHelpers.IsTruthy(rVal):
-                    newRunProps.AppendChild(new VerticalTextAlignment { Val = VerticalAlignmentRunValues.Subscript }); break;
-                case "size" or "fontsize":
-                    if (double.TryParse(rVal.TrimEnd('p', 't'), out var runSz))
-                        newRunProps.AppendChild(new FontSize { Val = runSz });
-                    break;
-                case "color":
-                    newRunProps.AppendChild(new Color { Rgb = new HexBinaryValue(ParseHelpers.NormalizeArgbColor(rVal)) });
-                    break;
-                case "font" or "fontname":
-                    newRunProps.AppendChild(new RunFont { Val = rVal }); break;
-            }
+            var ul = new Underline();
+            if (rUl.ToLowerInvariant() == "double") ul.Val = UnderlineValues.Double;
+            newRunProps.AppendChild(ul);
         }
+        if (properties.TryGetValue("superscript", out var rSup) && ParseHelpers.IsTruthy(rSup))
+            newRunProps.AppendChild(new VerticalTextAlignment { Val = VerticalAlignmentRunValues.Superscript });
+        if (properties.TryGetValue("subscript", out var rSub) && ParseHelpers.IsTruthy(rSub))
+            newRunProps.AppendChild(new VerticalTextAlignment { Val = VerticalAlignmentRunValues.Subscript });
+        if ((properties.TryGetValue("size", out var rSize) ||
+             properties.TryGetValue("fontsize", out rSize) ||
+             properties.TryGetValue("font.size", out rSize))
+            && double.TryParse(rSize.TrimEnd('p', 't'), out var runSz))
+            newRunProps.AppendChild(new FontSize { Val = runSz });
+        if (properties.TryGetValue("color", out var rColor) ||
+            properties.TryGetValue("font.color", out rColor))
+            newRunProps.AppendChild(new Color { Rgb = new HexBinaryValue(ParseHelpers.NormalizeArgbColor(rColor)) });
+        if (properties.TryGetValue("font", out var rFont) ||
+            properties.TryGetValue("fontname", out rFont) ||
+            properties.TryGetValue("font.name", out rFont))
+            newRunProps.AppendChild(new RunFont { Val = rFont });
         if (newRunProps.HasChildren)
         {
             ReorderRunProperties(newRunProps);
