@@ -80,10 +80,10 @@
     },
     "direction": {
       "type": "string",
-      "description": "direction for directional effects (in/out/left/right/up/down).",
-      "add": true, "set": true, "get": false,
-      "examples": ["--prop direction=in"],
-      "readback": "packed into the 'animation' key value as 'effectName-class-direction-duration' (e.g. 'fly-entrance-left-500'); no standalone 'direction' key is emitted on Get",
+      "description": "direction for directional effects (in/out/left/right/up/down). Accepts the aliases 'top' (= up) and 'bottom' (= down), plus single-letter forms l/r/u/d; all normalize to the canonical in/out/left/right/up/down on readback.",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop direction=in", "--prop direction=bottom"],
+      "readback": "canonical direction token (left/right/up/down) emitted as a standalone 'direction' key when the effect is directional, in addition to being packed into the 'animation' key value as 'effectName-class-direction-duration' (e.g. 'fly-entrance-left-500'). 'top'/'bottom' normalize to 'up'/'down'.",
       "enforcement": "report"
     },
     "repeat": {
