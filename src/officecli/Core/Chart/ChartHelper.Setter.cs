@@ -132,6 +132,12 @@ internal static partial class ChartHelper
         {
             var lower = k.ToLowerInvariant();
             if (lower is "preset" or "style.preset" or "theme") return 0;
+            // combotypes does a full structural rebuild (RebuildComboChart) that
+            // recreates every chart group on the primary axId. It must run before
+            // secondaryaxis, which moves series onto axId 3/4 — otherwise the
+            // rebuild wipes the secondary axis (R26: combo + secondaryAxis +
+            // combotypes left every series on the primary axis).
+            if (lower is "combotypes" or "combo.types") return 0;
             if (lower is "title" or "legend" or "datalabels" or "labels") return 1;
             return 2;
         }
@@ -1382,6 +1388,13 @@ internal static partial class ChartHelper
                         secondaryIndices = value.Split(',')
                             .Select(s => int.TryParse(s.Trim(), out var v) ? v : -1)
                             .Where(v => v > 0).ToHashSet();
+                        // Type-name form, e.g. "line" on a combo chart — route every
+                        // series whose parent CT_*Chart element matches that type to
+                        // the secondary axis. Without this, "line" parsed to an empty
+                        // index set and silently no-op'd, leaving the lineChart bound
+                        // to the primary axId (the R26 combo bug).
+                        if (secondaryIndices.Count == 0)
+                            secondaryIndices = SeriesIndicesForChartType(plotArea2, value);
                     }
                     ApplySecondaryAxis(plotArea2, secondaryIndices);
                     break;
@@ -2891,8 +2904,49 @@ internal static partial class ChartHelper
             }
         }
 
+        // Defensive invariant (R26): never persist an axis declaration that no
+        // chart group references. An orphaned secondary axis (axId 3/4 declared
+        // in plotArea but referenced by no barChart/lineChart/etc.) makes real
+        // Excel reject the whole file with 0x800A03EC. This guards every Set
+        // path, regardless of how the orphan was introduced.
+        foreach (var pa in chart.Elements<C.PlotArea>())
+            PruneOrphanAxes(pa);
+
         chartSpace!.Save();
         return unsupported;
+    }
+
+    // Remove any axis declaration (catAx/valAx/serAx/dateAx) whose axId is not
+    // referenced by at least one chart-group element. Orphaned axes are a
+    // structural violation that Excel refuses to open. Conservative: only
+    // touches axes that nothing references — populated axes are untouched.
+    internal static void PruneOrphanAxes(C.PlotArea plotArea)
+    {
+        // Collect every axId referenced by a chart-group element (barChart,
+        // lineChart, scatterChart, …) via its direct <c:axId> children.
+        var referenced = new HashSet<uint>();
+        foreach (var ct in plotArea.ChildElements
+            .Where(e => e.LocalName.EndsWith("Chart", StringComparison.OrdinalIgnoreCase))
+            .OfType<OpenXmlCompositeElement>())
+        {
+            foreach (var a in ct.Elements<C.AxisId>())
+                if (a.Val?.Value is uint v) referenced.Add(v);
+        }
+
+        // An axis element's own id is its first <c:axId> child. Remove the axis
+        // if that id is referenced by no chart group. Cross-axis (<c:crossAx>)
+        // pointers don't count as a reference — a pair of axes referencing only
+        // each other but no chart group is still orphaned.
+        var axisElements = plotArea.ChildElements
+            .Where(e => e.LocalName is "catAx" or "valAx" or "serAx" or "dateAx")
+            .OfType<OpenXmlCompositeElement>()
+            .ToList();
+        foreach (var ax in axisElements)
+        {
+            var id = ax.GetFirstChild<C.AxisId>()?.Val?.Value;
+            if (id.HasValue && !referenced.Contains(id.Value))
+                ax.Remove();
+        }
     }
 
     // ==================== #1 Data Label Helpers ====================
@@ -3427,6 +3481,38 @@ internal static partial class ChartHelper
         return prop is "x" or "y" or "w" or "h";
     }
 
+    // Map a chart-type name (e.g. "line", "column") to the 1-based global series
+    // indices whose parent CT_*Chart element is of that type. "column" and "bar"
+    // both live in CT_BarChart (distinguished only by barDir), so a type-name of
+    // "column"/"bar" matches any barChart — the common combo author intent of
+    // "move the line series to the secondary axis" maps cleanly to the line group.
+    private static HashSet<int> SeriesIndicesForChartType(C.PlotArea plotArea, string typeName)
+    {
+        var t = typeName.Trim().ToLowerInvariant();
+        // Normalize "column" → bar-family local name prefix.
+        var prefix = t switch
+        {
+            "column" or "bar" => "bar",
+            _ => t,
+        };
+
+        var result = new HashSet<int>();
+        int globalIdx = 0;
+        var chartTypes = plotArea.ChildElements
+            .Where(e => e.LocalName.Contains("Chart") || e.LocalName.Contains("chart"))
+            .OfType<OpenXmlCompositeElement>().ToList();
+        foreach (var ct in chartTypes)
+        {
+            bool match = ct.LocalName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+            foreach (var _ in ct.ChildElements.Where(e => e.LocalName == "ser"))
+            {
+                globalIdx++;
+                if (match) result.Add(globalIdx);
+            }
+        }
+        return result;
+    }
+
     internal static void ApplySecondaryAxis(C.PlotArea plotArea, HashSet<int> secondarySeriesIndices)
     {
         // Find existing axis IDs
@@ -3549,6 +3635,27 @@ internal static partial class ChartHelper
         {
             ser.Remove();
             secondaryChart.AppendChild(ser.CloneNode(true));
+        }
+
+        // Drop any source chart element that lost its last series, but only
+        // while at least one *populated* chart container still references the
+        // primary axId pair. A chart container with zero <c:ser> plots nothing
+        // yet still references the primary axId; Excel treats that orphaned
+        // reference as a structural anomaly. Removing it keeps every declared
+        // axis referenced by a populated chart element. The guard avoids the
+        // degenerate "moved every series to secondary" case, where deleting the
+        // empty primary container would orphan the primary axes themselves.
+        bool primaryStillPopulated = allChartTypes.Any(ct =>
+            ct.ChildElements.Any(e => e.LocalName == "ser")
+            && ct.Elements<C.AxisId>().Any(a => a.Val?.Value == primaryCatAxisId
+                                             || a.Val?.Value == primaryValAxisId));
+        if (primaryStillPopulated)
+        {
+            foreach (var ct in allChartTypes)
+            {
+                if (!ct.ChildElements.Any(e => e.LocalName == "ser"))
+                    ct.Remove();
+            }
         }
 
         secondaryChart.AppendChild(new C.AxisId { Val = secondaryCatAxisId });

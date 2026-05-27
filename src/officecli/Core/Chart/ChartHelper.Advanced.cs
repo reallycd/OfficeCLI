@@ -523,6 +523,22 @@ internal static partial class ChartHelper
             ct.Remove();
         }
 
+        // R26-1 — drop any SECONDARY axis declarations (catAx/valAx with an id
+        // other than the primary cat/val ids, i.e. the 3/4 pair created by a
+        // prior ApplySecondaryAxis). The rebuild below re-binds every series to
+        // the primary axIds, so a leftover secondary axis would be referenced by
+        // no chart container and Excel rejects the orphaned declaration. This is
+        // order-independent defense: it holds even if secondaryaxis somehow runs
+        // before combotypes (the PropOrder=0 schedule normally prevents that).
+        foreach (var ax in plotArea.ChildElements
+            .Where(e => e.LocalName is "catAx" or "valAx" or "serAx" or "dateAx")
+            .OfType<OpenXmlCompositeElement>().ToList())
+        {
+            var id = ax.GetFirstChild<C.AxisId>()?.Val?.Value;
+            if (id.HasValue && id.Value != catAxisId && id.Value != valAxisId)
+                ax.Remove();
+        }
+
         // Group series by target chart type
         var groups = seriesInfo.GroupBy(s => s.targetType).ToList();
         foreach (var group in groups)

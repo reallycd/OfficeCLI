@@ -333,6 +333,12 @@ internal static partial class ChartHelper
         // Apply cell references for dotted syntax (series1.values=Sheet1!B2:B13)
         ApplySeriesReferences(plotArea, properties);
 
+        // Defensive invariant (R26): a built chart must never declare an axis
+        // that no chart group references. Orphaned axes (e.g. a secondary
+        // axId 3/4 left over from a dump→rebuild with mismatched series
+        // binding) make real Excel reject the whole file with 0x800A03EC.
+        PruneOrphanAxes(plotArea);
+
         return chartSpace;
     }
 
