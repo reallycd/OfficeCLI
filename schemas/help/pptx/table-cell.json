@@ -377,16 +377,16 @@
     },
     "border.tl2br": {
       "type": "string",
-      "description": "diagonal from top-left to bottom-right (a:lnTlToBr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient. Add/Set only — Get does not surface diagonal borders today.",
+      "description": "diagonal from top-left to bottom-right (a:lnTlToBr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient. Get returns sub-keys border.tl2br.color, border.tl2br.width, border.tl2br.dash, and a summary border.tl2br key.",
       "add": true,
       "set": true,
-      "get": false,
+      "get": true,
       "examples": [
         "--prop border.tl2br=\"1pt solid FF0000\"",
         "--prop border.tl2br=\"single;4;FF0000\""
       ],
       "enforcement": "report",
-      "readback": "n/a (Get does not surface diagonal borders)"
+      "readback": "summary 'WIDTH DASH #COLOR' plus border.tl2br.color/.width/.dash sub-keys"
     },
     "border.top": {
       "type": "string",
@@ -403,16 +403,16 @@
     },
     "border.tr2bl": {
       "type": "string",
-      "description": "diagonal from top-right to bottom-left (a:lnBlToTr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient. Add/Set only — Get does not surface diagonal borders today.",
+      "description": "diagonal from top-right to bottom-left (a:lnBlToTr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient. Get returns sub-keys border.tr2bl.color, border.tr2bl.width, border.tr2bl.dash, and a summary border.tr2bl key.",
       "add": true,
       "set": true,
-      "get": false,
+      "get": true,
       "examples": [
         "--prop border.tr2bl=\"1pt solid FF0000\"",
         "--prop border.tr2bl=\"single;4;FF0000\""
       ],
       "enforcement": "report",
-      "readback": "n/a (Get does not surface diagonal borders)"
+      "readback": "summary 'WIDTH DASH #COLOR' plus border.tr2bl.color/.width/.dash sub-keys"
     }
   }
 }

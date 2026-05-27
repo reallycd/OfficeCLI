@@ -582,11 +582,11 @@
       ],
       "add": true,
       "set": true,
-      "get": false,
+      "get": true,
       "examples": [
         "--prop animation=fade"
       ],
-      "readback": "n/a",
+      "readback": "synthesized effect spec of the form \"effect-class-durationMs\" (e.g. \"fade-entrance-400\"), resolved from the slide Timing tree; absent when the shape has no animation",
       "enforcement": "report"
     },
     "effective.direction": {

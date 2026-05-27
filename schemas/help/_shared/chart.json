@@ -1142,6 +1142,17 @@
         "--prop secondary=\"2,3\""
       ]
     },
+    "series{N}": {
+      "type": "string",
+      "add": false,
+      "set": true,
+      "get": false,
+      "description": "legacy bare per-series data update (N is the 1-based series index). 'series{N}=\"1,2,3\"' replaces the numeric values for series N; 'series{N}=\"Name:1,2,3\"' also updates the series label. Prefer the dotted form (series{N}.name=, series{N}.values=) for clarity — see chart-series schema.",
+      "examples": [
+        "--prop series1=\"10,20,30\"",
+        "--prop series2=\"Revenue:5,8,12\""
+      ]
+    },
     "seriesoutline": {
       "type": "string",
       "aliases": [

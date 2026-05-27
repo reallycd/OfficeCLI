@@ -58,10 +58,10 @@
     },
     "border.tl2br": {
       "type": "string",
-      "description": "diagonal from top-left to bottom-right (a:lnTlToBr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient. Add/Set only — Get does not surface diagonal borders today.",
+      "description": "diagonal from top-left to bottom-right (a:lnTlToBr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient. Get returns a summary border.tl2br key plus sub-keys: docx surfaces border.tl2br (style) / border.tl2br.sz / border.tl2br.color; pptx surfaces border.tl2br.color / border.tl2br.width / border.tl2br.dash.",
       "add": true,
       "set": true,
-      "get": false,
+      "get": true,
       "examples": [
         "--prop border.tl2br=\"single;1pt;FF0000\"",
         "--prop border.tl2br=\"1pt solid FF0000\""
@@ -82,10 +82,10 @@
     },
     "border.tr2bl": {
       "type": "string",
-      "description": "diagonal from top-right to bottom-left (a:lnBlToTr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient. Add/Set only — Get does not surface diagonal borders today.",
+      "description": "diagonal from top-right to bottom-left (a:lnBlToTr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient. Get returns a summary border.tr2bl key plus sub-keys: docx surfaces border.tr2bl (style) / border.tr2bl.sz / border.tr2bl.color; pptx surfaces border.tr2bl.color / border.tr2bl.width / border.tr2bl.dash.",
       "add": true,
       "set": true,
-      "get": false,
+      "get": true,
       "examples": [
         "--prop border.tr2bl=\"single;1pt;FF0000\"",
         "--prop border.tr2bl=\"1pt solid FF0000\""
