@@ -16,7 +16,7 @@
       "/slide[N]/chart[M]/animation[K]"
     ]
   },
-  "note": "Animation attached to a shape or chart graphicFrame. Chart targets additionally write <a:bldChart bld=…/> alongside the timing tree (see chartBuild). No composite 'animation' key on Get — each facet (effect, class, presetId, trigger, duration, …) is its own key. `direction` is consumed at Add only.",
+  "note": "Animation attached to a shape or chart graphicFrame. Chart targets additionally write <a:bldChart bld=…/> alongside the timing tree (see chartBuild). No composite 'animation' key on Get — each facet (effect, class, presetId, trigger, duration, …) is its own key. `direction` is consumed at Add only. Motion-path anti-pattern: `--prop type=motionPath` is NOT a valid property and will produce an unsupported_property warning. The correct form is `--prop class=motion --prop path=<preset>` (e.g. `--prop class=motion --prop path=line`).",
   "properties": {
     "effect": {
       "type": "enum",
@@ -38,7 +38,7 @@
     },
     "path": {
       "type": "enum",
-      "description": "Motion-path preset (only valid when class=motion). 'custom' requires d=<SVG-like path data>. Direction-aware presets (line, arc) accept direction= for variants.",
+      "description": "Motion-path preset (only valid when class=motion). 'custom' requires d=<SVG-like path data>. Direction-aware presets (line, arc) accept direction= for variants. Note: use class=motion + path=<preset>, not type=motionPath — the latter is not a recognized property.",
       "values": ["line", "arc", "circle", "diamond", "triangle", "square", "custom"],
       "add": true, "set": true, "get": true,
       "examples": ["--prop class=motion --prop path=line --prop direction=right", "--prop class=motion --prop path=circle"],
