@@ -1441,6 +1441,457 @@ public partial class WordHandler
         return BuildSectionNode(sectPrEl, path);
     }
 
+    private DocumentNode RunToNode(Run run, DocumentNode node, string path)
+    {
+        node.Type = "run";
+        node.Text = GetRunText(run);
+        // BUG-DUMP7-01: surface <w:sym w:font=… w:char=…/> as a `sym`
+        // Format key (font:hex). GetRunText also surfaces the resolved
+        // Unicode glyph as Text so the run looks non-empty, but Text
+        // alone is lossy — Wingdings F0E0 ↦ U+F0E0 would replay as a
+        // plain text run in a non-symbol font and the glyph would
+        // disappear. AddRun consumes `sym=` to rebuild SymbolChar.
+        var symEl = run.GetFirstChild<SymbolChar>();
+        if (symEl?.Char?.Value != null)
+        {
+            var symFontVal = symEl.Font?.Value ?? "";
+            node.Format["sym"] = $"{symFontVal}:{symEl.Char.Value}";
+        }
+        // BUG-DUMP4-02: surface track-change attribution from any
+        // InsertedRun/DeletedRun ancestor wrapping this run. Descendants<Run>
+        // unwraps the wrapper so the run looks plain on the curated
+        // surface; without this the author/date attribution silently
+        // disappears on dump round-trip even though the inner text
+        // survives.
+        var insAncestor = run.Ancestors<InsertedRun>().FirstOrDefault();
+        if (insAncestor != null)
+        {
+            node.Format["revision.type"] = "ins";
+            if (!string.IsNullOrEmpty(insAncestor.Author?.Value))
+                node.Format["revision.author"] = insAncestor.Author!.Value!;
+            if (insAncestor.Date?.Value is DateTime insDate)
+                node.Format["revision.date"] = insDate.ToString("o");
+        }
+        else
+        {
+            var delAncestor = run.Ancestors<DeletedRun>().FirstOrDefault();
+            if (delAncestor != null)
+            {
+                node.Format["revision.type"] = "del";
+                if (!string.IsNullOrEmpty(delAncestor.Author?.Value))
+                    node.Format["revision.author"] = delAncestor.Author!.Value!;
+                if (delAncestor.Date?.Value is DateTime delDate)
+                    node.Format["revision.date"] = delDate.ToString("o");
+            }
+            else
+            {
+                // AddRun writes <w:rPrChange> for `trackChange=format`. The
+                // rPrChange block carries the same author/date attribution
+                // as the ins/del wrappers, but rides inside <w:rPr> rather
+                // than wrapping the run.
+                var rPrChange = run.RunProperties?.GetFirstChild<RunPropertiesChange>();
+                if (rPrChange != null)
+                {
+                    node.Format["revision.type"] = "format";
+                    if (!string.IsNullOrEmpty(rPrChange.Author?.Value))
+                        node.Format["revision.author"] = rPrChange.Author!.Value!;
+                    if (rPrChange.Date?.Value is DateTime rDate)
+                        node.Format["revision.date"] = rDate.ToString("o");
+                }
+            }
+        }
+        // CONSISTENCY(canonical-keys): mirror style Get (WordHandler.Query.cs:546-553) —
+        // emit per-script font slots, no flat "font" alias. R6 BUG-1: previously
+        // collapsed all 4 slots into a single "font" via GetRunFont (Ascii first).
+        var rFonts = run.RunProperties?.RunFonts;
+        if (rFonts != null)
+        {
+            // CONSISTENCY(canonical-keys): collapse Ascii+HighAnsi into
+            // `font.latin` (canonical per schema docx/run.json) when they
+            // match — the round-trip case for `font.latin=` Set. Differing
+            // slots fall back to legacy `font.ascii` / `font.hAnsi` keys.
+            var ascii = string.IsNullOrEmpty(rFonts.Ascii?.Value) ? null : rFonts.Ascii!.Value;
+            var hAnsi = string.IsNullOrEmpty(rFonts.HighAnsi?.Value) ? null : rFonts.HighAnsi!.Value;
+            if (ascii != null && hAnsi != null && ascii == hAnsi)
+                node.Format["font.latin"] = ascii;
+            else
+            {
+                if (ascii != null && hAnsi != null)
+                {
+                    node.Format["font.ascii"] = ascii;
+                    node.Format["font.hAnsi"] = hAnsi;
+                }
+                else if (ascii != null) node.Format["font.latin"] = ascii;
+                else if (hAnsi != null) node.Format["font.latin"] = hAnsi;
+            }
+            if (!string.IsNullOrEmpty(rFonts.EastAsia?.Value)) node.Format["font.ea"] = rFonts.EastAsia!.Value!;
+            // BUG-DUMP14-03: theme-font slots (asciiTheme/hAnsiTheme/
+            // eastAsiaTheme/cstheme) bind a run to a theme major/minor
+            // font instead of a literal face name. Without surfacing
+            // them, documents using theme fonts lose all font bindings
+            // on round-trip (only literal Ascii/HighAnsi were read).
+            if (rFonts.AsciiTheme?.HasValue == true)
+                node.Format["font.asciiTheme"] = rFonts.AsciiTheme.InnerText;
+            if (rFonts.HighAnsiTheme?.HasValue == true)
+                node.Format["font.hAnsiTheme"] = rFonts.HighAnsiTheme.InnerText;
+            if (rFonts.EastAsiaTheme?.HasValue == true)
+                node.Format["font.eaTheme"] = rFonts.EastAsiaTheme.InnerText;
+            if (rFonts.ComplexScriptTheme?.HasValue == true)
+                node.Format["font.csTheme"] = rFonts.ComplexScriptTheme.InnerText;
+        }
+        // <w:lang/> three slots: val (latin) / eastAsia / bidi (cs).
+        // CONSISTENCY(canonical-keys): mirror font.latin/font.ea/font.cs vocabulary.
+        var rLang = run.RunProperties?.GetFirstChild<Languages>();
+        if (rLang != null)
+        {
+            if (rLang.Val?.Value != null) node.Format["lang.latin"] = rLang.Val.Value;
+            if (rLang.EastAsia?.Value != null) node.Format["lang.ea"] = rLang.EastAsia.Value;
+            if (rLang.Bidi?.Value != null) node.Format["lang.cs"] = rLang.Bidi.Value;
+        }
+        var size = GetRunFontSize(run);
+        if (size != null) node.Format["size"] = size;
+        if (run.RunProperties?.Bold != null) node.Format["bold"] = IsToggleOn(run.RunProperties.Bold);
+        if (run.RunProperties?.Italic != null) node.Format["italic"] = IsToggleOn(run.RunProperties.Italic);
+        // Complex-script readback (font.cs / size.cs / bold.cs / italic.cs).
+        // See WordHandler.I18n.cs.
+        ReadComplexScriptRunFormatting(run.RunProperties, null, node.Format);
+        if (run.RunProperties?.Color?.ThemeColor?.HasValue == true) node.Format["color"] = run.RunProperties.Color.ThemeColor.InnerText;
+        else if (run.RunProperties?.Color?.Val?.Value != null) node.Format["color"] = ParseHelpers.FormatHexColor(run.RunProperties.Color.Val.Value);
+        if (run.RunProperties?.Underline?.Val != null) node.Format["underline"] = run.RunProperties.Underline.Val.InnerText;
+        // CONSISTENCY(underline-color): backfilled from style Get edc8f884.
+        if (run.RunProperties?.Underline?.Color?.Value != null)
+            node.Format["underline.color"] = ParseHelpers.FormatHexColor(run.RunProperties.Underline.Color.Value);
+        if (run.RunProperties?.Strike != null) node.Format["strike"] = IsToggleOn(run.RunProperties.Strike);
+        if (run.RunProperties?.Highlight?.Val != null) node.Format["highlight"] = run.RunProperties.Highlight.Val.InnerText;
+        if (run.RunProperties?.Caps != null) node.Format["caps"] = IsToggleOn(run.RunProperties.Caps);
+        if (run.RunProperties?.SmallCaps != null) node.Format["smallcaps"] = IsToggleOn(run.RunProperties.SmallCaps);
+        if (run.RunProperties?.DoubleStrike != null) node.Format["dstrike"] = IsToggleOn(run.RunProperties.DoubleStrike);
+        if (run.RunProperties?.Vanish != null) node.Format["vanish"] = IsToggleOn(run.RunProperties.Vanish);
+        if (run.RunProperties?.Outline != null) node.Format["outline"] = IsToggleOn(run.RunProperties.Outline);
+        if (run.RunProperties?.Shadow != null) node.Format["shadow"] = IsToggleOn(run.RunProperties.Shadow);
+        if (run.RunProperties?.Emboss != null) node.Format["emboss"] = IsToggleOn(run.RunProperties.Emboss);
+        if (run.RunProperties?.Imprint != null) node.Format["imprint"] = IsToggleOn(run.RunProperties.Imprint);
+        if (run.RunProperties?.NoProof != null) node.Format["noproof"] = IsToggleOn(run.RunProperties.NoProof);
+        if (run.RunProperties?.RightToLeftText != null)
+        {
+            // <w:rtl/> with no Val attribute implies true; <w:rtl w:val="0"/>
+            // is an explicit off-override (overrides inherited docDefaults).
+            // CONSISTENCY(canonical-key): paragraphs and sections surface
+            // this property as Format["direction"]="rtl"|"ltr"; runs must
+            // match so users see one canonical key across scopes (R16-bt-1).
+            var rtlVal = run.RunProperties.RightToLeftText.Val;
+            var on = rtlVal == null ? true : rtlVal.Value;
+            node.Format["direction"] = on ? "rtl" : "ltr";
+        }
+        if (run.RunProperties?.VerticalTextAlignment?.Val?.Value == VerticalPositionValues.Superscript)
+            node.Format["superscript"] = true;
+        if (run.RunProperties?.VerticalTextAlignment?.Val?.Value == VerticalPositionValues.Subscript)
+            node.Format["subscript"] = true;
+        // ApplyRunFormatting writes <w:position> for `position` (raised /
+        // lowered baseline offset in half-points). Mirror it on the Get
+        // side so the round-trip key survives.
+        var posVal = run.RunProperties?.GetFirstChild<Position>()?.Val?.Value;
+        if (!string.IsNullOrEmpty(posVal))
+            node.Format["position"] = posVal;
+        if (run.RunProperties?.Spacing?.Val?.HasValue == true)
+            node.Format["charSpacing"] = $"{run.RunProperties.Spacing.Val.Value / 20.0:0.##}pt";
+        // BUG-DUMP22-08: <w:bdr/> (character border) is multi-attribute
+        // (val + sz + color + space) so the long-tail FillUnknownChildProps
+        // skipped it (attrCount > 1), leaving only the surface bare key
+        // with no sub-attrs. Emit the colon-encoded compound form that
+        // ApplyRunFormatting consumes on replay so dump round-trips
+        // preserve size and color.
+        var rBdr = run.RunProperties?.GetFirstChild<Border>();
+        if (rBdr?.Val?.HasValue == true)
+        {
+            var bdrStyle = rBdr.Val!.InnerText;
+            var bdrSize = rBdr.Size?.Value;
+            var bdrColor = rBdr.Color?.Value;
+            var bdrSpace = rBdr.Space?.Value;
+            node.Format["bdr"] = string.Join(';', new[]
+            {
+                bdrStyle,
+                bdrSize?.ToString() ?? "",
+                string.IsNullOrEmpty(bdrColor) ? "" : ParseHelpers.FormatHexColor(bdrColor),
+                bdrSpace?.ToString() ?? "0"
+            });
+        }
+        if (run.RunProperties?.Shading != null)
+        {
+            // BUG-DUMP22-01/02: surface val/fill/color sub-keys instead of
+            // a bare `shading=fill` value. The bare form silently coerced
+            // val to "clear" and dropped color on dump round-trip. Mirrors
+            // the paragraph/table/cell shading reader (round-21 fix).
+            var rShdVal = run.RunProperties.Shading.Val?.InnerText;
+            var rShdFill = run.RunProperties.Shading.Fill?.Value;
+            var rShdColor = run.RunProperties.Shading.Color?.Value;
+            if (!string.IsNullOrEmpty(rShdVal)) node.Format["shading.val"] = rShdVal;
+            if (!string.IsNullOrEmpty(rShdFill)) node.Format["shading.fill"] = ParseHelpers.FormatHexColor(rShdFill);
+            if (!string.IsNullOrEmpty(rShdColor)) node.Format["shading.color"] = ParseHelpers.FormatHexColor(rShdColor);
+        }
+        // w14 text effects
+        ReadW14TextEffects(run.RunProperties, node);
+        // BUG-DUMP10-01: w:eastAsianLayout (vert/combine/vertCompress)
+        // is a multi-attribute child the long-tail FillUnknownChildProps
+        // skips (it only handles single-val/no-attr leaves). Without an
+        // explicit reader, vertical-text and two-lines-in-one CJK layout
+        // was silently dropped on dump→batch round-trip. Set side is
+        // covered by TypedAttributeFallback.TrySet which creates the
+        // dotted child + attr automatically.
+        if (run.RunProperties?.GetFirstChild<EastAsianLayout>() is { } eal)
+        {
+            if (eal.Vertical?.Value == true) node.Format["eastAsianLayout.vert"] = "1";
+            if (eal.Combine?.Value == true) node.Format["eastAsianLayout.combine"] = "1";
+            if (eal.VerticalCompress?.HasValue == true)
+                node.Format["eastAsianLayout.vertCompress"] = eal.VerticalCompress.InnerText;
+            if (eal.CombineBrackets?.HasValue == true)
+                node.Format["eastAsianLayout.combineBrackets"] = eal.CombineBrackets.InnerText;
+        }
+        // Long-tail fallback: surface every rPr child the curated reader
+        // didn't consume. Symmetric with the Set-side TryCreateTypedChild
+        // fallback in SetElementRun (WordHandler.Set.Element.cs).
+        FillUnknownChildProps(run.RunProperties, node);
+        // Image properties if run contains a Drawing.
+        // BUG-R5-T3: previously this branch wrote only id/name/alt/width/
+        // height/relId — wrap/hPosition/vPosition/hRelative/vRelative/
+        // behindText for floating pictures were silently dropped, which
+        // also broke dump→batch round-trip (WordBatchEmitter relies on Get).
+        // Reuse CreateImageNode (the canonical picture-node builder) and
+        // merge its Format bag into the run node.
+        var runDrawing = run.GetFirstChild<Drawing>();
+        if (runDrawing != null)
+        {
+            var picNode = CreateImageNode(runDrawing, run, path);
+            node.Type = picNode.Type;
+            if (!string.IsNullOrEmpty(picNode.Text)) node.Text = picNode.Text;
+            foreach (var kv in picNode.Format)
+                node.Format[kv.Key] = kv.Value;
+        }
+        // OLE object if run contains an EmbeddedObject. The underlying
+        // logic is the same as CreateOleNode — reuse it so Get/Query
+        // return identical shapes.
+        var runOle = run.GetFirstChild<EmbeddedObject>();
+        if (runOle != null)
+        {
+            // CONSISTENCY(ole-host-part): mirror Query.cs's header/footer
+            // OLE handling — the EmbeddedObjectPart relationship lives on
+            // the owning Header/Footer part, not the MainDocumentPart.
+            // Walk ancestors to find the host part so CreateOleNode can
+            // populate contentType/fileSize instead of returning orphan.
+            OpenXmlPart? hostPart = _doc.MainDocumentPart;
+            var headerAncestor = run.Ancestors<Header>().FirstOrDefault();
+            if (headerAncestor != null && _doc.MainDocumentPart != null)
+            {
+                var hp = _doc.MainDocumentPart.HeaderParts
+                    .FirstOrDefault(p => ReferenceEquals(p.Header, headerAncestor));
+                if (hp != null) hostPart = hp;
+            }
+            else
+            {
+                var footerAncestor = run.Ancestors<Footer>().FirstOrDefault();
+                if (footerAncestor != null && _doc.MainDocumentPart != null)
+                {
+                    var fp = _doc.MainDocumentPart.FooterParts
+                        .FirstOrDefault(p => ReferenceEquals(p.Footer, footerAncestor));
+                    if (fp != null) hostPart = fp;
+                }
+            }
+            var oleNode = CreateOleNode(runOle, run, path, hostPart);
+            // Keep the node's path as-is, but swap in the OLE-sourced
+            // type/format bag.
+            node.Type = oleNode.Type;
+            foreach (var kv in oleNode.Format)
+                node.Format[kv.Key] = kv.Value;
+            if (!string.IsNullOrEmpty(oleNode.Text))
+                node.Text = oleNode.Text;
+        }
+        // CONSISTENCY(run-special-content): runs that primarily carry inline
+        // structure (ptab, fldChar, instrText, tab, break) instead of a
+        // <w:t> payload were previously surfaced as opaque
+        // {type:"run", text:""} placeholders — six of these in a row in
+        // header/footer paragraphs (PAGE field begin/instr/separate/end +
+        // ptab anchors), all indistinguishable. Upgrade the node.Type so
+        // callers walking paragraph.children can rebuild left/center/right
+        // alignment regions and detect field markers without reparsing the
+        // raw OOXML themselves. Mirrors the type=picture / type=ole
+        // pattern above.
+        //
+        // Each block is gated on `node.Type == "run"` so that:
+        //   (a) Drawing/EmbeddedObject (already upgraded above to
+        //       picture/ole) wins over a co-residing <w:br>/<w:tab> —
+        //       picture+break is a real Word emission and the picture
+        //       identity must not be silently overwritten;
+        //   (b) the first matching structural element wins when several
+        //       coexist in one run (rare but possible), keeping node.Type
+        //       single-valued and deterministic. ptab is checked first
+        //       (most semantically distinctive), then fieldChar, then
+        //       instrText, then tab, then break.
+        if (node.Type == "run")
+        {
+            var ptabEl = run.GetFirstChild<PositionalTab>();
+            if (ptabEl != null)
+            {
+                node.Type = "ptab";
+                // Open XML SDK v3 enum .ToString() returns "FooValues { }"
+                // — use .InnerText to get the actual XML attribute value
+                // ("center", "right", "begin", etc.). Same trap as the
+                // LineSpacingRuleValues note in WordHandler CLAUDE.md.
+                if (ptabEl.Alignment?.HasValue == true)
+                    node.Format["align"] = ptabEl.Alignment.InnerText;
+                if (ptabEl.RelativeTo?.HasValue == true)
+                    node.Format["relativeTo"] = ptabEl.RelativeTo.InnerText;
+                if (ptabEl.Leader?.HasValue == true)
+                    node.Format["leader"] = ptabEl.Leader.InnerText;
+            }
+        }
+        if (node.Type == "run")
+        {
+            var fldCharEl = run.GetFirstChild<FieldChar>();
+            if (fldCharEl != null)
+            {
+                node.Type = "fieldChar";
+                if (fldCharEl.FieldCharType?.HasValue == true)
+                    node.Format["fieldCharType"] = fldCharEl.FieldCharType.InnerText;
+                // CONSISTENCY(field-cache-stale): expose dirty so audit
+                // tools can verify whether Set instr / Set cached
+                // properly flagged the owning field for recompute. The
+                // attribute persists in OOXML; surfacing it via Get
+                // closes the loop the Round 3 dirty fix opened.
+                if (fldCharEl.Dirty?.Value == true)
+                    node.Format["dirty"] = true;
+                if (fldCharEl.FormFieldData != null)
+                    node.Format["hasFormFieldData"] = true;
+            }
+        }
+        if (node.Type == "run")
+        {
+            var instrEl = run.GetFirstChild<FieldCode>();
+            if (instrEl != null)
+            {
+                node.Type = "instrText";
+                node.Format["instruction"] = instrEl.Text ?? "";
+                // CONSISTENCY(canonical-keys): also surface the
+                // instruction as node.Text so selector text-contains
+                // searches (`instrText[text~=PAGE]`) and Get readback
+                // agree. Without this, MatchesRunSelector's
+                // GetRunText fallback hits the <w:instrText> content
+                // while Navigation hands callers an empty Text — the
+                // two surfaces disagreed on what the run "says".
+                node.Text = instrEl.Text ?? "";
+            }
+        }
+        // CONSISTENCY(run-text-tab): the type-upgrade for tab/break runs
+        // checks "no Text element" (not "node.Text empty") because
+        // GetRunText now surfaces TabChar as \t in node.Text. A pure
+        // <w:r><w:tab/></w:r> run has no <w:t> child but node.Text="\t".
+        if (node.Type == "run" && !run.Elements<Text>().Any())
+        {
+            var tabEl = run.GetFirstChild<TabChar>();
+            if (tabEl != null)
+            {
+                node.Type = "tab";
+                node.Text = "";
+            }
+        }
+        if (node.Type == "run" && string.IsNullOrEmpty(node.Text))
+        {
+            var breakEl = run.GetFirstChild<Break>();
+            if (breakEl != null)
+            {
+                node.Type = "break";
+                // Normalize "textWrapping" → "line" on emit. OOXML treats
+                // a typeless <w:br/> as textWrapping (the default), but
+                // AddBreak's user-facing vocab uses "line"; without
+                // normalisation, dump round-trip emits `type=line` from
+                // typeless source and `type=textWrapping` from the
+                // explicitly-stamped replay target — semantically
+                // identical, byte-different.
+                if (breakEl.Type?.HasValue == true)
+                {
+                    var bt = breakEl.Type.InnerText;
+                    node.Format["breakType"] = string.Equals(bt, "textWrapping", StringComparison.OrdinalIgnoreCase)
+                        ? "line"
+                        : bt;
+                }
+            }
+        }
+
+        if (run.Parent is Hyperlink hlParent)
+        {
+            // BUG-DUMP10-05: a hyperlink wrapper with neither r:id nor
+            // anchor (tooltip-only / history-only) used to fall through
+            // both branches below, leaving the run with no Format keys
+            // that would trigger the WordBatchEmitter hyperlink-emit guard.
+            // Surface a sentinel so the wrapper survives even when there
+            // is no destination — required for w:hyperlink[@w:tooltip]
+            // bookmarks-style hover popups.
+            node.Format["isHyperlink"] = true;
+            if (hlParent.Id?.Value != null)
+            {
+                try
+                {
+                    var rel = ResolveHyperlinkRelationship(hlParent, hlParent.Id.Value);
+                    // CONSISTENCY(docx-hyperlink-canonical-url): schema docx/hyperlink.json
+                    // declares `url` as the canonical key; `link` is accepted as an input
+                    // alias by Add/Set but Get normalizes output to `url`.
+                    if (rel != null) node.Format["url"] = rel.Uri.ToString();
+                }
+                catch { }
+            }
+            // CONSISTENCY(internal-anchor-hyperlink): runs inside an
+            // internal anchor hyperlink (w:hyperlink[@w:anchor]) had no
+            // r:id, so `anchor` was never surfaced on the run. The
+            // WordBatchEmitter hyperlink branch keys off Format["anchor"]/
+            // ["url"] to emit `add hyperlink`; without anchor the run
+            // was demoted to a plain `add r` and the link was lost on
+            // dump→batch round-trip.
+            if (hlParent.Anchor?.Value != null)
+                node.Format["anchor"] = hlParent.Anchor.Value;
+            // BUG-DUMP24-02: w:docLocation is a separate "location in
+            // target document" attribute, distinct from w:anchor. Surface
+            // it so dump→batch round-trips the wrapping hyperlink fully.
+            if (hlParent.DocLocation?.Value != null)
+                node.Format["docLocation"] = hlParent.DocLocation.Value;
+            // BUG-DUMP10-02: surface the tooltip / tgtFrame / history
+            // attributes from the wrapping hyperlink so dump→batch
+            // round-trip preserves them. Same canonical keys as the
+            // standalone Hyperlink branch below.
+            if (hlParent.Tooltip?.Value != null)
+                node.Format["tooltip"] = hlParent.Tooltip.Value;
+            if (hlParent.TargetFrame?.Value != null)
+                node.Format["tgtFrame"] = hlParent.TargetFrame.Value;
+            if (hlParent.History?.Value == true)
+                node.Format["history"] = true;
+        }
+
+        // Populate effective.* properties from style inheritance.
+        // CONSISTENCY(run-special-content): runs whose primary payload
+        // is a structural inline element (ptab/fieldChar/instrText/tab/
+        // break) carry no glyph for font/size/color to apply to;
+        // emitting effective.size / effective.font.* on them only
+        // floods output with noise and primes audit tools to misread
+        // cosmetic styles on a "fldChar end" marker as meaningful.
+        // Picture/ole runs are gated for the same reason — their
+        // typography is irrelevant to the embedded media.
+        var parentPara = run.Ancestors<Paragraph>().FirstOrDefault();
+        if (parentPara != null && node.Type == "run")
+            PopulateEffectiveRunProperties(node, run, parentPara);
+
+        // Same noise-suppression for direct rPr-level keys read before
+        // the type upgrade above (font.*/size/bold/...): they are valid
+        // OOXML but irrelevant to special-content runs, where node.Type
+        // already conveys the semantic role. Strip them for ptab /
+        // fieldChar / instrText / tab / break so audit tools see a
+        // clean property bag (alignment, fieldCharType, instr,
+        // breakType, etc.).
+        if (node.Type is "ptab" or "fieldChar" or "instrText" or "tab" or "break")
+        {
+            foreach (var noiseKey in TypographyOnlyKeys)
+                node.Format.Remove(noiseKey);
+        }
+        return node;
+    }
+
     private DocumentNode HyperlinkToNode(Hyperlink hyperlink, DocumentNode node)
     {
         node.Type = "hyperlink";
@@ -2086,6 +2537,856 @@ public partial class WordHandler
         return node;
     }
 
+    private DocumentNode ParagraphToNode(Paragraph para, DocumentNode node, string path, int depth)
+    {
+        node.Type = "paragraph";
+        node.Text = GetParagraphText(para);
+        node.Style = GetStyleName(para);
+        node.Preview = node.Text?.Length > 50 ? node.Text[..50] + "..." : node.Text;
+        node.ChildCount = GetAllRuns(para).Count();
+
+        if (!string.IsNullOrEmpty(para.ParagraphId?.Value))
+            node.Format["paraId"] = para.ParagraphId.Value;
+        // textId intentionally NOT exposed in Format: Set() rewrites it on
+        // every mutation (see WordHandler.Set.cs "para.TextId = GenerateParaId()"),
+        // which would let an AI agent comparing consecutive Get snapshots see
+        // spurious diffs and mistake idempotent edits for real changes. paraId
+        // is stable and sufficient for identity. The underlying w14:textId
+        // attribute is still present in the OOXML; only the user-facing
+        // DocumentNode.Format projection hides it.
+
+        var pProps = para.ParagraphProperties;
+        // AddParagraph writes <w:pPrChange> for `trackChange=format`. The
+        // pPrChange block carries author/date attribution alongside a
+        // baseline snapshot of the pre-format pPr — mirror what the run
+        // side does for <w:rPrChange>.
+        var pPrChange = pProps?.GetFirstChild<ParagraphPropertiesChange>();
+        if (pPrChange != null)
+        {
+            node.Format["revision.type"] = "format";
+            if (!string.IsNullOrEmpty(pPrChange.Author?.Value))
+                node.Format["revision.author"] = pPrChange.Author!.Value!;
+            if (pPrChange.Date?.Value is DateTime pDate)
+                node.Format["revision.date"] = pDate.ToString("o");
+        }
+        // paraMarkIns: `<w:pPr><w:rPr><w:ins .../></w:rPr></w:pPr>` records
+        // that the paragraph mark itself was inserted as a tracked change —
+        // distinct from pPrChange (format-change snapshot) and from any
+        // content-run wrappers. Surfaced under a paraMarkIns.* namespace so
+        // dump can translate it back into AddParagraph's bare-trackChange.*
+        // form on replay (which re-creates both the ¶ mark and any
+        // accompanying content wrapping in one step). Kept distinct from
+        // `trackChange=format` to avoid clobbering pPrChange attribution
+        // when both are present on the same paragraph.
+        var pmrpRev = pProps?.ParagraphMarkRunProperties;
+        if (pmrpRev != null)
+        {
+            var pMarkIns = pmrpRev.GetFirstChild<Inserted>();
+            if (pMarkIns != null)
+            {
+                if (!string.IsNullOrEmpty(pMarkIns.Author?.Value))
+                    node.Format["paraMarkIns.author"] = pMarkIns.Author!.Value!;
+                if (pMarkIns.Date?.Value is DateTime piDate)
+                    node.Format["paraMarkIns.date"] = piDate.ToString("o");
+            }
+        }
+        if (pProps != null)
+        {
+            if (pProps.ParagraphStyleId?.Val?.Value != null)
+            {
+                // CONSISTENCY(style-dual-key): `style` carries the OOXML
+                // styleId (canonical handle used by basedOn/pStyle/rStyle).
+                // `styleName` carries the user-facing display name. Both
+                // are emitted so query selectors can pick precision
+                // (styleId=/styleName=) or convenience (style=, lenient).
+                node.Format["style"] = pProps.ParagraphStyleId.Val.Value;
+                node.Format["styleId"] = pProps.ParagraphStyleId.Val.Value;
+                var displayName = GetStyleName(para);
+                if (!string.IsNullOrEmpty(displayName))
+                    node.Format["styleName"] = displayName;
+            }
+            if (pProps.Justification?.Val != null)
+            {
+                var alignText = pProps.Justification.Val.InnerText;
+                var alignValue = alignText == "both" ? "justify" : alignText;
+                node.Format["align"] = alignValue;
+            }
+            if (pProps.SpacingBetweenLines != null)
+            {
+                if (pProps.SpacingBetweenLines.Before?.Value != null)
+                {
+                    node.Format["spaceBefore"] = SpacingConverter.FormatWordSpacing(pProps.SpacingBetweenLines.Before.Value);
+                }
+                if (pProps.SpacingBetweenLines.After?.Value != null)
+                {
+                    node.Format["spaceAfter"] = SpacingConverter.FormatWordSpacing(pProps.SpacingBetweenLines.After.Value);
+                }
+                if (pProps.SpacingBetweenLines.Line?.Value != null)
+                {
+                    node.Format["lineSpacing"] = SpacingConverter.FormatWordLineSpacing(
+                        pProps.SpacingBetweenLines.Line.Value,
+                        pProps.SpacingBetweenLines.LineRule?.InnerText);
+                }
+                if (pProps.SpacingBetweenLines.LineRule?.HasValue == true)
+                {
+                    node.Format["lineRule"] = pProps.SpacingBetweenLines.LineRule.InnerText;
+                }
+                // CONSISTENCY(ind-chars): mirror style-level Get (Query.cs)
+                // for the chars-unit space-before/after slots so P1-7
+                // round-trip works on paragraphs as well as styles.
+                if (pProps.SpacingBetweenLines.BeforeLines?.Value != null)
+                {
+                    node.Format["spaceBeforeLines"] = pProps.SpacingBetweenLines.BeforeLines.Value;
+                }
+                if (pProps.SpacingBetweenLines.AfterLines?.Value != null)
+                {
+                    node.Format["spaceAfterLines"] = pProps.SpacingBetweenLines.AfterLines.Value;
+                }
+            }
+            if (pProps.Indentation != null)
+            {
+                var ind = pProps.Indentation;
+                // CONSISTENCY(unit-qualified-spacing): indents return "Xpt" via SpacingConverter,
+                // matching spaceBefore/spaceAfter (Canonical DocumentNode.Format Rules).
+                if (ind.FirstLine?.Value != null) node.Format["firstLineIndent"] = SpacingConverter.FormatWordSpacing(ind.FirstLine.Value);
+                if (ind.Hanging?.Value != null) node.Format["hangingIndent"] = SpacingConverter.FormatWordSpacing(ind.Hanging.Value);
+                // CONSISTENCY(ind-start-end): modern Word writes <w:ind w:start>/<w:end> instead of left/right.
+                var leftTwips = ind.Left?.Value ?? ind.Start?.Value;
+                if (leftTwips != null) node.Format["indent"] = SpacingConverter.FormatWordSpacing(leftTwips);
+                var rightTwips = ind.Right?.Value ?? ind.End?.Value;
+                if (rightTwips != null) node.Format["rightIndent"] = SpacingConverter.FormatWordSpacing(rightTwips);
+                // CONSISTENCY(ind-chars): chars-unit indents (Chinese typography) — backfilled from style Get edc8f884.
+                if (ind.FirstLineChars?.Value != null) node.Format["firstLineChars"] = ind.FirstLineChars.Value;
+                if (ind.HangingChars?.Value != null) node.Format["hangingChars"] = ind.HangingChars.Value;
+                var leftChars = ind.LeftChars?.Value ?? ind.StartCharacters?.Value;
+                if (leftChars != null) node.Format["leftChars"] = leftChars;
+                var rightChars = ind.RightChars?.Value ?? ind.EndCharacters?.Value;
+                if (rightChars != null) node.Format["rightChars"] = rightChars;
+            }
+            if (pProps.KeepNext != null)
+            {
+                var v = pProps.KeepNext.Val;
+                node.Format["keepNext"] = v == null || v.Value;
+            }
+            if (pProps.KeepLines != null)
+            {
+                var v = pProps.KeepLines.Val;
+                node.Format["keepLines"] = v == null || v.Value;
+            }
+            if (pProps.PageBreakBefore != null)
+            {
+                var v = pProps.PageBreakBefore.Val;
+                node.Format["pageBreakBefore"] = v == null || v.Value;
+            }
+            if (pProps.WidowControl != null)
+            {
+                // Val == null or Val == true means enabled; Val == false means explicitly disabled
+                var wcVal = pProps.WidowControl.Val;
+                node.Format["widowControl"] = wcVal == null || wcVal.Value;
+            }
+            if (pProps.BiDi != null)
+            {
+                // <w:bidi/> default Val is true; explicit Val=false toggles
+                // it off. Emit canonical 'direction' so writers can clone
+                // the paragraph with the same key they used to set it.
+                // R8-fuzz-5: pProps.BiDi.Val.Value invokes OnOffValue.Parse
+                // and throws FormatException on garbage attribute text
+                // (e.g. <w:bidi w:val="garbage"/>). Skip the key on
+                // unparseable input — Get must never crash on a doc that
+                // disk-loaded fine, even when validate would flag the same
+                // attribute as schema-invalid.
+                bool? bidiOn = TryReadOnOff(pProps.BiDi.Val);
+                if (bidiOn.HasValue)
+                    node.Format["direction"] = bidiOn.Value ? "rtl" : "ltr";
+            }
+            if (pProps.ContextualSpacing != null)
+            {
+                var csVal = pProps.ContextualSpacing.Val;
+                node.Format["contextualSpacing"] = csVal == null || csVal.Value;
+            }
+            if (pProps.Shading != null)
+            {
+                // CONSISTENCY(canonical-keys): split shading into shading.val/.fill/.color sub-keys
+                // matching the OOXML attribute structure. No compound semicolon string.
+                var shdVal = pProps.Shading.Val?.InnerText;
+                var shdFill = pProps.Shading.Fill?.Value;
+                var shdColor = pProps.Shading.Color?.Value;
+                if (!string.IsNullOrEmpty(shdVal)) node.Format["shading.val"] = shdVal;
+                if (!string.IsNullOrEmpty(shdFill)) node.Format["shading.fill"] = ParseHelpers.FormatHexColor(shdFill);
+                if (!string.IsNullOrEmpty(shdColor)) node.Format["shading.color"] = ParseHelpers.FormatHexColor(shdColor);
+            }
+
+            var pBdr = pProps.ParagraphBorders;
+            if (pBdr != null)
+            {
+                ReadBorder(pBdr.TopBorder, "pbdr.top", node);
+                ReadBorder(pBdr.BottomBorder, "pbdr.bottom", node);
+                ReadBorder(pBdr.LeftBorder, "pbdr.left", node);
+                ReadBorder(pBdr.RightBorder, "pbdr.right", node);
+                ReadBorder(pBdr.BetweenBorder, "pbdr.between", node);
+                ReadBorder(pBdr.BarBorder, "pbdr.bar", node);
+            }
+
+            var numProps = pProps.NumberingProperties;
+            if (numProps != null && numProps.NumberingId?.Val?.Value != null)
+            {
+                var numIdVal = numProps.NumberingId.Val.Value;
+                node.Format["numId"] = numIdVal.ToString();
+                var ilvlVal = numProps.NumberingLevelReference?.Val?.Value ?? 0;
+                // R29-3: surface under the canonical key 'numLevel' (paragraph.json
+                // declares numLevel canonical with ilvl as an input alias; Get
+                // normalizes to the single canonical key). Style/abstractNum-level
+                // contexts keep 'ilvl' as their own canonical key.
+                node.Format["numLevel"] = ilvlVal.ToString();
+                // numId=0 is the OOXML "remove numbering" sentinel — the paragraph
+                // explicitly opts out of any inherited list style. Skip numFmt /
+                // listStyle / start lookup so Get does not falsely advertise a list.
+                if (numIdVal != 0)
+                {
+                    var numFmt = GetNumberingFormat(numIdVal, ilvlVal);
+                    node.Format["numFmt"] = numFmt;
+                    node.Format["listStyle"] = numFmt.ToLowerInvariant() == "bullet" ? "bullet" : "ordered";
+                    var start = GetStartValue(numIdVal, ilvlVal);
+                    if (start != null)
+                        node.Format["start"] = start.Value;
+                }
+            }
+            else
+            {
+                // Fall back to the style chain — paragraphs that inherit numbering
+                // from styles like ListBullet / ListNumber don't have a direct numPr,
+                // but Get should still surface the effective list metadata.
+                var inherited = ResolveNumPrFromStyle(para);
+                if (inherited.HasValue)
+                {
+                    var (inhId, inhLvl) = inherited.Value;
+                    node.Format["numId"] = inhId.ToString();
+                    // R29-3: canonical key 'numLevel' (see direct-numPr branch above).
+                    node.Format["numLevel"] = inhLvl.ToString();
+                    // BUG-DUMP26-01: flag style-inherited values so WordBatchEmitter
+                    // can suppress them on `add p` — they're already covered by
+                    // the paragraph's style and emitting them would semantically
+                    // promote inherited→explicit on round-trip. Mirrors the
+                    // round-1 first-run hoist precedent.
+                    node.Format["numInherited"] = "true";
+                    var numFmt = GetNumberingFormat(inhId, inhLvl);
+                    node.Format["numFmt"] = numFmt;
+                    node.Format["listStyle"] = numFmt.ToLowerInvariant() == "bullet" ? "bullet" : "ordered";
+                    var start = GetStartValue(inhId, inhLvl);
+                    if (start != null)
+                        node.Format["start"] = start.Value;
+                }
+            }
+
+            // CONSISTENCY(outline-lvl): backfilled from style Get edc8f884. Paragraph-level outlineLvl overrides style.
+            if (pProps.OutlineLevel?.Val?.Value != null)
+                node.Format["outlineLvl"] = (int)pProps.OutlineLevel.Val.Value;
+
+            // CONSISTENCY(tabs): backfilled from style Get edc8f884.
+            if (pProps.Tabs != null)
+            {
+                var tabList = new List<Dictionary<string, object?>>();
+                foreach (var tab in pProps.Tabs.Elements<TabStop>())
+                {
+                    var t = new Dictionary<string, object?>();
+                    if (tab.Position?.Value != null) t["pos"] = tab.Position.Value;
+                    if (tab.Val?.HasValue == true) t["val"] = tab.Val.InnerText;
+                    if (tab.Leader?.HasValue == true) t["leader"] = tab.Leader.InnerText;
+                    if (t.Count > 0) tabList.Add(t);
+                }
+                if (tabList.Count > 0) node.Format["tabs"] = tabList;
+            }
+
+            // Long-tail fallback: surface every pPr child the curated reader
+            // didn't consume. Symmetric with the Set-side TryCreateTypedChild
+            // fallback in SetElementParagraph (WordHandler.Set.Element.cs).
+            FillUnknownChildProps(pProps, node);
+
+            // CONSISTENCY(add-set-symmetry): inline section break.
+            // A paragraph carrying <w:sectPr> inside its <w:pPr> is the
+            // OOXML representation of a mid-document section break (the
+            // last paragraph before the break holds the section's
+            // properties). AddSection on /body produces exactly this
+            // shape, but Get used to expose nothing — leaving the
+            // paragraph indistinguishable from a regular empty para.
+            // Surface it as `sectionBreak` (Add prop name match) plus
+            // companion section-property keys readers expect.
+            var inlineSectPr = pProps.GetFirstChild<SectionProperties>();
+            if (inlineSectPr != null)
+            {
+                var sectMark = inlineSectPr.GetFirstChild<SectionType>()?.Val?.InnerText;
+                node.Format["sectionBreak"] = sectMark ?? "nextPage";
+
+                // Per-section page layout when overridden on this break.
+                var pgSz = inlineSectPr.GetFirstChild<PageSize>();
+                if (pgSz?.Width?.Value != null)
+                    node.Format["sectionBreak.pageWidth"] = FormatTwipsToCm(pgSz.Width.Value);
+                if (pgSz?.Height?.Value != null)
+                    node.Format["sectionBreak.pageHeight"] = FormatTwipsToCm(pgSz.Height.Value);
+                if (pgSz?.Orient?.Value != null)
+                    node.Format["sectionBreak.orientation"] = pgSz.Orient.InnerText;
+
+                var pgMar = inlineSectPr.GetFirstChild<PageMargin>();
+                if (pgMar != null)
+                {
+                    if (pgMar.Top?.Value != null)
+                        node.Format["sectionBreak.marginTop"] = FormatTwipsToCm((uint)Math.Abs(pgMar.Top.Value));
+                    if (pgMar.Bottom?.Value != null)
+                        node.Format["sectionBreak.marginBottom"] = FormatTwipsToCm((uint)Math.Abs(pgMar.Bottom.Value));
+                    if (pgMar.Left?.Value != null)
+                        node.Format["sectionBreak.marginLeft"] = FormatTwipsToCm(pgMar.Left.Value);
+                    if (pgMar.Right?.Value != null)
+                        node.Format["sectionBreak.marginRight"] = FormatTwipsToCm(pgMar.Right.Value);
+                }
+
+                var pgNum = inlineSectPr.GetFirstChild<PageNumberType>();
+                if (pgNum?.Start?.Value != null)
+                    node.Format["sectionBreak.pageStart"] = pgNum.Start.Value;
+                if (pgNum?.Format?.Value != null)
+                    node.Format["sectionBreak.pageNumFmt"] = pgNum.Format.InnerText;
+
+                if (inlineSectPr.GetFirstChild<TitlePage>() != null)
+                    node.Format["sectionBreak.titlePage"] = true;
+
+                // BUG-DUMP9-06: Columns / VerticalTextAlignmentOnPage on
+                // an inline sectPr carrier were silently dropped — only
+                // the root sectPr reader handled them. Surface as
+                // sectionBreak.columns / sectionBreak.vAlign so dump
+                // round-trips the carrier sectPr.
+                var sbCols = inlineSectPr.GetFirstChild<Columns>();
+                if (sbCols != null)
+                {
+                    if (sbCols.ColumnCount?.Value != null)
+                        node.Format["sectionBreak.columns"] = (int)sbCols.ColumnCount.Value;
+                    if (sbCols.Space?.Value != null && uint.TryParse(sbCols.Space.Value, out var sbColSpaceTwips))
+                        node.Format["sectionBreak.columnSpace"] = FormatTwipsToCm(sbColSpaceTwips);
+                    if (sbCols.EqualWidth?.Value != null)
+                        node.Format["sectionBreak.columns.equalWidth"] = sbCols.EqualWidth.Value;
+                    if (sbCols.Separator?.Value == true)
+                        node.Format["sectionBreak.columns.separator"] = true;
+                }
+
+                var sbVAlign = inlineSectPr.GetFirstChild<VerticalTextAlignmentOnPage>();
+                if (sbVAlign?.Val != null)
+                    node.Format["sectionBreak.vAlign"] = sbVAlign.Val.InnerText;
+
+                var lnNum = inlineSectPr.GetFirstChild<LineNumberType>();
+                if (lnNum != null)
+                {
+                    node.Format["sectionBreak.lineNumbers"] = lnNum.Restart?.InnerText switch
+                    {
+                        "newPage" => "restartPage",
+                        "newSection" => "restartSection",
+                        _ => "continuous"
+                    };
+                    if (lnNum.CountBy?.Value is short cb && cb > 1)
+                        node.Format["sectionBreak.lineNumberCountBy"] = cb;
+                }
+            }
+        }
+
+        // BUG-DUMP9-02: surface paragraph-mark-only run formatting under
+        // the `markRPr.*` namespace whenever pPr/rPr exists. The
+        // run-fallback path below promotes mark rPr to bare keys only
+        // when there are no runs (round-1 hoisting fix); when runs are
+        // present, mark-only formatting on the ¶ glyph used to be
+        // silently dropped on dump round-trip. Emit dedicated keys so
+        // replay can target ParagraphMarkRunProperties without conflating
+        // with run-level formatting.
+        var pmrpForDump = para.ParagraphProperties?.ParagraphMarkRunProperties;
+        // Suppress markRPr.* dotted keys when the paragraph has no
+        // text-bearing runs — the bare keys below (size, font.latin, …)
+        // already cover markRPr via the firstRun-fallback path. Emitting
+        // both forms on an empty paragraph means dump→batch→dump
+        // surfaces phantom markRPr.* keys even after AddParagraph
+        // routed the formatting correctly (BUG-DUMP-MARKRPR-DOUBLE).
+        // The dotted form's purpose is to distinguish the ¶ glyph's
+        // formatting from the visible text — only meaningful when text
+        // runs exist.
+        var hasTextRun = para.Elements<Run>()
+            .Any(r => r.GetFirstChild<Text>() != null
+                      && !string.IsNullOrEmpty(r.GetFirstChild<Text>()?.Text));
+        if (pmrpForDump != null && hasTextRun)
+        {
+            var b = pmrpForDump.GetFirstChild<Bold>();
+            if (b != null) node.Format["markRPr.bold"] = IsToggleOn(b);
+            var i = pmrpForDump.GetFirstChild<Italic>();
+            if (i != null) node.Format["markRPr.italic"] = IsToggleOn(i);
+            var s = pmrpForDump.GetFirstChild<Strike>();
+            if (s != null) node.Format["markRPr.strike"] = IsToggleOn(s);
+            var u = pmrpForDump.GetFirstChild<Underline>();
+            if (u?.Val?.HasValue == true) node.Format["markRPr.underline"] = u.Val.InnerText;
+            var fs = pmrpForDump.GetFirstChild<FontSize>();
+            if (fs?.Val?.Value != null)
+                node.Format["markRPr.size"] = $"{int.Parse(fs.Val.Value) / 2.0:0.##}pt";
+            var clr = pmrpForDump.GetFirstChild<Color>();
+            if (clr != null)
+            {
+                if (clr.ThemeColor?.HasValue == true)
+                    node.Format["markRPr.color"] = clr.ThemeColor.InnerText;
+                else if (clr.Val?.Value != null)
+                    node.Format["markRPr.color"] = ParseHelpers.FormatHexColor(clr.Val.Value);
+            }
+            var rf = pmrpForDump.GetFirstChild<RunFonts>();
+            if (rf?.Ascii?.Value != null)
+                node.Format["markRPr.font.latin"] = rf.Ascii.Value;
+            if (rf?.EastAsia?.Value != null)
+                node.Format["markRPr.font.ea"] = rf.EastAsia.Value;
+            if (rf?.ComplexScript?.Value != null)
+                node.Format["markRPr.font.cs"] = rf.ComplexScript.Value;
+            var hl = pmrpForDump.GetFirstChild<Highlight>();
+            if (hl?.Val?.HasValue == true) node.Format["markRPr.highlight"] = hl.Val.InnerText;
+            // schemas/help/docx/paragraph.json declares rStyle add+set+get;
+            // Add.Text.cs:437 writes <w:rStyle> into ParagraphMarkRunProperties,
+            // but Get used to drop it. Emit at the paragraph-level canonical
+            // key (no markRPr prefix) to match the schema's declaration.
+            var rs = pmrpForDump.GetFirstChild<RunStyle>();
+            if (rs?.Val?.Value != null) node.Format["rStyle"] = rs.Val.Value;
+        }
+
+        // First-run formatting on the paragraph node (like PPTX does for shapes).
+        // Fall back to ParagraphMarkRunProperties when no runs exist (e.g. empty paragraph
+        // that had formatting applied via Set before any text was added).
+        var firstRun = para.Elements<Run>().FirstOrDefault(r => r.GetFirstChild<Text>() != null);
+        var paraRp = firstRun?.RunProperties
+            ?? (firstRun == null ? para.ParagraphProperties?.ParagraphMarkRunProperties as OpenXmlCompositeElement : null);
+        if (paraRp != null)
+        {
+            RunProperties? rp = paraRp as RunProperties ?? null;
+            ParagraphMarkRunProperties? markRp = paraRp as ParagraphMarkRunProperties ?? null;
+
+            // CONSISTENCY(canonical-keys): mirror style Get (WordHandler.Query.cs:546-553) —
+            // emit per-script font slots, no flat "font" alias. R6 BUG-1: previously only
+            // emitted Ascii under "font" key, dropping eastAsia/hAnsi/cs slots.
+            var pRunFonts = rp?.RunFonts ?? markRp?.GetFirstChild<RunFonts>();
+            if (pRunFonts != null)
+            {
+                // CONSISTENCY(canonical-keys): schema (docx/run.json,
+                // docx/paragraph.json) declares `font.latin` and `font.ea`
+                // as canonical. Collapse Ascii+HighAnsi to `font.latin`
+                // when they match (the round-trip case for `font.latin=`
+                // Set). When they differ, emit both legacy slots so no
+                // information is lost.
+                var ascii = pRunFonts.Ascii?.Value;
+                var hAnsi = pRunFonts.HighAnsi?.Value;
+                if (ascii != null && hAnsi != null && ascii == hAnsi)
+                {
+                    if (!node.Format.ContainsKey("font.latin"))
+                        node.Format["font.latin"] = ascii;
+                }
+                else if (ascii != null && hAnsi != null)
+                {
+                    // Two slots, divergent values — fall back to legacy keys.
+                    if (!node.Format.ContainsKey("font.ascii"))
+                        node.Format["font.ascii"] = ascii;
+                    if (!node.Format.ContainsKey("font.hAnsi"))
+                        node.Format["font.hAnsi"] = hAnsi;
+                }
+                else if (ascii != null)
+                {
+                    if (!node.Format.ContainsKey("font.latin"))
+                        node.Format["font.latin"] = ascii;
+                }
+                else if (hAnsi != null)
+                {
+                    if (!node.Format.ContainsKey("font.latin"))
+                        node.Format["font.latin"] = hAnsi;
+                }
+                if (!string.IsNullOrEmpty(pRunFonts.EastAsia?.Value) && !node.Format.ContainsKey("font.ea"))
+                    node.Format["font.ea"] = pRunFonts.EastAsia!.Value!;
+                // BUG-DUMP15-03: surface theme-font slots on the paragraph
+                // node (leaked from first run rPr) so dump→batch round-trip
+                // preserves theme bindings. Mirrors the run-level readback
+                // at the typed-Run branch below.
+                if (pRunFonts.AsciiTheme?.HasValue == true && !node.Format.ContainsKey("font.asciiTheme"))
+                    node.Format["font.asciiTheme"] = pRunFonts.AsciiTheme.InnerText;
+                if (pRunFonts.HighAnsiTheme?.HasValue == true && !node.Format.ContainsKey("font.hAnsiTheme"))
+                    node.Format["font.hAnsiTheme"] = pRunFonts.HighAnsiTheme.InnerText;
+                if (pRunFonts.EastAsiaTheme?.HasValue == true && !node.Format.ContainsKey("font.eaTheme"))
+                    node.Format["font.eaTheme"] = pRunFonts.EastAsiaTheme.InnerText;
+                if (pRunFonts.ComplexScriptTheme?.HasValue == true && !node.Format.ContainsKey("font.csTheme"))
+                    node.Format["font.csTheme"] = pRunFonts.ComplexScriptTheme.InnerText;
+            }
+
+            var fsVal = rp?.FontSize?.Val?.Value ?? markRp?.GetFirstChild<FontSize>()?.Val?.Value;
+            if (fsVal != null && !node.Format.ContainsKey("size"))
+                node.Format["size"] = $"{int.Parse(fsVal) / 2.0:0.##}pt";
+
+            var boldEl = rp?.Bold ?? markRp?.GetFirstChild<Bold>();
+            if (boldEl != null && !node.Format.ContainsKey("bold")) node.Format["bold"] = IsToggleOn(boldEl);
+
+            var italicEl = rp?.Italic ?? markRp?.GetFirstChild<Italic>();
+            if (italicEl != null && !node.Format.ContainsKey("italic")) node.Format["italic"] = IsToggleOn(italicEl);
+
+            // Complex-script readback (font.cs / size.cs / bold.cs / italic.cs).
+            // See WordHandler.I18n.cs.
+            ReadComplexScriptRunFormatting(rp, markRp, node.Format);
+
+            var colorEl = rp?.Color ?? markRp?.GetFirstChild<Color>();
+            if (colorEl != null && !node.Format.ContainsKey("color"))
+            {
+                // Prefer theme color over Val when both set (Val often
+                // "auto" when ThemeColor is the authoritative source).
+                if (colorEl.ThemeColor?.HasValue == true)
+                    node.Format["color"] = colorEl.ThemeColor.InnerText;
+                else if (colorEl.Val?.Value != null)
+                    node.Format["color"] = ParseHelpers.FormatHexColor(colorEl.Val.Value);
+            }
+
+            var ulEl = rp?.Underline ?? markRp?.GetFirstChild<Underline>();
+            if (ulEl?.Val != null && !node.Format.ContainsKey("underline"))
+                node.Format["underline"] = ulEl.Val.InnerText;
+            // CONSISTENCY(underline-color): backfilled from style Get edc8f884.
+            if (ulEl?.Color?.Value != null && !node.Format.ContainsKey("underline.color"))
+                node.Format["underline.color"] = ParseHelpers.FormatHexColor(ulEl.Color.Value);
+
+            var strikeEl = rp?.Strike ?? (OpenXmlLeafElement?)markRp?.GetFirstChild<Strike>();
+            if (strikeEl != null && !node.Format.ContainsKey("strike")) node.Format["strike"] = true;
+
+            var hlEl = rp?.Highlight ?? markRp?.GetFirstChild<Highlight>();
+            if (hlEl?.Val != null && !node.Format.ContainsKey("highlight"))
+                node.Format["highlight"] = hlEl.Val.InnerText;
+        }
+
+        // Populate effective.* properties from style inheritance
+        PopulateEffectiveParagraphProperties(node, para);
+
+        if (depth > 0)
+        {
+            // BUG-DUMP13-02: interleave typed Runs and inline M.OfficeMath
+            // equations in DOM order so paragraphs like `r1 / m:oMath / r2`
+            // emit r1, equation, r2 (not r1, r2, equation). Previously
+            // GetAllRuns appended every run first and the inline-equation
+            // loop below appended all equations afterwards as a separate
+            // group, so DOM order was lost on dump round-trip.
+            //
+            // We compute a DOM-position index per element via a single
+            // descendant walk (Descendants() yields document order) and
+            // use it to sort only the run+equation slice, leaving other
+            // categories (sdt/bookmark/field/etc.) in their original
+            // append order.
+            int runIdx = 0;
+            int inlineEqIdx = 0;
+            var descendantPos = new Dictionary<OpenXmlElement, int>(ReferenceEqualityComparer.Instance);
+            int dpi = 0;
+            foreach (var d in para.Descendants())
+                descendantPos[d] = dpi++;
+
+            var runs = GetAllRuns(para);
+            // BUG-DUMP9-04: m:oMath nested inside w:hyperlink is a
+            // grandchild of the paragraph and was silently dropped.
+            // BUG-DUMP8-03: include m:oMath nested inside w:ins/w:del
+            // change-track wrappers — they are paragraph grandchildren,
+            // not direct children, and were silently dropped on dump.
+            var inlineEqsAll = para.Elements<M.OfficeMath>()
+                .Concat(para.Elements<InsertedRun>().SelectMany(ins => ins.Elements<M.OfficeMath>()))
+                .Concat(para.Elements<DeletedRun>().SelectMany(del => del.Elements<M.OfficeMath>()))
+                .Concat(para.Elements<Hyperlink>().SelectMany(hl => hl.Elements<M.OfficeMath>()))
+                .ToList();
+            // BUG-DUMP15-04: paragraph hyperlink children for hyperlink-
+            // scoped equation paths. m:oMath inside w:hyperlink must
+            // surface as /…/p[N]/hyperlink[K]/equation[M] so dump→batch
+            // replays the equation INSIDE the hyperlink rather than
+            // alongside it. Index hyperlinks by their position among
+            // the paragraph's direct Hyperlink children.
+            var paraHyperlinks = para.Elements<Hyperlink>().ToList();
+
+            // Merge runs and inline equations by DOM position, then emit
+            // in that interleaved order.
+            // BUG-DUMP15-02: bare <w:fldChar>/<w:instrText> direct children
+            // of <w:p> (not wrapped in a <w:r>) are parsed as
+            // OpenXmlUnknownElement and silently dropped from the children
+            // list, which left CollapseFieldChains nothing to stitch and
+            // dump→batch round-trips lost the entire HYPERLINK chain.
+            // Surface them as synthetic fieldChar/instrText nodes so the
+            // emitter can collapse them into a `field` row.
+            const string wNs2 = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            var bareFieldUnknowns = para.Elements<DocumentFormat.OpenXml.OpenXmlUnknownElement>()
+                .Where(u => u.NamespaceUri == wNs2
+                    && (u.LocalName == "fldChar" || u.LocalName == "instrText"))
+                .ToList();
+            // BUG-DUMP25-01: include direct-child BookmarkStart elements in
+            // the DOM-ordered merge so a bookmark sitting between two runs
+            // surfaces as `r, bookmark, r` rather than the legacy
+            // `r, r, bookmark` (every bookmark hoisted to the tail of
+            // node.Children). The trailing standalone bookmark loop below
+            // is now skipped when this branch surfaces them.
+            var paraBookmarks = para.Elements<BookmarkStart>().ToList();
+            var ordered = runs.Select(r => (pos: descendantPos.TryGetValue(r, out var p) ? p : int.MaxValue, kind: "run", el: (OpenXmlElement)r))
+                .Concat(inlineEqsAll.Select(e => (pos: descendantPos.TryGetValue(e, out var p) ? p : int.MaxValue, kind: "eq", el: (OpenXmlElement)e)))
+                .Concat(bareFieldUnknowns.Select(u => (pos: descendantPos.TryGetValue(u, out var p) ? p : int.MaxValue, kind: u.LocalName == "fldChar" ? "fieldChar" : "instrText", el: (OpenXmlElement)u)))
+                .Concat(paraBookmarks.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "bookmark", el: (OpenXmlElement)b)))
+                .OrderBy(t => t.pos)
+                .ToList();
+            int bareFieldIdx = 0;
+            foreach (var entry in ordered)
+            {
+                if (entry.kind == "run")
+                {
+                    var runNode = ElementToNode(entry.el, $"{path}/r[{runIdx + 1}]", depth - 1);
+                    // BUG-DUMP18-02: surface a hyperlink-scoped subpath on
+                    // runs that are direct children of <w:hyperlink>. The
+                    // canonical Path stays flat (/…/r[N]) for back-compat
+                    // with every existing caller; WordBatchEmitter's
+                    // CollapseFieldChains carries this hint to the synth
+                    // field-add row so a fldChar-chain field inside a
+                    // hyperlink replays INSIDE the hyperlink instead of
+                    // alongside it. Mirrors the SimpleField hyperlink-
+                    // scope path emitted below.
+                    if (entry.el.Parent is Hyperlink runHl)
+                    {
+                        int hlIdxRun = paraHyperlinks.IndexOf(runHl);
+                        if (hlIdxRun >= 0)
+                            runNode.Format["_hyperlinkParent"] = $"{path}/hyperlink[{hlIdxRun + 1}]";
+                    }
+                    node.Children.Add(runNode);
+                    runIdx++;
+                }
+                else if (entry.kind == "eq")
+                {
+                    // BUG-DUMP15-04: equations whose immediate parent is
+                    // <w:hyperlink> get a hyperlink-scoped path so the
+                    // emitter can place the equation INSIDE the hyperlink
+                    // on replay.
+                    string eqPath;
+                    if (entry.el.Parent is Hyperlink eqHl)
+                    {
+                        int hlIdx = paraHyperlinks.IndexOf(eqHl);
+                        int hlEqIdx = eqHl.Elements<M.OfficeMath>()
+                            .ToList().IndexOf((M.OfficeMath)entry.el);
+                        eqPath = $"{path}/hyperlink[{hlIdx + 1}]/equation[{hlEqIdx + 1}]";
+                    }
+                    else
+                    {
+                        eqPath = $"{path}/equation[{inlineEqIdx + 1}]";
+                        inlineEqIdx++;
+                    }
+                    node.Children.Add(ElementToNode(entry.el, eqPath, depth - 1));
+                }
+                else if (entry.kind == "bookmark")
+                {
+                    // BUG-DUMP25-01: emit BookmarkStart at its DOM position
+                    // (sandwiched between sibling runs/equations) so dump→
+                    // batch round-trips preserve mid-paragraph bookmark
+                    // offsets like Word's _GoBack resume-cursor mark.
+                    // Path index counts bookmarks among themselves to
+                    // stay 1-based, mirroring the legacy bmIdx counter.
+                    int bmPathIdx = paraBookmarks.IndexOf((BookmarkStart)entry.el);
+                    node.Children.Add(ElementToNode(entry.el, $"{path}/bookmark[{bmPathIdx + 1}]", depth - 1));
+                }
+                else
+                {
+                    // BUG-DUMP15-02: synthesize fieldChar/instrText nodes
+                    // for bare unknown elements so CollapseFieldChains can
+                    // stitch the field. Mirrors the Run-based shape.
+                    var u = (DocumentFormat.OpenXml.OpenXmlUnknownElement)entry.el;
+                    var bn = new DocumentNode
+                    {
+                        Type = entry.kind,
+                        Path = $"{path}/r[{runIdx + 1}]",
+                    };
+                    runIdx++;
+                    if (entry.kind == "fieldChar")
+                    {
+                        var fct = u.GetAttribute("fldCharType", wNs2).Value;
+                        if (!string.IsNullOrEmpty(fct))
+                            bn.Format["fieldCharType"] = fct;
+                    }
+                    else // instrText
+                    {
+                        bn.Format["instruction"] = u.InnerText;
+                        bn.Text = u.InnerText;
+                    }
+                    node.Children.Add(bn);
+                    bareFieldIdx++;
+                }
+            }
+            // BUG-DUMP5-06/07: <w:ruby> and <w:smartTag> aren't registered
+            // as typed paragraph children in the OpenXml SDK schema set we
+            // load — RawSet-injected fragments and SDK-untracked content
+            // from real-world docx files surface them as
+            // OpenXmlUnknownElement, so Descendants<Run>() inside
+            // GetAllRuns skips every nested run (the inner <w:r> is also
+            // an unknown element, not a typed Run). Walk the unknown
+            // subtrees and synthesize plain `run` DocumentNodes from any
+            // <w:r>/<w:t> children we find so the inner text round-trips
+            // through dump→batch instead of vanishing.
+            const string wNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            foreach (var unkRun in para.Descendants<DocumentFormat.OpenXml.OpenXmlUnknownElement>())
+            {
+                if (unkRun.LocalName != "r" || unkRun.NamespaceUri != wNs) continue;
+                // Only surface runs whose direct parent is an unknown
+                // wrapper (ruby/rt/rubyBase/smartTag/customXml). Runs
+                // whose parent is a typed Paragraph would already be
+                // typed Runs and reached via GetAllRuns above; if they
+                // somehow surface as unknown here it's because the
+                // entire paragraph is malformed and we'd duplicate.
+                // BUG-DUMP7-10: also accept InsertedRun/DeletedRun
+                // ancestors — w:del>w:ruby in a malformed doc parses
+                // ruby as unknown but the typed w:del wrapper still
+                // sits between para and the unknown subtree, so the
+                // ancestor (not just direct parent) needs the typed
+                // change-track wrapper allowance.
+                if (unkRun.Parent is not DocumentFormat.OpenXml.OpenXmlUnknownElement
+                    && unkRun.Ancestors<InsertedRun>().FirstOrDefault() == null
+                    && unkRun.Ancestors<DeletedRun>().FirstOrDefault() == null)
+                    continue;
+                var sbInner = new System.Text.StringBuilder();
+                foreach (var tEl in unkRun.Descendants<DocumentFormat.OpenXml.OpenXmlUnknownElement>())
+                {
+                    if (tEl.NamespaceUri != wNs) continue;
+                    // BUG-DUMP7-10: a w:del-wrapped ruby's inner runs
+                    // carry their text in <w:delText>, not <w:t>.
+                    // Without delText/instrText the "base"/"rt" text
+                    // dropped silently and the paragraph surfaced empty.
+                    if (tEl.LocalName == "t"
+                        || tEl.LocalName == "delText"
+                        || tEl.LocalName == "instrText")
+                        sbInner.Append(tEl.InnerText);
+                }
+                if (sbInner.Length == 0) continue;
+                var synthNode = new DocumentNode
+                {
+                    Type = "run",
+                    Text = sbInner.ToString(),
+                    Path = $"{path}/r[{runIdx + 1}]",
+                };
+                // BUG-DUMP7-10: preserve trackChange attribution from
+                // the typed w:ins/w:del ancestor so the round-trip
+                // re-emits the wrapper (mirrors the typed-Run branch
+                // at the top of this method).
+                var insAnc = unkRun.Ancestors<InsertedRun>().FirstOrDefault();
+                if (insAnc != null)
+                {
+                    synthNode.Format["revision.type"] = "ins";
+                    if (!string.IsNullOrEmpty(insAnc.Author?.Value))
+                        synthNode.Format["revision.author"] = insAnc.Author!.Value!;
+                    if (insAnc.Date?.Value is DateTime insAncDate)
+                        synthNode.Format["revision.date"] = insAncDate.ToString("o");
+                }
+                else
+                {
+                    var delAnc = unkRun.Ancestors<DeletedRun>().FirstOrDefault();
+                    if (delAnc != null)
+                    {
+                        synthNode.Format["revision.type"] = "del";
+                        if (!string.IsNullOrEmpty(delAnc.Author?.Value))
+                            synthNode.Format["revision.author"] = delAnc.Author!.Value!;
+                        if (delAnc.Date?.Value is DateTime delAncDate)
+                            synthNode.Format["revision.date"] = delAncDate.ToString("o");
+                    }
+                }
+                node.Children.Add(synthNode);
+                runIdx++;
+            }
+            // BUG-DUMP25-01: BookmarkStart children are now surfaced
+            // inside the DOM-ordered `ordered` merge above, so a
+            // bookmark between two runs round-trips at its original
+            // intra-paragraph offset. The legacy standalone loop here
+            // (which appended every bookmark at the tail of
+            // node.Children) is intentionally left empty.
+            // BUG-DUMP4-06: surface inline SdtRun (content control) children
+            // so WordBatchEmitter can re-emit a typed `add sdt` row carrying
+            // alias/tag/type metadata. Without this, GetAllRuns unwrapped
+            // the SdtRun's inner Run as a plain `add r` and the metadata
+            // was silently dropped on dump round-trip.
+            int sdtRunIdx = 0;
+            foreach (var sdtR in para.Elements<SdtRun>())
+            {
+                node.Children.Add(ElementToNode(sdtR, $"{path}/sdt[{sdtRunIdx + 1}]", depth - 1));
+                sdtRunIdx++;
+            }
+            // BUG-DUMP7-03 / BUG-DUMP8-03 / BUG-DUMP9-04: inline <m:oMath>
+            // children (including those nested inside w:ins/w:del/w:hyperlink
+            // wrappers) are now interleaved with runs at the top of this
+            // block (BUG-DUMP13-02) so DOM order is preserved. The
+            // `inlineEqIdx` counter declared there carries forward into the
+            // block-level oMathPara branch below.
+            // BUG-DUMP12-02: surface block-level <m:oMathPara> children of a
+            // mixed-content paragraph (paragraph that ALSO has ordinary
+            // runs/hyperlinks/etc) as display equation nodes. The pure-wrapper
+            // case is handled at the body level via the LocalName=="oMathPara"
+            // branch in WalkBodyChild + IsOMathParaWrapperParagraph; the
+            // mixed-content case falls through to plain p[N] and was silently
+            // dropping the equation. We only emit when the para is NOT a pure
+            // oMathPara wrapper, to avoid double-counting against the body
+            // /oMathPara[M] addressing.
+            if (!IsOMathParaWrapperParagraph(para))
+            {
+                foreach (var blockEq in para.Elements<M.Paragraph>())
+                {
+                    node.Children.Add(ElementToNode(blockEq, $"{path}/equation[{inlineEqIdx + 1}]", depth - 1));
+                    inlineEqIdx++;
+                }
+            }
+            // BUG-DUMP6-01: surface <w:fldSimple> children as typed `field`
+            // nodes so WordBatchEmitter can re-emit `add field` with the
+            // instruction preserved. Without this, GetAllRuns descended
+            // into SimpleField and surfaced the inner display run as a
+            // plain run, silently dropping the w:instr attribute.
+            // BUG-DUMP9-03: w:fldSimple nested inside w:hyperlink is a
+            // grandchild of the paragraph and was silently dropped.
+            int fldSimpleIdx = 0;
+            // BUG-DUMP18-02: w:fldSimple inside w:hyperlink must surface
+            // as /…/p[N]/hyperlink[K]/field[M] so dump→batch replays the
+            // field INSIDE the hyperlink rather than alongside it. Mirrors
+            // BUG-DUMP15-04 hyperlink-scoped equation paths above.
+            foreach (var fld in para.Elements<SimpleField>())
+            {
+                var instr = fld.Instruction?.Value ?? "";
+                var displayText = string.Join("",
+                    fld.Descendants<Text>().Select(t => t.Text));
+                var fldNode = new DocumentNode
+                {
+                    Type = "field",
+                    Text = displayText,
+                    Path = $"{path}/field[{fldSimpleIdx + 1}]",
+                };
+                fldNode.Format["instruction"] = instr.Trim();
+                var instrUpper = instr.Trim().Split(' ', 2)[0].ToUpperInvariant();
+                if (!string.IsNullOrEmpty(instrUpper))
+                    fldNode.Format["fieldType"] = instrUpper.ToLowerInvariant();
+                // Cross-handler `evaluated` protocol — true whenever
+                // there's a readable cached result. dirty=true (Word
+                // re-renders on open) keeps evaluated=true since a value
+                // is still available; view issues field_cache_stale
+                // surfaces the dirty + cached combination separately.
+                var fldDirty = fld.Dirty?.Value == true;
+                if (fldDirty) fldNode.Format["dirty"] = true;
+                fldNode.Format["evaluated"] = displayText.Length > 0;
+                node.Children.Add(fldNode);
+                fldSimpleIdx++;
+            }
+            for (int hlI = 0; hlI < paraHyperlinks.Count; hlI++)
+            {
+                var hl = paraHyperlinks[hlI];
+                int perHlFldIdx = 0;
+                foreach (var fld in hl.Elements<SimpleField>())
+                {
+                    var instr = fld.Instruction?.Value ?? "";
+                    var displayText = string.Join("",
+                        fld.Descendants<Text>().Select(t => t.Text));
+                    var fldNode = new DocumentNode
+                    {
+                        Type = "field",
+                        Text = displayText,
+                        Path = $"{path}/hyperlink[{hlI + 1}]/field[{perHlFldIdx + 1}]",
+                    };
+                    fldNode.Format["instruction"] = instr.Trim();
+                    var instrUpper = instr.Trim().Split(' ', 2)[0].ToUpperInvariant();
+                    if (!string.IsNullOrEmpty(instrUpper))
+                        fldNode.Format["fieldType"] = instrUpper.ToLowerInvariant();
+                    var fldDirtyHl = fld.Dirty?.Value == true;
+                    if (fldDirtyHl) fldNode.Format["dirty"] = true;
+                    fldNode.Format["evaluated"] = displayText.Length > 0;
+                    node.Children.Add(fldNode);
+                    perHlFldIdx++;
+                }
+            }
+        }
+        return node;
+    }
+
     private DocumentNode ElementToNode(OpenXmlElement element, string path, int depth)
     {
         var node = new DocumentNode { Path = path, Type = element.LocalName };
@@ -2106,1302 +3407,9 @@ public partial class WordHandler
             return SectionPropertiesToNode(sectPrEl, path);
 
         if (element is Paragraph para)
-        {
-            node.Type = "paragraph";
-            node.Text = GetParagraphText(para);
-            node.Style = GetStyleName(para);
-            node.Preview = node.Text?.Length > 50 ? node.Text[..50] + "..." : node.Text;
-            node.ChildCount = GetAllRuns(para).Count();
-
-            if (!string.IsNullOrEmpty(para.ParagraphId?.Value))
-                node.Format["paraId"] = para.ParagraphId.Value;
-            // textId intentionally NOT exposed in Format: Set() rewrites it on
-            // every mutation (see WordHandler.Set.cs "para.TextId = GenerateParaId()"),
-            // which would let an AI agent comparing consecutive Get snapshots see
-            // spurious diffs and mistake idempotent edits for real changes. paraId
-            // is stable and sufficient for identity. The underlying w14:textId
-            // attribute is still present in the OOXML; only the user-facing
-            // DocumentNode.Format projection hides it.
-
-            var pProps = para.ParagraphProperties;
-            // AddParagraph writes <w:pPrChange> for `trackChange=format`. The
-            // pPrChange block carries author/date attribution alongside a
-            // baseline snapshot of the pre-format pPr — mirror what the run
-            // side does for <w:rPrChange>.
-            var pPrChange = pProps?.GetFirstChild<ParagraphPropertiesChange>();
-            if (pPrChange != null)
-            {
-                node.Format["revision.type"] = "format";
-                if (!string.IsNullOrEmpty(pPrChange.Author?.Value))
-                    node.Format["revision.author"] = pPrChange.Author!.Value!;
-                if (pPrChange.Date?.Value is DateTime pDate)
-                    node.Format["revision.date"] = pDate.ToString("o");
-            }
-            // paraMarkIns: `<w:pPr><w:rPr><w:ins .../></w:rPr></w:pPr>` records
-            // that the paragraph mark itself was inserted as a tracked change —
-            // distinct from pPrChange (format-change snapshot) and from any
-            // content-run wrappers. Surfaced under a paraMarkIns.* namespace so
-            // dump can translate it back into AddParagraph's bare-trackChange.*
-            // form on replay (which re-creates both the ¶ mark and any
-            // accompanying content wrapping in one step). Kept distinct from
-            // `trackChange=format` to avoid clobbering pPrChange attribution
-            // when both are present on the same paragraph.
-            var pmrpRev = pProps?.ParagraphMarkRunProperties;
-            if (pmrpRev != null)
-            {
-                var pMarkIns = pmrpRev.GetFirstChild<Inserted>();
-                if (pMarkIns != null)
-                {
-                    if (!string.IsNullOrEmpty(pMarkIns.Author?.Value))
-                        node.Format["paraMarkIns.author"] = pMarkIns.Author!.Value!;
-                    if (pMarkIns.Date?.Value is DateTime piDate)
-                        node.Format["paraMarkIns.date"] = piDate.ToString("o");
-                }
-            }
-            if (pProps != null)
-            {
-                if (pProps.ParagraphStyleId?.Val?.Value != null)
-                {
-                    // CONSISTENCY(style-dual-key): `style` carries the OOXML
-                    // styleId (canonical handle used by basedOn/pStyle/rStyle).
-                    // `styleName` carries the user-facing display name. Both
-                    // are emitted so query selectors can pick precision
-                    // (styleId=/styleName=) or convenience (style=, lenient).
-                    node.Format["style"] = pProps.ParagraphStyleId.Val.Value;
-                    node.Format["styleId"] = pProps.ParagraphStyleId.Val.Value;
-                    var displayName = GetStyleName(para);
-                    if (!string.IsNullOrEmpty(displayName))
-                        node.Format["styleName"] = displayName;
-                }
-                if (pProps.Justification?.Val != null)
-                {
-                    var alignText = pProps.Justification.Val.InnerText;
-                    var alignValue = alignText == "both" ? "justify" : alignText;
-                    node.Format["align"] = alignValue;
-                }
-                if (pProps.SpacingBetweenLines != null)
-                {
-                    if (pProps.SpacingBetweenLines.Before?.Value != null)
-                    {
-                        node.Format["spaceBefore"] = SpacingConverter.FormatWordSpacing(pProps.SpacingBetweenLines.Before.Value);
-                    }
-                    if (pProps.SpacingBetweenLines.After?.Value != null)
-                    {
-                        node.Format["spaceAfter"] = SpacingConverter.FormatWordSpacing(pProps.SpacingBetweenLines.After.Value);
-                    }
-                    if (pProps.SpacingBetweenLines.Line?.Value != null)
-                    {
-                        node.Format["lineSpacing"] = SpacingConverter.FormatWordLineSpacing(
-                            pProps.SpacingBetweenLines.Line.Value,
-                            pProps.SpacingBetweenLines.LineRule?.InnerText);
-                    }
-                    if (pProps.SpacingBetweenLines.LineRule?.HasValue == true)
-                    {
-                        node.Format["lineRule"] = pProps.SpacingBetweenLines.LineRule.InnerText;
-                    }
-                    // CONSISTENCY(ind-chars): mirror style-level Get (Query.cs)
-                    // for the chars-unit space-before/after slots so P1-7
-                    // round-trip works on paragraphs as well as styles.
-                    if (pProps.SpacingBetweenLines.BeforeLines?.Value != null)
-                    {
-                        node.Format["spaceBeforeLines"] = pProps.SpacingBetweenLines.BeforeLines.Value;
-                    }
-                    if (pProps.SpacingBetweenLines.AfterLines?.Value != null)
-                    {
-                        node.Format["spaceAfterLines"] = pProps.SpacingBetweenLines.AfterLines.Value;
-                    }
-                }
-                if (pProps.Indentation != null)
-                {
-                    var ind = pProps.Indentation;
-                    // CONSISTENCY(unit-qualified-spacing): indents return "Xpt" via SpacingConverter,
-                    // matching spaceBefore/spaceAfter (Canonical DocumentNode.Format Rules).
-                    if (ind.FirstLine?.Value != null) node.Format["firstLineIndent"] = SpacingConverter.FormatWordSpacing(ind.FirstLine.Value);
-                    if (ind.Hanging?.Value != null) node.Format["hangingIndent"] = SpacingConverter.FormatWordSpacing(ind.Hanging.Value);
-                    // CONSISTENCY(ind-start-end): modern Word writes <w:ind w:start>/<w:end> instead of left/right.
-                    var leftTwips = ind.Left?.Value ?? ind.Start?.Value;
-                    if (leftTwips != null) node.Format["indent"] = SpacingConverter.FormatWordSpacing(leftTwips);
-                    var rightTwips = ind.Right?.Value ?? ind.End?.Value;
-                    if (rightTwips != null) node.Format["rightIndent"] = SpacingConverter.FormatWordSpacing(rightTwips);
-                    // CONSISTENCY(ind-chars): chars-unit indents (Chinese typography) — backfilled from style Get edc8f884.
-                    if (ind.FirstLineChars?.Value != null) node.Format["firstLineChars"] = ind.FirstLineChars.Value;
-                    if (ind.HangingChars?.Value != null) node.Format["hangingChars"] = ind.HangingChars.Value;
-                    var leftChars = ind.LeftChars?.Value ?? ind.StartCharacters?.Value;
-                    if (leftChars != null) node.Format["leftChars"] = leftChars;
-                    var rightChars = ind.RightChars?.Value ?? ind.EndCharacters?.Value;
-                    if (rightChars != null) node.Format["rightChars"] = rightChars;
-                }
-                if (pProps.KeepNext != null)
-                {
-                    var v = pProps.KeepNext.Val;
-                    node.Format["keepNext"] = v == null || v.Value;
-                }
-                if (pProps.KeepLines != null)
-                {
-                    var v = pProps.KeepLines.Val;
-                    node.Format["keepLines"] = v == null || v.Value;
-                }
-                if (pProps.PageBreakBefore != null)
-                {
-                    var v = pProps.PageBreakBefore.Val;
-                    node.Format["pageBreakBefore"] = v == null || v.Value;
-                }
-                if (pProps.WidowControl != null)
-                {
-                    // Val == null or Val == true means enabled; Val == false means explicitly disabled
-                    var wcVal = pProps.WidowControl.Val;
-                    node.Format["widowControl"] = wcVal == null || wcVal.Value;
-                }
-                if (pProps.BiDi != null)
-                {
-                    // <w:bidi/> default Val is true; explicit Val=false toggles
-                    // it off. Emit canonical 'direction' so writers can clone
-                    // the paragraph with the same key they used to set it.
-                    // R8-fuzz-5: pProps.BiDi.Val.Value invokes OnOffValue.Parse
-                    // and throws FormatException on garbage attribute text
-                    // (e.g. <w:bidi w:val="garbage"/>). Skip the key on
-                    // unparseable input — Get must never crash on a doc that
-                    // disk-loaded fine, even when validate would flag the same
-                    // attribute as schema-invalid.
-                    bool? bidiOn = TryReadOnOff(pProps.BiDi.Val);
-                    if (bidiOn.HasValue)
-                        node.Format["direction"] = bidiOn.Value ? "rtl" : "ltr";
-                }
-                if (pProps.ContextualSpacing != null)
-                {
-                    var csVal = pProps.ContextualSpacing.Val;
-                    node.Format["contextualSpacing"] = csVal == null || csVal.Value;
-                }
-                if (pProps.Shading != null)
-                {
-                    // CONSISTENCY(canonical-keys): split shading into shading.val/.fill/.color sub-keys
-                    // matching the OOXML attribute structure. No compound semicolon string.
-                    var shdVal = pProps.Shading.Val?.InnerText;
-                    var shdFill = pProps.Shading.Fill?.Value;
-                    var shdColor = pProps.Shading.Color?.Value;
-                    if (!string.IsNullOrEmpty(shdVal)) node.Format["shading.val"] = shdVal;
-                    if (!string.IsNullOrEmpty(shdFill)) node.Format["shading.fill"] = ParseHelpers.FormatHexColor(shdFill);
-                    if (!string.IsNullOrEmpty(shdColor)) node.Format["shading.color"] = ParseHelpers.FormatHexColor(shdColor);
-                }
-
-                var pBdr = pProps.ParagraphBorders;
-                if (pBdr != null)
-                {
-                    ReadBorder(pBdr.TopBorder, "pbdr.top", node);
-                    ReadBorder(pBdr.BottomBorder, "pbdr.bottom", node);
-                    ReadBorder(pBdr.LeftBorder, "pbdr.left", node);
-                    ReadBorder(pBdr.RightBorder, "pbdr.right", node);
-                    ReadBorder(pBdr.BetweenBorder, "pbdr.between", node);
-                    ReadBorder(pBdr.BarBorder, "pbdr.bar", node);
-                }
-
-                var numProps = pProps.NumberingProperties;
-                if (numProps != null && numProps.NumberingId?.Val?.Value != null)
-                {
-                    var numIdVal = numProps.NumberingId.Val.Value;
-                    node.Format["numId"] = numIdVal.ToString();
-                    var ilvlVal = numProps.NumberingLevelReference?.Val?.Value ?? 0;
-                    // R29-3: surface under the canonical key 'numLevel' (paragraph.json
-                    // declares numLevel canonical with ilvl as an input alias; Get
-                    // normalizes to the single canonical key). Style/abstractNum-level
-                    // contexts keep 'ilvl' as their own canonical key.
-                    node.Format["numLevel"] = ilvlVal.ToString();
-                    // numId=0 is the OOXML "remove numbering" sentinel — the paragraph
-                    // explicitly opts out of any inherited list style. Skip numFmt /
-                    // listStyle / start lookup so Get does not falsely advertise a list.
-                    if (numIdVal != 0)
-                    {
-                        var numFmt = GetNumberingFormat(numIdVal, ilvlVal);
-                        node.Format["numFmt"] = numFmt;
-                        node.Format["listStyle"] = numFmt.ToLowerInvariant() == "bullet" ? "bullet" : "ordered";
-                        var start = GetStartValue(numIdVal, ilvlVal);
-                        if (start != null)
-                            node.Format["start"] = start.Value;
-                    }
-                }
-                else
-                {
-                    // Fall back to the style chain — paragraphs that inherit numbering
-                    // from styles like ListBullet / ListNumber don't have a direct numPr,
-                    // but Get should still surface the effective list metadata.
-                    var inherited = ResolveNumPrFromStyle(para);
-                    if (inherited.HasValue)
-                    {
-                        var (inhId, inhLvl) = inherited.Value;
-                        node.Format["numId"] = inhId.ToString();
-                        // R29-3: canonical key 'numLevel' (see direct-numPr branch above).
-                        node.Format["numLevel"] = inhLvl.ToString();
-                        // BUG-DUMP26-01: flag style-inherited values so WordBatchEmitter
-                        // can suppress them on `add p` — they're already covered by
-                        // the paragraph's style and emitting them would semantically
-                        // promote inherited→explicit on round-trip. Mirrors the
-                        // round-1 first-run hoist precedent.
-                        node.Format["numInherited"] = "true";
-                        var numFmt = GetNumberingFormat(inhId, inhLvl);
-                        node.Format["numFmt"] = numFmt;
-                        node.Format["listStyle"] = numFmt.ToLowerInvariant() == "bullet" ? "bullet" : "ordered";
-                        var start = GetStartValue(inhId, inhLvl);
-                        if (start != null)
-                            node.Format["start"] = start.Value;
-                    }
-                }
-
-                // CONSISTENCY(outline-lvl): backfilled from style Get edc8f884. Paragraph-level outlineLvl overrides style.
-                if (pProps.OutlineLevel?.Val?.Value != null)
-                    node.Format["outlineLvl"] = (int)pProps.OutlineLevel.Val.Value;
-
-                // CONSISTENCY(tabs): backfilled from style Get edc8f884.
-                if (pProps.Tabs != null)
-                {
-                    var tabList = new List<Dictionary<string, object?>>();
-                    foreach (var tab in pProps.Tabs.Elements<TabStop>())
-                    {
-                        var t = new Dictionary<string, object?>();
-                        if (tab.Position?.Value != null) t["pos"] = tab.Position.Value;
-                        if (tab.Val?.HasValue == true) t["val"] = tab.Val.InnerText;
-                        if (tab.Leader?.HasValue == true) t["leader"] = tab.Leader.InnerText;
-                        if (t.Count > 0) tabList.Add(t);
-                    }
-                    if (tabList.Count > 0) node.Format["tabs"] = tabList;
-                }
-
-                // Long-tail fallback: surface every pPr child the curated reader
-                // didn't consume. Symmetric with the Set-side TryCreateTypedChild
-                // fallback in SetElementParagraph (WordHandler.Set.Element.cs).
-                FillUnknownChildProps(pProps, node);
-
-                // CONSISTENCY(add-set-symmetry): inline section break.
-                // A paragraph carrying <w:sectPr> inside its <w:pPr> is the
-                // OOXML representation of a mid-document section break (the
-                // last paragraph before the break holds the section's
-                // properties). AddSection on /body produces exactly this
-                // shape, but Get used to expose nothing — leaving the
-                // paragraph indistinguishable from a regular empty para.
-                // Surface it as `sectionBreak` (Add prop name match) plus
-                // companion section-property keys readers expect.
-                var inlineSectPr = pProps.GetFirstChild<SectionProperties>();
-                if (inlineSectPr != null)
-                {
-                    var sectMark = inlineSectPr.GetFirstChild<SectionType>()?.Val?.InnerText;
-                    node.Format["sectionBreak"] = sectMark ?? "nextPage";
-
-                    // Per-section page layout when overridden on this break.
-                    var pgSz = inlineSectPr.GetFirstChild<PageSize>();
-                    if (pgSz?.Width?.Value != null)
-                        node.Format["sectionBreak.pageWidth"] = FormatTwipsToCm(pgSz.Width.Value);
-                    if (pgSz?.Height?.Value != null)
-                        node.Format["sectionBreak.pageHeight"] = FormatTwipsToCm(pgSz.Height.Value);
-                    if (pgSz?.Orient?.Value != null)
-                        node.Format["sectionBreak.orientation"] = pgSz.Orient.InnerText;
-
-                    var pgMar = inlineSectPr.GetFirstChild<PageMargin>();
-                    if (pgMar != null)
-                    {
-                        if (pgMar.Top?.Value != null)
-                            node.Format["sectionBreak.marginTop"] = FormatTwipsToCm((uint)Math.Abs(pgMar.Top.Value));
-                        if (pgMar.Bottom?.Value != null)
-                            node.Format["sectionBreak.marginBottom"] = FormatTwipsToCm((uint)Math.Abs(pgMar.Bottom.Value));
-                        if (pgMar.Left?.Value != null)
-                            node.Format["sectionBreak.marginLeft"] = FormatTwipsToCm(pgMar.Left.Value);
-                        if (pgMar.Right?.Value != null)
-                            node.Format["sectionBreak.marginRight"] = FormatTwipsToCm(pgMar.Right.Value);
-                    }
-
-                    var pgNum = inlineSectPr.GetFirstChild<PageNumberType>();
-                    if (pgNum?.Start?.Value != null)
-                        node.Format["sectionBreak.pageStart"] = pgNum.Start.Value;
-                    if (pgNum?.Format?.Value != null)
-                        node.Format["sectionBreak.pageNumFmt"] = pgNum.Format.InnerText;
-
-                    if (inlineSectPr.GetFirstChild<TitlePage>() != null)
-                        node.Format["sectionBreak.titlePage"] = true;
-
-                    // BUG-DUMP9-06: Columns / VerticalTextAlignmentOnPage on
-                    // an inline sectPr carrier were silently dropped — only
-                    // the root sectPr reader handled them. Surface as
-                    // sectionBreak.columns / sectionBreak.vAlign so dump
-                    // round-trips the carrier sectPr.
-                    var sbCols = inlineSectPr.GetFirstChild<Columns>();
-                    if (sbCols != null)
-                    {
-                        if (sbCols.ColumnCount?.Value != null)
-                            node.Format["sectionBreak.columns"] = (int)sbCols.ColumnCount.Value;
-                        if (sbCols.Space?.Value != null && uint.TryParse(sbCols.Space.Value, out var sbColSpaceTwips))
-                            node.Format["sectionBreak.columnSpace"] = FormatTwipsToCm(sbColSpaceTwips);
-                        if (sbCols.EqualWidth?.Value != null)
-                            node.Format["sectionBreak.columns.equalWidth"] = sbCols.EqualWidth.Value;
-                        if (sbCols.Separator?.Value == true)
-                            node.Format["sectionBreak.columns.separator"] = true;
-                    }
-
-                    var sbVAlign = inlineSectPr.GetFirstChild<VerticalTextAlignmentOnPage>();
-                    if (sbVAlign?.Val != null)
-                        node.Format["sectionBreak.vAlign"] = sbVAlign.Val.InnerText;
-
-                    var lnNum = inlineSectPr.GetFirstChild<LineNumberType>();
-                    if (lnNum != null)
-                    {
-                        node.Format["sectionBreak.lineNumbers"] = lnNum.Restart?.InnerText switch
-                        {
-                            "newPage" => "restartPage",
-                            "newSection" => "restartSection",
-                            _ => "continuous"
-                        };
-                        if (lnNum.CountBy?.Value is short cb && cb > 1)
-                            node.Format["sectionBreak.lineNumberCountBy"] = cb;
-                    }
-                }
-            }
-
-            // BUG-DUMP9-02: surface paragraph-mark-only run formatting under
-            // the `markRPr.*` namespace whenever pPr/rPr exists. The
-            // run-fallback path below promotes mark rPr to bare keys only
-            // when there are no runs (round-1 hoisting fix); when runs are
-            // present, mark-only formatting on the ¶ glyph used to be
-            // silently dropped on dump round-trip. Emit dedicated keys so
-            // replay can target ParagraphMarkRunProperties without conflating
-            // with run-level formatting.
-            var pmrpForDump = para.ParagraphProperties?.ParagraphMarkRunProperties;
-            // Suppress markRPr.* dotted keys when the paragraph has no
-            // text-bearing runs — the bare keys below (size, font.latin, …)
-            // already cover markRPr via the firstRun-fallback path. Emitting
-            // both forms on an empty paragraph means dump→batch→dump
-            // surfaces phantom markRPr.* keys even after AddParagraph
-            // routed the formatting correctly (BUG-DUMP-MARKRPR-DOUBLE).
-            // The dotted form's purpose is to distinguish the ¶ glyph's
-            // formatting from the visible text — only meaningful when text
-            // runs exist.
-            var hasTextRun = para.Elements<Run>()
-                .Any(r => r.GetFirstChild<Text>() != null
-                          && !string.IsNullOrEmpty(r.GetFirstChild<Text>()?.Text));
-            if (pmrpForDump != null && hasTextRun)
-            {
-                var b = pmrpForDump.GetFirstChild<Bold>();
-                if (b != null) node.Format["markRPr.bold"] = IsToggleOn(b);
-                var i = pmrpForDump.GetFirstChild<Italic>();
-                if (i != null) node.Format["markRPr.italic"] = IsToggleOn(i);
-                var s = pmrpForDump.GetFirstChild<Strike>();
-                if (s != null) node.Format["markRPr.strike"] = IsToggleOn(s);
-                var u = pmrpForDump.GetFirstChild<Underline>();
-                if (u?.Val?.HasValue == true) node.Format["markRPr.underline"] = u.Val.InnerText;
-                var fs = pmrpForDump.GetFirstChild<FontSize>();
-                if (fs?.Val?.Value != null)
-                    node.Format["markRPr.size"] = $"{int.Parse(fs.Val.Value) / 2.0:0.##}pt";
-                var clr = pmrpForDump.GetFirstChild<Color>();
-                if (clr != null)
-                {
-                    if (clr.ThemeColor?.HasValue == true)
-                        node.Format["markRPr.color"] = clr.ThemeColor.InnerText;
-                    else if (clr.Val?.Value != null)
-                        node.Format["markRPr.color"] = ParseHelpers.FormatHexColor(clr.Val.Value);
-                }
-                var rf = pmrpForDump.GetFirstChild<RunFonts>();
-                if (rf?.Ascii?.Value != null)
-                    node.Format["markRPr.font.latin"] = rf.Ascii.Value;
-                if (rf?.EastAsia?.Value != null)
-                    node.Format["markRPr.font.ea"] = rf.EastAsia.Value;
-                if (rf?.ComplexScript?.Value != null)
-                    node.Format["markRPr.font.cs"] = rf.ComplexScript.Value;
-                var hl = pmrpForDump.GetFirstChild<Highlight>();
-                if (hl?.Val?.HasValue == true) node.Format["markRPr.highlight"] = hl.Val.InnerText;
-                // schemas/help/docx/paragraph.json declares rStyle add+set+get;
-                // Add.Text.cs:437 writes <w:rStyle> into ParagraphMarkRunProperties,
-                // but Get used to drop it. Emit at the paragraph-level canonical
-                // key (no markRPr prefix) to match the schema's declaration.
-                var rs = pmrpForDump.GetFirstChild<RunStyle>();
-                if (rs?.Val?.Value != null) node.Format["rStyle"] = rs.Val.Value;
-            }
-
-            // First-run formatting on the paragraph node (like PPTX does for shapes).
-            // Fall back to ParagraphMarkRunProperties when no runs exist (e.g. empty paragraph
-            // that had formatting applied via Set before any text was added).
-            var firstRun = para.Elements<Run>().FirstOrDefault(r => r.GetFirstChild<Text>() != null);
-            var paraRp = firstRun?.RunProperties
-                ?? (firstRun == null ? para.ParagraphProperties?.ParagraphMarkRunProperties as OpenXmlCompositeElement : null);
-            if (paraRp != null)
-            {
-                RunProperties? rp = paraRp as RunProperties ?? null;
-                ParagraphMarkRunProperties? markRp = paraRp as ParagraphMarkRunProperties ?? null;
-
-                // CONSISTENCY(canonical-keys): mirror style Get (WordHandler.Query.cs:546-553) —
-                // emit per-script font slots, no flat "font" alias. R6 BUG-1: previously only
-                // emitted Ascii under "font" key, dropping eastAsia/hAnsi/cs slots.
-                var pRunFonts = rp?.RunFonts ?? markRp?.GetFirstChild<RunFonts>();
-                if (pRunFonts != null)
-                {
-                    // CONSISTENCY(canonical-keys): schema (docx/run.json,
-                    // docx/paragraph.json) declares `font.latin` and `font.ea`
-                    // as canonical. Collapse Ascii+HighAnsi to `font.latin`
-                    // when they match (the round-trip case for `font.latin=`
-                    // Set). When they differ, emit both legacy slots so no
-                    // information is lost.
-                    var ascii = pRunFonts.Ascii?.Value;
-                    var hAnsi = pRunFonts.HighAnsi?.Value;
-                    if (ascii != null && hAnsi != null && ascii == hAnsi)
-                    {
-                        if (!node.Format.ContainsKey("font.latin"))
-                            node.Format["font.latin"] = ascii;
-                    }
-                    else if (ascii != null && hAnsi != null)
-                    {
-                        // Two slots, divergent values — fall back to legacy keys.
-                        if (!node.Format.ContainsKey("font.ascii"))
-                            node.Format["font.ascii"] = ascii;
-                        if (!node.Format.ContainsKey("font.hAnsi"))
-                            node.Format["font.hAnsi"] = hAnsi;
-                    }
-                    else if (ascii != null)
-                    {
-                        if (!node.Format.ContainsKey("font.latin"))
-                            node.Format["font.latin"] = ascii;
-                    }
-                    else if (hAnsi != null)
-                    {
-                        if (!node.Format.ContainsKey("font.latin"))
-                            node.Format["font.latin"] = hAnsi;
-                    }
-                    if (!string.IsNullOrEmpty(pRunFonts.EastAsia?.Value) && !node.Format.ContainsKey("font.ea"))
-                        node.Format["font.ea"] = pRunFonts.EastAsia!.Value!;
-                    // BUG-DUMP15-03: surface theme-font slots on the paragraph
-                    // node (leaked from first run rPr) so dump→batch round-trip
-                    // preserves theme bindings. Mirrors the run-level readback
-                    // at the typed-Run branch below.
-                    if (pRunFonts.AsciiTheme?.HasValue == true && !node.Format.ContainsKey("font.asciiTheme"))
-                        node.Format["font.asciiTheme"] = pRunFonts.AsciiTheme.InnerText;
-                    if (pRunFonts.HighAnsiTheme?.HasValue == true && !node.Format.ContainsKey("font.hAnsiTheme"))
-                        node.Format["font.hAnsiTheme"] = pRunFonts.HighAnsiTheme.InnerText;
-                    if (pRunFonts.EastAsiaTheme?.HasValue == true && !node.Format.ContainsKey("font.eaTheme"))
-                        node.Format["font.eaTheme"] = pRunFonts.EastAsiaTheme.InnerText;
-                    if (pRunFonts.ComplexScriptTheme?.HasValue == true && !node.Format.ContainsKey("font.csTheme"))
-                        node.Format["font.csTheme"] = pRunFonts.ComplexScriptTheme.InnerText;
-                }
-
-                var fsVal = rp?.FontSize?.Val?.Value ?? markRp?.GetFirstChild<FontSize>()?.Val?.Value;
-                if (fsVal != null && !node.Format.ContainsKey("size"))
-                    node.Format["size"] = $"{int.Parse(fsVal) / 2.0:0.##}pt";
-
-                var boldEl = rp?.Bold ?? markRp?.GetFirstChild<Bold>();
-                if (boldEl != null && !node.Format.ContainsKey("bold")) node.Format["bold"] = IsToggleOn(boldEl);
-
-                var italicEl = rp?.Italic ?? markRp?.GetFirstChild<Italic>();
-                if (italicEl != null && !node.Format.ContainsKey("italic")) node.Format["italic"] = IsToggleOn(italicEl);
-
-                // Complex-script readback (font.cs / size.cs / bold.cs / italic.cs).
-                // See WordHandler.I18n.cs.
-                ReadComplexScriptRunFormatting(rp, markRp, node.Format);
-
-                var colorEl = rp?.Color ?? markRp?.GetFirstChild<Color>();
-                if (colorEl != null && !node.Format.ContainsKey("color"))
-                {
-                    // Prefer theme color over Val when both set (Val often
-                    // "auto" when ThemeColor is the authoritative source).
-                    if (colorEl.ThemeColor?.HasValue == true)
-                        node.Format["color"] = colorEl.ThemeColor.InnerText;
-                    else if (colorEl.Val?.Value != null)
-                        node.Format["color"] = ParseHelpers.FormatHexColor(colorEl.Val.Value);
-                }
-
-                var ulEl = rp?.Underline ?? markRp?.GetFirstChild<Underline>();
-                if (ulEl?.Val != null && !node.Format.ContainsKey("underline"))
-                    node.Format["underline"] = ulEl.Val.InnerText;
-                // CONSISTENCY(underline-color): backfilled from style Get edc8f884.
-                if (ulEl?.Color?.Value != null && !node.Format.ContainsKey("underline.color"))
-                    node.Format["underline.color"] = ParseHelpers.FormatHexColor(ulEl.Color.Value);
-
-                var strikeEl = rp?.Strike ?? (OpenXmlLeafElement?)markRp?.GetFirstChild<Strike>();
-                if (strikeEl != null && !node.Format.ContainsKey("strike")) node.Format["strike"] = true;
-
-                var hlEl = rp?.Highlight ?? markRp?.GetFirstChild<Highlight>();
-                if (hlEl?.Val != null && !node.Format.ContainsKey("highlight"))
-                    node.Format["highlight"] = hlEl.Val.InnerText;
-            }
-
-            // Populate effective.* properties from style inheritance
-            PopulateEffectiveParagraphProperties(node, para);
-
-            if (depth > 0)
-            {
-                // BUG-DUMP13-02: interleave typed Runs and inline M.OfficeMath
-                // equations in DOM order so paragraphs like `r1 / m:oMath / r2`
-                // emit r1, equation, r2 (not r1, r2, equation). Previously
-                // GetAllRuns appended every run first and the inline-equation
-                // loop below appended all equations afterwards as a separate
-                // group, so DOM order was lost on dump round-trip.
-                //
-                // We compute a DOM-position index per element via a single
-                // descendant walk (Descendants() yields document order) and
-                // use it to sort only the run+equation slice, leaving other
-                // categories (sdt/bookmark/field/etc.) in their original
-                // append order.
-                int runIdx = 0;
-                int inlineEqIdx = 0;
-                var descendantPos = new Dictionary<OpenXmlElement, int>(ReferenceEqualityComparer.Instance);
-                int dpi = 0;
-                foreach (var d in para.Descendants())
-                    descendantPos[d] = dpi++;
-
-                var runs = GetAllRuns(para);
-                // BUG-DUMP9-04: m:oMath nested inside w:hyperlink is a
-                // grandchild of the paragraph and was silently dropped.
-                // BUG-DUMP8-03: include m:oMath nested inside w:ins/w:del
-                // change-track wrappers — they are paragraph grandchildren,
-                // not direct children, and were silently dropped on dump.
-                var inlineEqsAll = para.Elements<M.OfficeMath>()
-                    .Concat(para.Elements<InsertedRun>().SelectMany(ins => ins.Elements<M.OfficeMath>()))
-                    .Concat(para.Elements<DeletedRun>().SelectMany(del => del.Elements<M.OfficeMath>()))
-                    .Concat(para.Elements<Hyperlink>().SelectMany(hl => hl.Elements<M.OfficeMath>()))
-                    .ToList();
-                // BUG-DUMP15-04: paragraph hyperlink children for hyperlink-
-                // scoped equation paths. m:oMath inside w:hyperlink must
-                // surface as /…/p[N]/hyperlink[K]/equation[M] so dump→batch
-                // replays the equation INSIDE the hyperlink rather than
-                // alongside it. Index hyperlinks by their position among
-                // the paragraph's direct Hyperlink children.
-                var paraHyperlinks = para.Elements<Hyperlink>().ToList();
-
-                // Merge runs and inline equations by DOM position, then emit
-                // in that interleaved order.
-                // BUG-DUMP15-02: bare <w:fldChar>/<w:instrText> direct children
-                // of <w:p> (not wrapped in a <w:r>) are parsed as
-                // OpenXmlUnknownElement and silently dropped from the children
-                // list, which left CollapseFieldChains nothing to stitch and
-                // dump→batch round-trips lost the entire HYPERLINK chain.
-                // Surface them as synthetic fieldChar/instrText nodes so the
-                // emitter can collapse them into a `field` row.
-                const string wNs2 = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-                var bareFieldUnknowns = para.Elements<DocumentFormat.OpenXml.OpenXmlUnknownElement>()
-                    .Where(u => u.NamespaceUri == wNs2
-                        && (u.LocalName == "fldChar" || u.LocalName == "instrText"))
-                    .ToList();
-                // BUG-DUMP25-01: include direct-child BookmarkStart elements in
-                // the DOM-ordered merge so a bookmark sitting between two runs
-                // surfaces as `r, bookmark, r` rather than the legacy
-                // `r, r, bookmark` (every bookmark hoisted to the tail of
-                // node.Children). The trailing standalone bookmark loop below
-                // is now skipped when this branch surfaces them.
-                var paraBookmarks = para.Elements<BookmarkStart>().ToList();
-                var ordered = runs.Select(r => (pos: descendantPos.TryGetValue(r, out var p) ? p : int.MaxValue, kind: "run", el: (OpenXmlElement)r))
-                    .Concat(inlineEqsAll.Select(e => (pos: descendantPos.TryGetValue(e, out var p) ? p : int.MaxValue, kind: "eq", el: (OpenXmlElement)e)))
-                    .Concat(bareFieldUnknowns.Select(u => (pos: descendantPos.TryGetValue(u, out var p) ? p : int.MaxValue, kind: u.LocalName == "fldChar" ? "fieldChar" : "instrText", el: (OpenXmlElement)u)))
-                    .Concat(paraBookmarks.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "bookmark", el: (OpenXmlElement)b)))
-                    .OrderBy(t => t.pos)
-                    .ToList();
-                int bareFieldIdx = 0;
-                foreach (var entry in ordered)
-                {
-                    if (entry.kind == "run")
-                    {
-                        var runNode = ElementToNode(entry.el, $"{path}/r[{runIdx + 1}]", depth - 1);
-                        // BUG-DUMP18-02: surface a hyperlink-scoped subpath on
-                        // runs that are direct children of <w:hyperlink>. The
-                        // canonical Path stays flat (/…/r[N]) for back-compat
-                        // with every existing caller; WordBatchEmitter's
-                        // CollapseFieldChains carries this hint to the synth
-                        // field-add row so a fldChar-chain field inside a
-                        // hyperlink replays INSIDE the hyperlink instead of
-                        // alongside it. Mirrors the SimpleField hyperlink-
-                        // scope path emitted below.
-                        if (entry.el.Parent is Hyperlink runHl)
-                        {
-                            int hlIdxRun = paraHyperlinks.IndexOf(runHl);
-                            if (hlIdxRun >= 0)
-                                runNode.Format["_hyperlinkParent"] = $"{path}/hyperlink[{hlIdxRun + 1}]";
-                        }
-                        node.Children.Add(runNode);
-                        runIdx++;
-                    }
-                    else if (entry.kind == "eq")
-                    {
-                        // BUG-DUMP15-04: equations whose immediate parent is
-                        // <w:hyperlink> get a hyperlink-scoped path so the
-                        // emitter can place the equation INSIDE the hyperlink
-                        // on replay.
-                        string eqPath;
-                        if (entry.el.Parent is Hyperlink eqHl)
-                        {
-                            int hlIdx = paraHyperlinks.IndexOf(eqHl);
-                            int hlEqIdx = eqHl.Elements<M.OfficeMath>()
-                                .ToList().IndexOf((M.OfficeMath)entry.el);
-                            eqPath = $"{path}/hyperlink[{hlIdx + 1}]/equation[{hlEqIdx + 1}]";
-                        }
-                        else
-                        {
-                            eqPath = $"{path}/equation[{inlineEqIdx + 1}]";
-                            inlineEqIdx++;
-                        }
-                        node.Children.Add(ElementToNode(entry.el, eqPath, depth - 1));
-                    }
-                    else if (entry.kind == "bookmark")
-                    {
-                        // BUG-DUMP25-01: emit BookmarkStart at its DOM position
-                        // (sandwiched between sibling runs/equations) so dump→
-                        // batch round-trips preserve mid-paragraph bookmark
-                        // offsets like Word's _GoBack resume-cursor mark.
-                        // Path index counts bookmarks among themselves to
-                        // stay 1-based, mirroring the legacy bmIdx counter.
-                        int bmPathIdx = paraBookmarks.IndexOf((BookmarkStart)entry.el);
-                        node.Children.Add(ElementToNode(entry.el, $"{path}/bookmark[{bmPathIdx + 1}]", depth - 1));
-                    }
-                    else
-                    {
-                        // BUG-DUMP15-02: synthesize fieldChar/instrText nodes
-                        // for bare unknown elements so CollapseFieldChains can
-                        // stitch the field. Mirrors the Run-based shape.
-                        var u = (DocumentFormat.OpenXml.OpenXmlUnknownElement)entry.el;
-                        var bn = new DocumentNode
-                        {
-                            Type = entry.kind,
-                            Path = $"{path}/r[{runIdx + 1}]",
-                        };
-                        runIdx++;
-                        if (entry.kind == "fieldChar")
-                        {
-                            var fct = u.GetAttribute("fldCharType", wNs2).Value;
-                            if (!string.IsNullOrEmpty(fct))
-                                bn.Format["fieldCharType"] = fct;
-                        }
-                        else // instrText
-                        {
-                            bn.Format["instruction"] = u.InnerText;
-                            bn.Text = u.InnerText;
-                        }
-                        node.Children.Add(bn);
-                        bareFieldIdx++;
-                    }
-                }
-                // BUG-DUMP5-06/07: <w:ruby> and <w:smartTag> aren't registered
-                // as typed paragraph children in the OpenXml SDK schema set we
-                // load — RawSet-injected fragments and SDK-untracked content
-                // from real-world docx files surface them as
-                // OpenXmlUnknownElement, so Descendants<Run>() inside
-                // GetAllRuns skips every nested run (the inner <w:r> is also
-                // an unknown element, not a typed Run). Walk the unknown
-                // subtrees and synthesize plain `run` DocumentNodes from any
-                // <w:r>/<w:t> children we find so the inner text round-trips
-                // through dump→batch instead of vanishing.
-                const string wNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-                foreach (var unkRun in para.Descendants<DocumentFormat.OpenXml.OpenXmlUnknownElement>())
-                {
-                    if (unkRun.LocalName != "r" || unkRun.NamespaceUri != wNs) continue;
-                    // Only surface runs whose direct parent is an unknown
-                    // wrapper (ruby/rt/rubyBase/smartTag/customXml). Runs
-                    // whose parent is a typed Paragraph would already be
-                    // typed Runs and reached via GetAllRuns above; if they
-                    // somehow surface as unknown here it's because the
-                    // entire paragraph is malformed and we'd duplicate.
-                    // BUG-DUMP7-10: also accept InsertedRun/DeletedRun
-                    // ancestors — w:del>w:ruby in a malformed doc parses
-                    // ruby as unknown but the typed w:del wrapper still
-                    // sits between para and the unknown subtree, so the
-                    // ancestor (not just direct parent) needs the typed
-                    // change-track wrapper allowance.
-                    if (unkRun.Parent is not DocumentFormat.OpenXml.OpenXmlUnknownElement
-                        && unkRun.Ancestors<InsertedRun>().FirstOrDefault() == null
-                        && unkRun.Ancestors<DeletedRun>().FirstOrDefault() == null)
-                        continue;
-                    var sbInner = new System.Text.StringBuilder();
-                    foreach (var tEl in unkRun.Descendants<DocumentFormat.OpenXml.OpenXmlUnknownElement>())
-                    {
-                        if (tEl.NamespaceUri != wNs) continue;
-                        // BUG-DUMP7-10: a w:del-wrapped ruby's inner runs
-                        // carry their text in <w:delText>, not <w:t>.
-                        // Without delText/instrText the "base"/"rt" text
-                        // dropped silently and the paragraph surfaced empty.
-                        if (tEl.LocalName == "t"
-                            || tEl.LocalName == "delText"
-                            || tEl.LocalName == "instrText")
-                            sbInner.Append(tEl.InnerText);
-                    }
-                    if (sbInner.Length == 0) continue;
-                    var synthNode = new DocumentNode
-                    {
-                        Type = "run",
-                        Text = sbInner.ToString(),
-                        Path = $"{path}/r[{runIdx + 1}]",
-                    };
-                    // BUG-DUMP7-10: preserve trackChange attribution from
-                    // the typed w:ins/w:del ancestor so the round-trip
-                    // re-emits the wrapper (mirrors the typed-Run branch
-                    // at the top of this method).
-                    var insAnc = unkRun.Ancestors<InsertedRun>().FirstOrDefault();
-                    if (insAnc != null)
-                    {
-                        synthNode.Format["revision.type"] = "ins";
-                        if (!string.IsNullOrEmpty(insAnc.Author?.Value))
-                            synthNode.Format["revision.author"] = insAnc.Author!.Value!;
-                        if (insAnc.Date?.Value is DateTime insAncDate)
-                            synthNode.Format["revision.date"] = insAncDate.ToString("o");
-                    }
-                    else
-                    {
-                        var delAnc = unkRun.Ancestors<DeletedRun>().FirstOrDefault();
-                        if (delAnc != null)
-                        {
-                            synthNode.Format["revision.type"] = "del";
-                            if (!string.IsNullOrEmpty(delAnc.Author?.Value))
-                                synthNode.Format["revision.author"] = delAnc.Author!.Value!;
-                            if (delAnc.Date?.Value is DateTime delAncDate)
-                                synthNode.Format["revision.date"] = delAncDate.ToString("o");
-                        }
-                    }
-                    node.Children.Add(synthNode);
-                    runIdx++;
-                }
-                // BUG-DUMP25-01: BookmarkStart children are now surfaced
-                // inside the DOM-ordered `ordered` merge above, so a
-                // bookmark between two runs round-trips at its original
-                // intra-paragraph offset. The legacy standalone loop here
-                // (which appended every bookmark at the tail of
-                // node.Children) is intentionally left empty.
-                // BUG-DUMP4-06: surface inline SdtRun (content control) children
-                // so WordBatchEmitter can re-emit a typed `add sdt` row carrying
-                // alias/tag/type metadata. Without this, GetAllRuns unwrapped
-                // the SdtRun's inner Run as a plain `add r` and the metadata
-                // was silently dropped on dump round-trip.
-                int sdtRunIdx = 0;
-                foreach (var sdtR in para.Elements<SdtRun>())
-                {
-                    node.Children.Add(ElementToNode(sdtR, $"{path}/sdt[{sdtRunIdx + 1}]", depth - 1));
-                    sdtRunIdx++;
-                }
-                // BUG-DUMP7-03 / BUG-DUMP8-03 / BUG-DUMP9-04: inline <m:oMath>
-                // children (including those nested inside w:ins/w:del/w:hyperlink
-                // wrappers) are now interleaved with runs at the top of this
-                // block (BUG-DUMP13-02) so DOM order is preserved. The
-                // `inlineEqIdx` counter declared there carries forward into the
-                // block-level oMathPara branch below.
-                // BUG-DUMP12-02: surface block-level <m:oMathPara> children of a
-                // mixed-content paragraph (paragraph that ALSO has ordinary
-                // runs/hyperlinks/etc) as display equation nodes. The pure-wrapper
-                // case is handled at the body level via the LocalName=="oMathPara"
-                // branch in WalkBodyChild + IsOMathParaWrapperParagraph; the
-                // mixed-content case falls through to plain p[N] and was silently
-                // dropping the equation. We only emit when the para is NOT a pure
-                // oMathPara wrapper, to avoid double-counting against the body
-                // /oMathPara[M] addressing.
-                if (!IsOMathParaWrapperParagraph(para))
-                {
-                    foreach (var blockEq in para.Elements<M.Paragraph>())
-                    {
-                        node.Children.Add(ElementToNode(blockEq, $"{path}/equation[{inlineEqIdx + 1}]", depth - 1));
-                        inlineEqIdx++;
-                    }
-                }
-                // BUG-DUMP6-01: surface <w:fldSimple> children as typed `field`
-                // nodes so WordBatchEmitter can re-emit `add field` with the
-                // instruction preserved. Without this, GetAllRuns descended
-                // into SimpleField and surfaced the inner display run as a
-                // plain run, silently dropping the w:instr attribute.
-                // BUG-DUMP9-03: w:fldSimple nested inside w:hyperlink is a
-                // grandchild of the paragraph and was silently dropped.
-                int fldSimpleIdx = 0;
-                // BUG-DUMP18-02: w:fldSimple inside w:hyperlink must surface
-                // as /…/p[N]/hyperlink[K]/field[M] so dump→batch replays the
-                // field INSIDE the hyperlink rather than alongside it. Mirrors
-                // BUG-DUMP15-04 hyperlink-scoped equation paths above.
-                foreach (var fld in para.Elements<SimpleField>())
-                {
-                    var instr = fld.Instruction?.Value ?? "";
-                    var displayText = string.Join("",
-                        fld.Descendants<Text>().Select(t => t.Text));
-                    var fldNode = new DocumentNode
-                    {
-                        Type = "field",
-                        Text = displayText,
-                        Path = $"{path}/field[{fldSimpleIdx + 1}]",
-                    };
-                    fldNode.Format["instruction"] = instr.Trim();
-                    var instrUpper = instr.Trim().Split(' ', 2)[0].ToUpperInvariant();
-                    if (!string.IsNullOrEmpty(instrUpper))
-                        fldNode.Format["fieldType"] = instrUpper.ToLowerInvariant();
-                    // Cross-handler `evaluated` protocol — true whenever
-                    // there's a readable cached result. dirty=true (Word
-                    // re-renders on open) keeps evaluated=true since a value
-                    // is still available; view issues field_cache_stale
-                    // surfaces the dirty + cached combination separately.
-                    var fldDirty = fld.Dirty?.Value == true;
-                    if (fldDirty) fldNode.Format["dirty"] = true;
-                    fldNode.Format["evaluated"] = displayText.Length > 0;
-                    node.Children.Add(fldNode);
-                    fldSimpleIdx++;
-                }
-                for (int hlI = 0; hlI < paraHyperlinks.Count; hlI++)
-                {
-                    var hl = paraHyperlinks[hlI];
-                    int perHlFldIdx = 0;
-                    foreach (var fld in hl.Elements<SimpleField>())
-                    {
-                        var instr = fld.Instruction?.Value ?? "";
-                        var displayText = string.Join("",
-                            fld.Descendants<Text>().Select(t => t.Text));
-                        var fldNode = new DocumentNode
-                        {
-                            Type = "field",
-                            Text = displayText,
-                            Path = $"{path}/hyperlink[{hlI + 1}]/field[{perHlFldIdx + 1}]",
-                        };
-                        fldNode.Format["instruction"] = instr.Trim();
-                        var instrUpper = instr.Trim().Split(' ', 2)[0].ToUpperInvariant();
-                        if (!string.IsNullOrEmpty(instrUpper))
-                            fldNode.Format["fieldType"] = instrUpper.ToLowerInvariant();
-                        var fldDirtyHl = fld.Dirty?.Value == true;
-                        if (fldDirtyHl) fldNode.Format["dirty"] = true;
-                        fldNode.Format["evaluated"] = displayText.Length > 0;
-                        node.Children.Add(fldNode);
-                        perHlFldIdx++;
-                    }
-                }
-            }
-        }
+            return ParagraphToNode(para, node, path, depth);
         else if (element is Run run)
-        {
-            node.Type = "run";
-            node.Text = GetRunText(run);
-            // BUG-DUMP7-01: surface <w:sym w:font=… w:char=…/> as a `sym`
-            // Format key (font:hex). GetRunText also surfaces the resolved
-            // Unicode glyph as Text so the run looks non-empty, but Text
-            // alone is lossy — Wingdings F0E0 ↦ U+F0E0 would replay as a
-            // plain text run in a non-symbol font and the glyph would
-            // disappear. AddRun consumes `sym=` to rebuild SymbolChar.
-            var symEl = run.GetFirstChild<SymbolChar>();
-            if (symEl?.Char?.Value != null)
-            {
-                var symFontVal = symEl.Font?.Value ?? "";
-                node.Format["sym"] = $"{symFontVal}:{symEl.Char.Value}";
-            }
-            // BUG-DUMP4-02: surface track-change attribution from any
-            // InsertedRun/DeletedRun ancestor wrapping this run. Descendants<Run>
-            // unwraps the wrapper so the run looks plain on the curated
-            // surface; without this the author/date attribution silently
-            // disappears on dump round-trip even though the inner text
-            // survives.
-            var insAncestor = run.Ancestors<InsertedRun>().FirstOrDefault();
-            if (insAncestor != null)
-            {
-                node.Format["revision.type"] = "ins";
-                if (!string.IsNullOrEmpty(insAncestor.Author?.Value))
-                    node.Format["revision.author"] = insAncestor.Author!.Value!;
-                if (insAncestor.Date?.Value is DateTime insDate)
-                    node.Format["revision.date"] = insDate.ToString("o");
-            }
-            else
-            {
-                var delAncestor = run.Ancestors<DeletedRun>().FirstOrDefault();
-                if (delAncestor != null)
-                {
-                    node.Format["revision.type"] = "del";
-                    if (!string.IsNullOrEmpty(delAncestor.Author?.Value))
-                        node.Format["revision.author"] = delAncestor.Author!.Value!;
-                    if (delAncestor.Date?.Value is DateTime delDate)
-                        node.Format["revision.date"] = delDate.ToString("o");
-                }
-                else
-                {
-                    // AddRun writes <w:rPrChange> for `trackChange=format`. The
-                    // rPrChange block carries the same author/date attribution
-                    // as the ins/del wrappers, but rides inside <w:rPr> rather
-                    // than wrapping the run.
-                    var rPrChange = run.RunProperties?.GetFirstChild<RunPropertiesChange>();
-                    if (rPrChange != null)
-                    {
-                        node.Format["revision.type"] = "format";
-                        if (!string.IsNullOrEmpty(rPrChange.Author?.Value))
-                            node.Format["revision.author"] = rPrChange.Author!.Value!;
-                        if (rPrChange.Date?.Value is DateTime rDate)
-                            node.Format["revision.date"] = rDate.ToString("o");
-                    }
-                }
-            }
-            // CONSISTENCY(canonical-keys): mirror style Get (WordHandler.Query.cs:546-553) —
-            // emit per-script font slots, no flat "font" alias. R6 BUG-1: previously
-            // collapsed all 4 slots into a single "font" via GetRunFont (Ascii first).
-            var rFonts = run.RunProperties?.RunFonts;
-            if (rFonts != null)
-            {
-                // CONSISTENCY(canonical-keys): collapse Ascii+HighAnsi into
-                // `font.latin` (canonical per schema docx/run.json) when they
-                // match — the round-trip case for `font.latin=` Set. Differing
-                // slots fall back to legacy `font.ascii` / `font.hAnsi` keys.
-                var ascii = string.IsNullOrEmpty(rFonts.Ascii?.Value) ? null : rFonts.Ascii!.Value;
-                var hAnsi = string.IsNullOrEmpty(rFonts.HighAnsi?.Value) ? null : rFonts.HighAnsi!.Value;
-                if (ascii != null && hAnsi != null && ascii == hAnsi)
-                    node.Format["font.latin"] = ascii;
-                else
-                {
-                    if (ascii != null && hAnsi != null)
-                    {
-                        node.Format["font.ascii"] = ascii;
-                        node.Format["font.hAnsi"] = hAnsi;
-                    }
-                    else if (ascii != null) node.Format["font.latin"] = ascii;
-                    else if (hAnsi != null) node.Format["font.latin"] = hAnsi;
-                }
-                if (!string.IsNullOrEmpty(rFonts.EastAsia?.Value)) node.Format["font.ea"] = rFonts.EastAsia!.Value!;
-                // BUG-DUMP14-03: theme-font slots (asciiTheme/hAnsiTheme/
-                // eastAsiaTheme/cstheme) bind a run to a theme major/minor
-                // font instead of a literal face name. Without surfacing
-                // them, documents using theme fonts lose all font bindings
-                // on round-trip (only literal Ascii/HighAnsi were read).
-                if (rFonts.AsciiTheme?.HasValue == true)
-                    node.Format["font.asciiTheme"] = rFonts.AsciiTheme.InnerText;
-                if (rFonts.HighAnsiTheme?.HasValue == true)
-                    node.Format["font.hAnsiTheme"] = rFonts.HighAnsiTheme.InnerText;
-                if (rFonts.EastAsiaTheme?.HasValue == true)
-                    node.Format["font.eaTheme"] = rFonts.EastAsiaTheme.InnerText;
-                if (rFonts.ComplexScriptTheme?.HasValue == true)
-                    node.Format["font.csTheme"] = rFonts.ComplexScriptTheme.InnerText;
-            }
-            // <w:lang/> three slots: val (latin) / eastAsia / bidi (cs).
-            // CONSISTENCY(canonical-keys): mirror font.latin/font.ea/font.cs vocabulary.
-            var rLang = run.RunProperties?.GetFirstChild<Languages>();
-            if (rLang != null)
-            {
-                if (rLang.Val?.Value != null) node.Format["lang.latin"] = rLang.Val.Value;
-                if (rLang.EastAsia?.Value != null) node.Format["lang.ea"] = rLang.EastAsia.Value;
-                if (rLang.Bidi?.Value != null) node.Format["lang.cs"] = rLang.Bidi.Value;
-            }
-            var size = GetRunFontSize(run);
-            if (size != null) node.Format["size"] = size;
-            if (run.RunProperties?.Bold != null) node.Format["bold"] = IsToggleOn(run.RunProperties.Bold);
-            if (run.RunProperties?.Italic != null) node.Format["italic"] = IsToggleOn(run.RunProperties.Italic);
-            // Complex-script readback (font.cs / size.cs / bold.cs / italic.cs).
-            // See WordHandler.I18n.cs.
-            ReadComplexScriptRunFormatting(run.RunProperties, null, node.Format);
-            if (run.RunProperties?.Color?.ThemeColor?.HasValue == true) node.Format["color"] = run.RunProperties.Color.ThemeColor.InnerText;
-            else if (run.RunProperties?.Color?.Val?.Value != null) node.Format["color"] = ParseHelpers.FormatHexColor(run.RunProperties.Color.Val.Value);
-            if (run.RunProperties?.Underline?.Val != null) node.Format["underline"] = run.RunProperties.Underline.Val.InnerText;
-            // CONSISTENCY(underline-color): backfilled from style Get edc8f884.
-            if (run.RunProperties?.Underline?.Color?.Value != null)
-                node.Format["underline.color"] = ParseHelpers.FormatHexColor(run.RunProperties.Underline.Color.Value);
-            if (run.RunProperties?.Strike != null) node.Format["strike"] = IsToggleOn(run.RunProperties.Strike);
-            if (run.RunProperties?.Highlight?.Val != null) node.Format["highlight"] = run.RunProperties.Highlight.Val.InnerText;
-            if (run.RunProperties?.Caps != null) node.Format["caps"] = IsToggleOn(run.RunProperties.Caps);
-            if (run.RunProperties?.SmallCaps != null) node.Format["smallcaps"] = IsToggleOn(run.RunProperties.SmallCaps);
-            if (run.RunProperties?.DoubleStrike != null) node.Format["dstrike"] = IsToggleOn(run.RunProperties.DoubleStrike);
-            if (run.RunProperties?.Vanish != null) node.Format["vanish"] = IsToggleOn(run.RunProperties.Vanish);
-            if (run.RunProperties?.Outline != null) node.Format["outline"] = IsToggleOn(run.RunProperties.Outline);
-            if (run.RunProperties?.Shadow != null) node.Format["shadow"] = IsToggleOn(run.RunProperties.Shadow);
-            if (run.RunProperties?.Emboss != null) node.Format["emboss"] = IsToggleOn(run.RunProperties.Emboss);
-            if (run.RunProperties?.Imprint != null) node.Format["imprint"] = IsToggleOn(run.RunProperties.Imprint);
-            if (run.RunProperties?.NoProof != null) node.Format["noproof"] = IsToggleOn(run.RunProperties.NoProof);
-            if (run.RunProperties?.RightToLeftText != null)
-            {
-                // <w:rtl/> with no Val attribute implies true; <w:rtl w:val="0"/>
-                // is an explicit off-override (overrides inherited docDefaults).
-                // CONSISTENCY(canonical-key): paragraphs and sections surface
-                // this property as Format["direction"]="rtl"|"ltr"; runs must
-                // match so users see one canonical key across scopes (R16-bt-1).
-                var rtlVal = run.RunProperties.RightToLeftText.Val;
-                var on = rtlVal == null ? true : rtlVal.Value;
-                node.Format["direction"] = on ? "rtl" : "ltr";
-            }
-            if (run.RunProperties?.VerticalTextAlignment?.Val?.Value == VerticalPositionValues.Superscript)
-                node.Format["superscript"] = true;
-            if (run.RunProperties?.VerticalTextAlignment?.Val?.Value == VerticalPositionValues.Subscript)
-                node.Format["subscript"] = true;
-            // ApplyRunFormatting writes <w:position> for `position` (raised /
-            // lowered baseline offset in half-points). Mirror it on the Get
-            // side so the round-trip key survives.
-            var posVal = run.RunProperties?.GetFirstChild<Position>()?.Val?.Value;
-            if (!string.IsNullOrEmpty(posVal))
-                node.Format["position"] = posVal;
-            if (run.RunProperties?.Spacing?.Val?.HasValue == true)
-                node.Format["charSpacing"] = $"{run.RunProperties.Spacing.Val.Value / 20.0:0.##}pt";
-            // BUG-DUMP22-08: <w:bdr/> (character border) is multi-attribute
-            // (val + sz + color + space) so the long-tail FillUnknownChildProps
-            // skipped it (attrCount > 1), leaving only the surface bare key
-            // with no sub-attrs. Emit the colon-encoded compound form that
-            // ApplyRunFormatting consumes on replay so dump round-trips
-            // preserve size and color.
-            var rBdr = run.RunProperties?.GetFirstChild<Border>();
-            if (rBdr?.Val?.HasValue == true)
-            {
-                var bdrStyle = rBdr.Val!.InnerText;
-                var bdrSize = rBdr.Size?.Value;
-                var bdrColor = rBdr.Color?.Value;
-                var bdrSpace = rBdr.Space?.Value;
-                node.Format["bdr"] = string.Join(';', new[]
-                {
-                    bdrStyle,
-                    bdrSize?.ToString() ?? "",
-                    string.IsNullOrEmpty(bdrColor) ? "" : ParseHelpers.FormatHexColor(bdrColor),
-                    bdrSpace?.ToString() ?? "0"
-                });
-            }
-            if (run.RunProperties?.Shading != null)
-            {
-                // BUG-DUMP22-01/02: surface val/fill/color sub-keys instead of
-                // a bare `shading=fill` value. The bare form silently coerced
-                // val to "clear" and dropped color on dump round-trip. Mirrors
-                // the paragraph/table/cell shading reader (round-21 fix).
-                var rShdVal = run.RunProperties.Shading.Val?.InnerText;
-                var rShdFill = run.RunProperties.Shading.Fill?.Value;
-                var rShdColor = run.RunProperties.Shading.Color?.Value;
-                if (!string.IsNullOrEmpty(rShdVal)) node.Format["shading.val"] = rShdVal;
-                if (!string.IsNullOrEmpty(rShdFill)) node.Format["shading.fill"] = ParseHelpers.FormatHexColor(rShdFill);
-                if (!string.IsNullOrEmpty(rShdColor)) node.Format["shading.color"] = ParseHelpers.FormatHexColor(rShdColor);
-            }
-            // w14 text effects
-            ReadW14TextEffects(run.RunProperties, node);
-            // BUG-DUMP10-01: w:eastAsianLayout (vert/combine/vertCompress)
-            // is a multi-attribute child the long-tail FillUnknownChildProps
-            // skips (it only handles single-val/no-attr leaves). Without an
-            // explicit reader, vertical-text and two-lines-in-one CJK layout
-            // was silently dropped on dump→batch round-trip. Set side is
-            // covered by TypedAttributeFallback.TrySet which creates the
-            // dotted child + attr automatically.
-            if (run.RunProperties?.GetFirstChild<EastAsianLayout>() is { } eal)
-            {
-                if (eal.Vertical?.Value == true) node.Format["eastAsianLayout.vert"] = "1";
-                if (eal.Combine?.Value == true) node.Format["eastAsianLayout.combine"] = "1";
-                if (eal.VerticalCompress?.HasValue == true)
-                    node.Format["eastAsianLayout.vertCompress"] = eal.VerticalCompress.InnerText;
-                if (eal.CombineBrackets?.HasValue == true)
-                    node.Format["eastAsianLayout.combineBrackets"] = eal.CombineBrackets.InnerText;
-            }
-            // Long-tail fallback: surface every rPr child the curated reader
-            // didn't consume. Symmetric with the Set-side TryCreateTypedChild
-            // fallback in SetElementRun (WordHandler.Set.Element.cs).
-            FillUnknownChildProps(run.RunProperties, node);
-            // Image properties if run contains a Drawing.
-            // BUG-R5-T3: previously this branch wrote only id/name/alt/width/
-            // height/relId — wrap/hPosition/vPosition/hRelative/vRelative/
-            // behindText for floating pictures were silently dropped, which
-            // also broke dump→batch round-trip (WordBatchEmitter relies on Get).
-            // Reuse CreateImageNode (the canonical picture-node builder) and
-            // merge its Format bag into the run node.
-            var runDrawing = run.GetFirstChild<Drawing>();
-            if (runDrawing != null)
-            {
-                var picNode = CreateImageNode(runDrawing, run, path);
-                node.Type = picNode.Type;
-                if (!string.IsNullOrEmpty(picNode.Text)) node.Text = picNode.Text;
-                foreach (var kv in picNode.Format)
-                    node.Format[kv.Key] = kv.Value;
-            }
-            // OLE object if run contains an EmbeddedObject. The underlying
-            // logic is the same as CreateOleNode — reuse it so Get/Query
-            // return identical shapes.
-            var runOle = run.GetFirstChild<EmbeddedObject>();
-            if (runOle != null)
-            {
-                // CONSISTENCY(ole-host-part): mirror Query.cs's header/footer
-                // OLE handling — the EmbeddedObjectPart relationship lives on
-                // the owning Header/Footer part, not the MainDocumentPart.
-                // Walk ancestors to find the host part so CreateOleNode can
-                // populate contentType/fileSize instead of returning orphan.
-                OpenXmlPart? hostPart = _doc.MainDocumentPart;
-                var headerAncestor = run.Ancestors<Header>().FirstOrDefault();
-                if (headerAncestor != null && _doc.MainDocumentPart != null)
-                {
-                    var hp = _doc.MainDocumentPart.HeaderParts
-                        .FirstOrDefault(p => ReferenceEquals(p.Header, headerAncestor));
-                    if (hp != null) hostPart = hp;
-                }
-                else
-                {
-                    var footerAncestor = run.Ancestors<Footer>().FirstOrDefault();
-                    if (footerAncestor != null && _doc.MainDocumentPart != null)
-                    {
-                        var fp = _doc.MainDocumentPart.FooterParts
-                            .FirstOrDefault(p => ReferenceEquals(p.Footer, footerAncestor));
-                        if (fp != null) hostPart = fp;
-                    }
-                }
-                var oleNode = CreateOleNode(runOle, run, path, hostPart);
-                // Keep the node's path as-is, but swap in the OLE-sourced
-                // type/format bag.
-                node.Type = oleNode.Type;
-                foreach (var kv in oleNode.Format)
-                    node.Format[kv.Key] = kv.Value;
-                if (!string.IsNullOrEmpty(oleNode.Text))
-                    node.Text = oleNode.Text;
-            }
-            // CONSISTENCY(run-special-content): runs that primarily carry inline
-            // structure (ptab, fldChar, instrText, tab, break) instead of a
-            // <w:t> payload were previously surfaced as opaque
-            // {type:"run", text:""} placeholders — six of these in a row in
-            // header/footer paragraphs (PAGE field begin/instr/separate/end +
-            // ptab anchors), all indistinguishable. Upgrade the node.Type so
-            // callers walking paragraph.children can rebuild left/center/right
-            // alignment regions and detect field markers without reparsing the
-            // raw OOXML themselves. Mirrors the type=picture / type=ole
-            // pattern above.
-            //
-            // Each block is gated on `node.Type == "run"` so that:
-            //   (a) Drawing/EmbeddedObject (already upgraded above to
-            //       picture/ole) wins over a co-residing <w:br>/<w:tab> —
-            //       picture+break is a real Word emission and the picture
-            //       identity must not be silently overwritten;
-            //   (b) the first matching structural element wins when several
-            //       coexist in one run (rare but possible), keeping node.Type
-            //       single-valued and deterministic. ptab is checked first
-            //       (most semantically distinctive), then fieldChar, then
-            //       instrText, then tab, then break.
-            if (node.Type == "run")
-            {
-                var ptabEl = run.GetFirstChild<PositionalTab>();
-                if (ptabEl != null)
-                {
-                    node.Type = "ptab";
-                    // Open XML SDK v3 enum .ToString() returns "FooValues { }"
-                    // — use .InnerText to get the actual XML attribute value
-                    // ("center", "right", "begin", etc.). Same trap as the
-                    // LineSpacingRuleValues note in WordHandler CLAUDE.md.
-                    if (ptabEl.Alignment?.HasValue == true)
-                        node.Format["align"] = ptabEl.Alignment.InnerText;
-                    if (ptabEl.RelativeTo?.HasValue == true)
-                        node.Format["relativeTo"] = ptabEl.RelativeTo.InnerText;
-                    if (ptabEl.Leader?.HasValue == true)
-                        node.Format["leader"] = ptabEl.Leader.InnerText;
-                }
-            }
-            if (node.Type == "run")
-            {
-                var fldCharEl = run.GetFirstChild<FieldChar>();
-                if (fldCharEl != null)
-                {
-                    node.Type = "fieldChar";
-                    if (fldCharEl.FieldCharType?.HasValue == true)
-                        node.Format["fieldCharType"] = fldCharEl.FieldCharType.InnerText;
-                    // CONSISTENCY(field-cache-stale): expose dirty so audit
-                    // tools can verify whether Set instr / Set cached
-                    // properly flagged the owning field for recompute. The
-                    // attribute persists in OOXML; surfacing it via Get
-                    // closes the loop the Round 3 dirty fix opened.
-                    if (fldCharEl.Dirty?.Value == true)
-                        node.Format["dirty"] = true;
-                    if (fldCharEl.FormFieldData != null)
-                        node.Format["hasFormFieldData"] = true;
-                }
-            }
-            if (node.Type == "run")
-            {
-                var instrEl = run.GetFirstChild<FieldCode>();
-                if (instrEl != null)
-                {
-                    node.Type = "instrText";
-                    node.Format["instruction"] = instrEl.Text ?? "";
-                    // CONSISTENCY(canonical-keys): also surface the
-                    // instruction as node.Text so selector text-contains
-                    // searches (`instrText[text~=PAGE]`) and Get readback
-                    // agree. Without this, MatchesRunSelector's
-                    // GetRunText fallback hits the <w:instrText> content
-                    // while Navigation hands callers an empty Text — the
-                    // two surfaces disagreed on what the run "says".
-                    node.Text = instrEl.Text ?? "";
-                }
-            }
-            // CONSISTENCY(run-text-tab): the type-upgrade for tab/break runs
-            // checks "no Text element" (not "node.Text empty") because
-            // GetRunText now surfaces TabChar as \t in node.Text. A pure
-            // <w:r><w:tab/></w:r> run has no <w:t> child but node.Text="\t".
-            if (node.Type == "run" && !run.Elements<Text>().Any())
-            {
-                var tabEl = run.GetFirstChild<TabChar>();
-                if (tabEl != null)
-                {
-                    node.Type = "tab";
-                    node.Text = "";
-                }
-            }
-            if (node.Type == "run" && string.IsNullOrEmpty(node.Text))
-            {
-                var breakEl = run.GetFirstChild<Break>();
-                if (breakEl != null)
-                {
-                    node.Type = "break";
-                    // Normalize "textWrapping" → "line" on emit. OOXML treats
-                    // a typeless <w:br/> as textWrapping (the default), but
-                    // AddBreak's user-facing vocab uses "line"; without
-                    // normalisation, dump round-trip emits `type=line` from
-                    // typeless source and `type=textWrapping` from the
-                    // explicitly-stamped replay target — semantically
-                    // identical, byte-different.
-                    if (breakEl.Type?.HasValue == true)
-                    {
-                        var bt = breakEl.Type.InnerText;
-                        node.Format["breakType"] = string.Equals(bt, "textWrapping", StringComparison.OrdinalIgnoreCase)
-                            ? "line"
-                            : bt;
-                    }
-                }
-            }
-
-            if (run.Parent is Hyperlink hlParent)
-            {
-                // BUG-DUMP10-05: a hyperlink wrapper with neither r:id nor
-                // anchor (tooltip-only / history-only) used to fall through
-                // both branches below, leaving the run with no Format keys
-                // that would trigger the WordBatchEmitter hyperlink-emit guard.
-                // Surface a sentinel so the wrapper survives even when there
-                // is no destination — required for w:hyperlink[@w:tooltip]
-                // bookmarks-style hover popups.
-                node.Format["isHyperlink"] = true;
-                if (hlParent.Id?.Value != null)
-                {
-                    try
-                    {
-                        var rel = ResolveHyperlinkRelationship(hlParent, hlParent.Id.Value);
-                        // CONSISTENCY(docx-hyperlink-canonical-url): schema docx/hyperlink.json
-                        // declares `url` as the canonical key; `link` is accepted as an input
-                        // alias by Add/Set but Get normalizes output to `url`.
-                        if (rel != null) node.Format["url"] = rel.Uri.ToString();
-                    }
-                    catch { }
-                }
-                // CONSISTENCY(internal-anchor-hyperlink): runs inside an
-                // internal anchor hyperlink (w:hyperlink[@w:anchor]) had no
-                // r:id, so `anchor` was never surfaced on the run. The
-                // WordBatchEmitter hyperlink branch keys off Format["anchor"]/
-                // ["url"] to emit `add hyperlink`; without anchor the run
-                // was demoted to a plain `add r` and the link was lost on
-                // dump→batch round-trip.
-                if (hlParent.Anchor?.Value != null)
-                    node.Format["anchor"] = hlParent.Anchor.Value;
-                // BUG-DUMP24-02: w:docLocation is a separate "location in
-                // target document" attribute, distinct from w:anchor. Surface
-                // it so dump→batch round-trips the wrapping hyperlink fully.
-                if (hlParent.DocLocation?.Value != null)
-                    node.Format["docLocation"] = hlParent.DocLocation.Value;
-                // BUG-DUMP10-02: surface the tooltip / tgtFrame / history
-                // attributes from the wrapping hyperlink so dump→batch
-                // round-trip preserves them. Same canonical keys as the
-                // standalone Hyperlink branch below.
-                if (hlParent.Tooltip?.Value != null)
-                    node.Format["tooltip"] = hlParent.Tooltip.Value;
-                if (hlParent.TargetFrame?.Value != null)
-                    node.Format["tgtFrame"] = hlParent.TargetFrame.Value;
-                if (hlParent.History?.Value == true)
-                    node.Format["history"] = true;
-            }
-
-            // Populate effective.* properties from style inheritance.
-            // CONSISTENCY(run-special-content): runs whose primary payload
-            // is a structural inline element (ptab/fieldChar/instrText/tab/
-            // break) carry no glyph for font/size/color to apply to;
-            // emitting effective.size / effective.font.* on them only
-            // floods output with noise and primes audit tools to misread
-            // cosmetic styles on a "fldChar end" marker as meaningful.
-            // Picture/ole runs are gated for the same reason — their
-            // typography is irrelevant to the embedded media.
-            var parentPara = run.Ancestors<Paragraph>().FirstOrDefault();
-            if (parentPara != null && node.Type == "run")
-                PopulateEffectiveRunProperties(node, run, parentPara);
-
-            // Same noise-suppression for direct rPr-level keys read before
-            // the type upgrade above (font.*/size/bold/...): they are valid
-            // OOXML but irrelevant to special-content runs, where node.Type
-            // already conveys the semantic role. Strip them for ptab /
-            // fieldChar / instrText / tab / break so audit tools see a
-            // clean property bag (alignment, fieldCharType, instr,
-            // breakType, etc.).
-            if (node.Type is "ptab" or "fieldChar" or "instrText" or "tab" or "break")
-            {
-                foreach (var noiseKey in TypographyOnlyKeys)
-                    node.Format.Remove(noiseKey);
-            }
-        }
+            return RunToNode(run, node, path);
         else if (element is Hyperlink hyperlink)
             return HyperlinkToNode(hyperlink, node);
         else if (element is Table table)
