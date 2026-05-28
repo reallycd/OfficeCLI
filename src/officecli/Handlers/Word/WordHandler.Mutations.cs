@@ -1713,7 +1713,7 @@ public partial class WordHandler
             if (anchorPath != null && anchorPath.StartsWith("find:", StringComparison.OrdinalIgnoreCase))
             {
                 var findValue = anchorPath["find:".Length..];
-                var (pattern, isRegex) = ParseFindPattern(findValue);
+                var (pattern, isRegex) = FindHelpers.ParseFindPattern(findValue);
                 if (string.IsNullOrEmpty(pattern))
                     throw new ArgumentException("find: pattern must not be empty.");
                 var hit = FindParagraphContainingText(targetParent, targetParentPath, pattern, isRegex)

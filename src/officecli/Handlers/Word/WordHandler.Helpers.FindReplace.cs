@@ -15,10 +15,6 @@ namespace OfficeCli.Handlers;
 
 public partial class WordHandler
 {
-    // BUG-TESTER fuzz-2: bound regex match time on user-supplied find patterns to
-    // prevent catastrophic-backtracking DoS (e.g. "(a+)+b" against long inputs).
-    private static readonly TimeSpan FindRegexMatchTimeout = TimeSpan.FromSeconds(5);
-
     // ==================== Find / Format / Replace ====================
 
     /// <summary>
@@ -43,77 +39,6 @@ public partial class WordHandler
         return runTexts;
     }
 
-    /// <summary>
-    /// Parse a find pattern: plain text or regex (r"..." prefix).
-    /// Returns (pattern, isRegex).
-    /// </summary>
-    private static (string Pattern, bool IsRegex) ParseFindPattern(string value)
-    {
-        // r"..." or r'...' → regex
-        if (value.Length >= 3 && value[0] == 'r' && (value[1] == '"' || value[1] == '\''))
-        {
-            var quote = value[1];
-            var endIdx = value.LastIndexOf(quote);
-            if (endIdx > 1)
-                return (value[2..endIdx], true);
-        }
-        return (value, false);
-    }
-
-    /// <summary>
-    /// Find all match ranges in fullText using either plain text or regex.
-    /// Returns list of (start, length) pairs, sorted by start ascending.
-    /// </summary>
-    private static List<(int Start, int Length)> FindMatchRanges(string fullText, string pattern, bool isRegex)
-    {
-        var ranges = new List<(int Start, int Length)>();
-        if (isRegex)
-        {
-            try
-            {
-                // BUG-TESTER fuzz-2: bound matching with a hard timeout so
-                // catastrophic-backtracking patterns (e.g. "(a+)+b") fail fast
-                // instead of hanging the CLI / process.
-                foreach (System.Text.RegularExpressions.Match m in
-                    System.Text.RegularExpressions.Regex.Matches(
-                        fullText,
-                        pattern,
-                        System.Text.RegularExpressions.RegexOptions.None,
-                        FindRegexMatchTimeout))
-                {
-                    if (m.Length > 0) // skip zero-length matches
-                        ranges.Add((m.Index, m.Length));
-                }
-            }
-            catch (System.Text.RegularExpressions.RegexParseException ex)
-            {
-                throw new ArgumentException($"Invalid regex pattern '{pattern}': {ex.Message}", ex);
-            }
-            catch (System.Text.RegularExpressions.RegexMatchTimeoutException ex)
-            {
-                throw new ArgumentException(
-                    $"Regex pattern '{pattern}' exceeded {FindRegexMatchTimeout.TotalSeconds}s match timeout (catastrophic backtracking?)",
-                    ex);
-            }
-        }
-        else
-        {
-            int idx = 0;
-            while ((idx = fullText.IndexOf(pattern, idx, StringComparison.Ordinal)) >= 0)
-            {
-                ranges.Add((idx, pattern.Length));
-                idx += pattern.Length;
-            }
-        }
-        return ranges;
-    }
-
-    /// <summary>
-    /// Split a run at a character offset within its text content.
-    /// Returns the new right-side run (inserted after the original).
-    /// The original run keeps text [0..charOffset), new run gets [charOffset..).
-    /// RunProperties are deep-cloned. rsidR is cleared on the new run.
-    /// </summary>
     /// <summary>
     /// Split a paragraph at the given character offset, producing a head
     /// paragraph (the original <paramref name="para"/>, now holding
@@ -319,7 +244,7 @@ public partial class WordHandler
                         fullText,
                         pattern,
                         System.Text.RegularExpressions.RegexOptions.None,
-                        FindRegexMatchTimeout)
+                        FindHelpers.RegexMatchTimeout)
                     .Cast<System.Text.RegularExpressions.Match>()
                     .Where(m => m.Length > 0)
                     .ToList();
@@ -331,14 +256,14 @@ public partial class WordHandler
             catch (System.Text.RegularExpressions.RegexMatchTimeoutException ex)
             {
                 throw new ArgumentException(
-                    $"Regex pattern '{pattern}' exceeded {FindRegexMatchTimeout.TotalSeconds}s match timeout (catastrophic backtracking?)",
+                    $"Regex pattern '{pattern}' exceeded {FindHelpers.RegexMatchTimeout.TotalSeconds}s match timeout (catastrophic backtracking?)",
                     ex);
             }
             matches = matchObjs.Select(m => (m.Index, m.Length)).ToList();
         }
         else
         {
-            matches = FindMatchRanges(fullText, pattern, isRegex);
+            matches = FindHelpers.FindMatchRanges(fullText, pattern, isRegex);
         }
         if (matches.Count == 0) return 0;
 
@@ -626,7 +551,7 @@ public partial class WordHandler
         out List<Paragraph> matchedParagraphs)
     {
         matchedParagraphs = new List<Paragraph>();
-        var (pattern, isRegex) = ParseFindPattern(findValue);
+        var (pattern, isRegex) = FindHelpers.ParseFindPattern(findValue);
         if (string.IsNullOrEmpty(pattern) && !isRegex) return 0;
 
         // Resolve paragraphs from path
@@ -811,7 +736,7 @@ public partial class WordHandler
         if (properties.TryGetValue("regex", out var regexFlag) && ParseHelpers.IsTruthySafe(regexFlag) && !findValue.StartsWith("r\"") && !findValue.StartsWith("r'"))
             findValue = $"r\"{findValue}\"";
 
-        var (pattern, isRegex) = ParseFindPattern(findValue);
+        var (pattern, isRegex) = FindHelpers.ParseFindPattern(findValue);
 
         // Guard: empty find pattern would produce unbounded matches and blow
         // up downstream regex/plain-text scans. Surface a clean error instead
@@ -843,7 +768,7 @@ public partial class WordHandler
             throw new ArgumentException("Paragraph has no text content to search.");
 
         var fullText = string.Concat(runTexts.Select(rt => rt.TextElement.Text));
-        var matches = FindMatchRanges(fullText, pattern, isRegex);
+        var matches = FindHelpers.FindMatchRanges(fullText, pattern, isRegex);
         if (matches.Count == 0)
             throw new ArgumentException($"Text '{findValue}' not found in paragraph.");
 
@@ -917,7 +842,7 @@ public partial class WordHandler
             if (runTexts.Count == 0) continue;
 
             var fullText = string.Concat(runTexts.Select(rt => rt.TextElement.Text));
-            if (FindMatchRanges(fullText, pattern, isRegex).Count > 0)
+            if (FindHelpers.FindMatchRanges(fullText, pattern, isRegex).Count > 0)
             {
                 var paraPath = $"{containerPath}/{BuildParaPathSegment(candidate, i + 1)}";
                 return (candidate, paraPath);

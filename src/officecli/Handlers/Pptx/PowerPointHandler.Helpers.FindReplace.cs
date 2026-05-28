@@ -13,10 +13,6 @@ namespace OfficeCli.Handlers;
 
 public partial class PowerPointHandler
 {
-    // BUG-TESTER fuzz-2: bound regex match time on user-supplied find patterns to
-    // prevent catastrophic-backtracking DoS (e.g. "(a+)+b" against long inputs).
-    private static readonly TimeSpan FindRegexMatchTimeout = TimeSpan.FromSeconds(5);
-
     /// <summary>
     /// Find and replace text across all slides. Returns the number of replacements made.
     /// </summary>
@@ -38,62 +34,6 @@ public partial class PowerPointHandler
             pos += len;
         }
         return runTexts;
-    }
-
-    /// <summary>
-    /// Parse a find pattern: plain text or regex (r"..." prefix).
-    /// </summary>
-    private static (string Pattern, bool IsRegex) ParseFindPattern(string value)
-    {
-        if (value.Length >= 3 && value[0] == 'r' && (value[1] == '"' || value[1] == '\''))
-        {
-            var quote = value[1];
-            var endIdx = value.LastIndexOf(quote);
-            if (endIdx > 1)
-                return (value[2..endIdx], true);
-        }
-        return (value, false);
-    }
-
-    /// <summary>
-    /// Find all match ranges in fullText using either plain text or regex.
-    /// </summary>
-    private static List<(int Start, int Length)> FindMatchRanges(string fullText, string pattern, bool isRegex)
-    {
-        var ranges = new List<(int Start, int Length)>();
-        if (isRegex)
-        {
-            try
-            {
-                // BUG-TESTER fuzz-2: bound matching with hard timeout to prevent
-                // catastrophic-backtracking DoS.
-                foreach (Match m in Regex.Matches(fullText, pattern, RegexOptions.None, FindRegexMatchTimeout))
-                {
-                    if (m.Length > 0)
-                        ranges.Add((m.Index, m.Length));
-                }
-            }
-            catch (RegexParseException ex)
-            {
-                throw new ArgumentException($"Invalid regex pattern '{pattern}': {ex.Message}", ex);
-            }
-            catch (RegexMatchTimeoutException ex)
-            {
-                throw new ArgumentException(
-                    $"Regex pattern '{pattern}' exceeded {FindRegexMatchTimeout.TotalSeconds}s match timeout (catastrophic backtracking?)",
-                    ex);
-            }
-        }
-        else
-        {
-            int idx = 0;
-            while ((idx = fullText.IndexOf(pattern, idx, StringComparison.Ordinal)) >= 0)
-            {
-                ranges.Add((idx, pattern.Length));
-                idx += pattern.Length;
-            }
-        }
-        return ranges;
     }
 
     /// <summary>
@@ -203,7 +143,7 @@ public partial class PowerPointHandler
                         fullText,
                         pattern,
                         System.Text.RegularExpressions.RegexOptions.None,
-                        FindRegexMatchTimeout)
+                        FindHelpers.RegexMatchTimeout)
                     .Cast<System.Text.RegularExpressions.Match>()
                     .Where(m => m.Length > 0)
                     .ToList();
@@ -215,14 +155,14 @@ public partial class PowerPointHandler
             catch (System.Text.RegularExpressions.RegexMatchTimeoutException ex)
             {
                 throw new ArgumentException(
-                    $"Regex pattern '{pattern}' exceeded {FindRegexMatchTimeout.TotalSeconds}s match timeout (catastrophic backtracking?)",
+                    $"Regex pattern '{pattern}' exceeded {FindHelpers.RegexMatchTimeout.TotalSeconds}s match timeout (catastrophic backtracking?)",
                     ex);
             }
             matches = matchObjs.Select(m => (m.Index, m.Length)).ToList();
         }
         else
         {
-            matches = FindMatchRanges(fullText, pattern, isRegex);
+            matches = FindHelpers.FindMatchRanges(fullText, pattern, isRegex);
         }
 
         // Apply run-scope filter (R32): keep only matches fully contained in the run.
@@ -335,7 +275,7 @@ public partial class PowerPointHandler
     /// </summary>
     private int ProcessPptFind(string path, string findValue, string? replace, Dictionary<string, string> formatProps)
     {
-        var (pattern, isRegex) = ParseFindPattern(findValue);
+        var (pattern, isRegex) = FindHelpers.ParseFindPattern(findValue);
         if (string.IsNullOrEmpty(pattern) && !isRegex) return 0;
 
         int totalCount = 0;
@@ -592,7 +532,7 @@ public partial class PowerPointHandler
         if (properties.TryGetValue("regex", out var regexFlag) && ParseHelpers.IsTruthySafe(regexFlag) && !findValue.StartsWith("r\"") && !findValue.StartsWith("r'"))
             findValue = $"r\"{findValue}\"";
 
-        var (pattern, isRegex) = ParseFindPattern(findValue);
+        var (pattern, isRegex) = FindHelpers.ParseFindPattern(findValue);
 
         // Find first match in any paragraph
         Drawing.Paragraph? targetPara = null;
@@ -603,7 +543,7 @@ public partial class PowerPointHandler
             var runTexts = BuildPptRunTexts(para);
             if (runTexts.Count == 0) continue;
             var fullText = string.Concat(runTexts.Select(rt => rt.TextElement.Text));
-            var matches = FindMatchRanges(fullText, pattern, isRegex);
+            var matches = FindHelpers.FindMatchRanges(fullText, pattern, isRegex);
             if (matches.Count > 0)
             {
                 targetPara = para;
