@@ -188,6 +188,13 @@ internal static partial class ChartHelper
     /// </summary>
     internal static List<(string name, double[] values)> ParseSeriesData(Dictionary<string, string> properties)
     {
+        // CONSISTENCY(chart-series-name-alias): `series{N}Name=` flat form
+        // is a natural alias for the dotted `series{N}.name=`. Rewrite so
+        // both the dotted and legacy branches below see the canonical
+        // `series{N}.name` key. TryGetValue on the original `series{N}Name`
+        // key still fires (preserved tracking) — we add the dotted alias.
+        NormalizeFlatSeriesNameAliases(properties);
+
         // Check for dotted syntax first
         var extSeries = ParseSeriesDataExtended(properties);
         if (extSeries != null && extSeries.Count > 0 && extSeries.Any(s => s.ValuesRef != null || s.CategoriesRef != null))
@@ -266,6 +273,17 @@ internal static partial class ChartHelper
             // Legacy format: series1=Sales:10,20,30
             if (!hasLegacy) continue;
             var seriesStr = legacyStr!;
+            // CONSISTENCY(chart-series-rangeref): mirror the dotted-syntax
+            // guard above (line 253) — if the legacy value is a range
+            // reference (e.g. "Sheet1!B2:B7"), don't try to parse it as
+            // literal comma-separated numbers. ApplySeriesReferences picks
+            // it up later via the series{N} key. Without this guard
+            // ParseSeriesValues throws "Invalid data value 'B7'".
+            if (IsRangeReference(seriesStr))
+            {
+                result.Add(($"Series {i}", Array.Empty<double>()));
+                continue;
+            }
             var colonIdx = seriesStr.IndexOf(':');
             if (colonIdx < 0)
             {
@@ -289,6 +307,10 @@ internal static partial class ChartHelper
     /// </summary>
     internal static List<SeriesInfo>? ParseSeriesDataExtended(Dictionary<string, string> properties)
     {
+        // Same flat-name alias rewrite as ParseSeriesData entry; idempotent
+        // when called second time.
+        NormalizeFlatSeriesNameAliases(properties);
+
         var result = new List<SeriesInfo>();
 
         for (int i = 1; i <= 20; i++)
@@ -332,6 +354,24 @@ internal static partial class ChartHelper
         return null;
     }
 
+    // CONSISTENCY(chart-series-name-alias): `series{N}Name=Revenue` flat form
+    // → `series{N}.name=Revenue` dotted form. Records the read on the
+    // original flat key (via TryGetValue) so handler-as-truth tracking still
+    // marks the user input consumed.
+    private static void NormalizeFlatSeriesNameAliases(Dictionary<string, string> properties)
+    {
+        for (int i = 1; i <= 20; i++)
+        {
+            var flatKey = $"series{i}Name";
+            if (properties.TryGetValue(flatKey, out var nameVal))
+            {
+                var dottedKey = $"series{i}.name";
+                if (!properties.ContainsKey(dottedKey))
+                    properties[dottedKey] = nameVal;
+            }
+        }
+    }
+
     private static double[] ParseSeriesValues(string valStr, string seriesName)
     {
         return valStr.Split(',').Select(v =>
@@ -360,7 +400,7 @@ internal static partial class ChartHelper
         // already supports via ApplySeriesColor). When both are supplied,
         // dotted keys override positions in the `colors` array.
         string[]? arr = null;
-        if (properties.TryGetValue("colors", out var colorsStr))
+        if (properties.TryGetValue("colors", out var colorsStr) || properties.TryGetValue("seriesColors", out colorsStr))
             arr = colorsStr.Split(',').Select(c => c.Trim()).ToArray();
 
         // Collect per-series dotted color keys
