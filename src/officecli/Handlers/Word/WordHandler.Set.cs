@@ -451,6 +451,7 @@ public partial class WordHandler
         if (element is TableRow row) return SetElementTableRow(row, properties);
         if (element is Table tbl) return SetElementTable(tbl, properties);
         if (element is TabStop tabStop) return SetElementTabStop(tabStop, properties);
+        if (element is TextBoxContent txbx) return SetElementTextBoxContent(txbx, properties);
         return new List<string>();
     }
 

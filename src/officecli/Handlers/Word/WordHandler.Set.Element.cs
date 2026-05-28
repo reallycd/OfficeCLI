@@ -514,7 +514,11 @@ public partial class WordHandler
                     ReplaceWrapElement(anchor, value);
                     break;
                 }
-                case "hposition":
+                // CONSISTENCY(pos-alias): accept posH/posV as short aliases for
+                // hposition/vposition. posH/posV were
+                // silently swallowed (false "Updated" with no XML write); routing
+                // them here makes them actually take effect and be read back.
+                case "hposition" or "posh":
                 {
                     var anchor = ResolveRunAnchor(run);
                     var hPosEl = anchor?.GetFirstChild<DW.HorizontalPosition>();
@@ -525,7 +529,7 @@ public partial class WordHandler
                     else hPosEl.AppendChild(new DW.PositionOffset(emu));
                     break;
                 }
-                case "vposition":
+                case "vposition" or "posv":
                 {
                     var anchor = ResolveRunAnchor(run);
                     var vPosEl = anchor?.GetFirstChild<DW.VerticalPosition>();
@@ -1206,9 +1210,14 @@ public partial class WordHandler
                             paraRPr.Remove();
                     }
                     if (!GenericXmlQuery.TryCreateTypedChild(pProps, key, value))
-                        unsupported.Add(unsupported.Count == 0
-                            ? $"{key} (valid paragraph props: text, style, alignment, bold, italic, font, size, color, spaceBefore, spaceAfter, spaceBeforeLines, spaceAfterLines, lineSpacing, indent, liststyle, formula, direction, bidi)"
-                            : key);
+                    {
+                        var hint = key.ToLowerInvariant() is "sectionbreak" or "section_break" or "sectiontype"
+                            ? $"{key} (section breaks are added via 'add --type section --prop type=nextPage/evenPage/oddPage/continuous', not as a paragraph property)"
+                            : unsupported.Count == 0
+                                ? $"{key} (valid paragraph props: text, style, alignment, bold, italic, font, size, color, spaceBefore, spaceAfter, spaceBeforeLines, spaceAfterLines, lineSpacing, indent, liststyle, formula, direction, bidi)"
+                                : key;
+                        unsupported.Add(hint);
+                    }
                     break;
             }
         }
@@ -2406,6 +2415,36 @@ public partial class WordHandler
         if (affectedPara != null)
             affectedPara.TextId = GenerateParaId();
         _doc.MainDocumentPart?.Document?.Save();
+        return unsupported;
+    }
+
+    // /body/textbox[N] resolves to TextBoxContent (the <w:txbxContent> inside
+    // <wps:txbx>). Generic SetElement had no case for TextBoxContent, so it
+    // returned an empty unsupported list and the CLI reported a silent
+    // "Updated" with no XML write — classic false success. We reject the
+    // known-confusing position keys explicitly (posH/posV/hposition/vposition)
+    // pointing the caller at the path that actually accepts them; everything
+    // else still falls through to a proper UNSUPPORTED warning so the silent
+    // pass-through is closed for good.
+    private List<string> SetElementTextBoxContent(TextBoxContent txbx, Dictionary<string, string> properties)
+    {
+        var unsupported = new List<string>();
+        foreach (var (key, value) in properties)
+        {
+            switch (key.ToLowerInvariant())
+            {
+                case "hposition" or "posh" or "vposition" or "posv":
+                    throw new ArgumentException(
+                        $"Setting position keys (posH/posV/hposition/vposition) on " +
+                        $"/body/textbox[N] is not supported (the position lives on the " +
+                        $"enclosing <wp:anchor>, not on <w:txbxContent>). " +
+                        $"Add the textbox at the desired position via " +
+                        $"`add /body --type textbox --prop posH=… posV=…` instead.");
+                default:
+                    unsupported.Add(key);
+                    break;
+            }
+        }
         return unsupported;
     }
 
