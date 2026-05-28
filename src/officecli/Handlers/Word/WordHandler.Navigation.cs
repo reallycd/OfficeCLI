@@ -2872,9 +2872,13 @@ public partial class WordHandler
                 // Cell spacing
                 if (tp.TableCellSpacing?.Width?.Value != null)
                     node.Format["cellSpacing"] = tp.TableCellSpacing.Width.Value;
-                // Layout
+                // Layout — emit "autofit" (not "auto") so the readback token
+                // matches the canonical input vocabulary documented in the
+                // table add/set help. Set accepts both "auto" and "autofit"
+                // (anything not "fixed" maps to Autofit), so this only affects
+                // get and is round-trip safe with the dump/replay pipeline.
                 if (tp.TableLayout?.Type?.Value != null)
-                    node.Format["layout"] = tp.TableLayout.Type.Value == TableLayoutValues.Fixed ? "fixed" : "auto";
+                    node.Format["layout"] = tp.TableLayout.Type.Value == TableLayoutValues.Fixed ? "fixed" : "autofit";
                 // Direction (CT_TblPrBase / w:bidiVisual). Mirrors paragraph
                 // direction vocabulary; presence-only readback (no bidiVisual
                 // means no key — LTR is the default).
