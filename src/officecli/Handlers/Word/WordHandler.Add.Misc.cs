@@ -725,6 +725,14 @@ public partial class WordHandler
         // dropping these per-type props without feedback (Round 5 audit).
         WarnInapplicableFieldProps(properties, effectiveType);
 
+        // Expression fields (raw instruction starting with `=`, e.g. `= 5 * 8 + 2`)
+        // arrive via code=/instr= with no named fieldType, so they fall to the `_`
+        // default and previously emitted "1" \u2014 Word displays "1" until the user
+        // presses F9 to recalc. Use an empty placeholder so Word treats the
+        // cached result as "needs recomputation" and shows the real value when
+        // the document opens. PAGE/NUMPAGES/SECTION etc. still get "1" (the
+        // OOXML convention \u2014 Word auto-updates these on open regardless).
+        bool isExpressionField = fieldInstr.TrimStart().StartsWith("=");
         var fieldPlaceholder = properties.ContainsKey("text")
             ? properties["text"]
             : effectiveType switch
@@ -743,6 +751,7 @@ public partial class WordHandler
                 "date" or "createdate" or "savedate" or "printdate"
                     => FormatDateForField(dateFmtVal, "M/d/yyyy"),
                 "time" => FormatDateForField(dateFmtVal, "h:mm tt"),
+                _ when isExpressionField => "",
                 _ => "1"
             };
 
