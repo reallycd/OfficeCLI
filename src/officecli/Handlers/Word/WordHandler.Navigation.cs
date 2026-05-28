@@ -1248,50 +1248,53 @@ public partial class WordHandler
             : $"No children at {parentPath}";
     }
 
+    private DocumentNode BookmarkStartToNode(BookmarkStart bkStart, DocumentNode node)
+    {
+        node.Type = "bookmark";
+        node.Format["name"] = bkStart.Name?.Value ?? "";
+        node.Format["id"] = bkStart.Id?.Value ?? "";
+        // BUG-DUMP10-04: for cross-paragraph bookmark spans, walk
+        // forward over sibling paragraphs in the same body and
+        // surface the BookmarkEnd's paragraph offset (0-based).
+        // 0 = same paragraph (default; AddBookmark places End next to
+        // Start). >0 = the End sits N paragraphs after the Start.
+        // Without this, dump emitted only the BookmarkStart and
+        // AddBookmark always re-emitted the End in the same paragraph,
+        // collapsing every multi-paragraph bookmark on round-trip.
+        var bkStartId = bkStart.Id?.Value;
+        if (!string.IsNullOrEmpty(bkStartId)
+            && bkStart.Ancestors<Paragraph>().FirstOrDefault() is { } startPara
+            && startPara.Parent is OpenXmlElement bodyParent)
+        {
+            var siblings = bodyParent.Elements<Paragraph>().ToList();
+            int startIdx = siblings.IndexOf(startPara);
+            if (startIdx >= 0)
+            {
+                for (int i = startIdx; i < siblings.Count; i++)
+                {
+                    var endHere = siblings[i].Descendants<BookmarkEnd>()
+                        .FirstOrDefault(be => be.Id?.Value == bkStartId);
+                    if (endHere != null)
+                    {
+                        int offset = i - startIdx;
+                        if (offset > 0) node.Format["endPara"] = offset;
+                        break;
+                    }
+                }
+            }
+        }
+        var bkText = GetBookmarkText(bkStart);
+        if (!string.IsNullOrEmpty(bkText))
+            node.Text = bkText;
+        return node;
+    }
+
     private DocumentNode ElementToNode(OpenXmlElement element, string path, int depth)
     {
         var node = new DocumentNode { Path = path, Type = element.LocalName };
 
         if (element is BookmarkStart bkStart)
-        {
-            node.Type = "bookmark";
-            node.Format["name"] = bkStart.Name?.Value ?? "";
-            node.Format["id"] = bkStart.Id?.Value ?? "";
-            // BUG-DUMP10-04: for cross-paragraph bookmark spans, walk
-            // forward over sibling paragraphs in the same body and
-            // surface the BookmarkEnd's paragraph offset (0-based).
-            // 0 = same paragraph (default; AddBookmark places End next to
-            // Start). >0 = the End sits N paragraphs after the Start.
-            // Without this, dump emitted only the BookmarkStart and
-            // AddBookmark always re-emitted the End in the same paragraph,
-            // collapsing every multi-paragraph bookmark on round-trip.
-            var bkStartId = bkStart.Id?.Value;
-            if (!string.IsNullOrEmpty(bkStartId)
-                && bkStart.Ancestors<Paragraph>().FirstOrDefault() is { } startPara
-                && startPara.Parent is OpenXmlElement bodyParent)
-            {
-                var siblings = bodyParent.Elements<Paragraph>().ToList();
-                int startIdx = siblings.IndexOf(startPara);
-                if (startIdx >= 0)
-                {
-                    for (int i = startIdx; i < siblings.Count; i++)
-                    {
-                        var endHere = siblings[i].Descendants<BookmarkEnd>()
-                            .FirstOrDefault(be => be.Id?.Value == bkStartId);
-                        if (endHere != null)
-                        {
-                            int offset = i - startIdx;
-                            if (offset > 0) node.Format["endPara"] = offset;
-                            break;
-                        }
-                    }
-                }
-            }
-            var bkText = GetBookmarkText(bkStart);
-            if (!string.IsNullOrEmpty(bkText))
-                node.Text = bkText;
-            return node;
-        }
+            return BookmarkStartToNode(bkStart, node);
 
         if (element is Footnote fnEl)
         {
