@@ -590,6 +590,8 @@ public static partial class PptxBatchEmitter
         // carries none of these (semantic emit covered only cSld and the
         // optional <p:transition> via prop), an "append on /p:sld" sequence
         // in schema order produces a schema-valid result.
+        if (exotic.BgXml != null)
+            EmitRawSlideBgSlice(slidePath, exotic.BgXml, items, ctx);
         if (exotic.ClrMapOvrXml != null)
             EmitRawSlideSlice(slidePath, "p:clrMapOvr", exotic.ClrMapOvrXml, items, ctx);
         if (exotic.HasExoticTransition && exotic.TransitionXml != null)
@@ -719,7 +721,18 @@ public static partial class PptxBatchEmitter
         // path; we deliberately do NOT raw-emit it here to avoid
         // duplicating effects with the semantic add-animation rows.
         string? ClrMapOvrXml,
-        string? ExtLstXml);
+        string? ExtLstXml,
+        // R48: slide-level <p:bg> (inside <p:cSld>, before <p:spTree>).
+        // NodeBuilder does not surface slide background, and the semantic
+        // setter path (set /slide[N] background=...) is only fired when the
+        // dump produces a `background` prop on the `add slide` row — which
+        // it never does because Get does not emit it. Capture the raw bg
+        // slice and prepend it onto /p:sld/p:cSld so it lands before
+        // <p:spTree> in schema order. Image-fill backgrounds (r:embed
+        // pointing to a slide-rels ImagePart) are flagged with a warning
+        // because the freshly-added replay slide has no matching relationship
+        // — a follow-up add-part pass would be needed for full image bg.
+        string? BgXml);
 
     private static SlideExoticContent ScanSlideExoticContent(PowerPointHandler ppt, string slidePath)
     {
@@ -902,8 +915,31 @@ public static partial class PptxBatchEmitter
             }
         }
 
+        // R48: slide-level <p:bg> capture (inside <p:cSld>, before <p:spTree>).
+        // Detect the first <p:bg ...> within the slide xml that precedes
+        // <p:spTree>. The cSld parent contains an optional bg slot in schema
+        // order (<p:cSld><p:bg?/><p:spTree/>...</p:cSld>), so anchoring at
+        // the earliest <p:bg appearing before </p:spTree> is unambiguous.
+        string? bgXml = null;
+        var bgIdx = xml.IndexOf("<p:bg", StringComparison.Ordinal);
+        if (bgIdx >= 0)
+        {
+            // Guard: ensure this <p:bg is truly the cSld-level background and
+            // not a substring match inside something like <p:bgClr=…>. The
+            // valid follow-up chars are '>' (open tag) or ' ' (attributes) or
+            // '/' (self-closing form). 'P' / 'C' would indicate <p:bgPr> /
+            // <p:bgClr> which are children of <p:bg>, not <p:bg> itself.
+            char next = bgIdx + 5 < xml.Length ? xml[bgIdx + 5] : '\0';
+            if (next == '>' || next == ' ' || next == '/')
+            {
+                var bgEnd = SliceEnd(xml, bgIdx, "p:bg");
+                if (bgEnd > bgIdx)
+                    bgXml = xml.Substring(bgIdx, bgEnd - bgIdx);
+            }
+        }
+
         return new SlideExoticContent(transExotic, transXml, timingExotic, timingXml,
-            clrMapOvrXml, extLstXml);
+            clrMapOvrXml, extLstXml, bgXml);
     }
 
     // Normalize a slide raw slice into a stable textual form so the first-pass
@@ -1299,6 +1335,52 @@ public static partial class PptxBatchEmitter
             Part = partUri,
             Xpath = "/" + rootName,
             Action = "replace",
+            Xml = canon,
+        });
+    }
+
+    // R48: slide-level <p:bg> raw passthrough. The bg slot sits inside
+    // <p:cSld> BEFORE <p:spTree>, so the standard append-on-/p:sld helper
+    // (which puts the slice at the end of <p:sld>) is the wrong target.
+    // Prepend onto /p:sld/p:cSld puts the bg as the first child, matching
+    // the cSld schema (bg → spTree). Image-fill bg carries a r:embed rId
+    // that the freshly-added replay slide has no matching relationship for —
+    // raise a warning so callers know solidFill/gradFill/pattFill round-trip
+    // cleanly but image bg requires a follow-up add-part pass.
+    private static void EmitRawSlideBgSlice(string slidePath, string sliceXml,
+                                            List<BatchItem> items, SlideEmitContext ctx)
+    {
+        string canon;
+        try { canon = NormalizeSlideRawSlice(sliceXml); }
+        catch
+        {
+            ctx.Unsupported.Add(new UnsupportedWarning(
+                Element: "p:bg",
+                SlidePath: slidePath,
+                Reason: "raw slice could not be canonicalised; element dropped"));
+            return;
+        }
+        if (string.IsNullOrEmpty(canon))
+        {
+            ctx.Unsupported.Add(new UnsupportedWarning(
+                Element: "p:bg",
+                SlidePath: slidePath,
+                Reason: "raw slice canonicalised to empty; element dropped"));
+            return;
+        }
+        if (canon.Contains("r:embed", StringComparison.Ordinal))
+        {
+            ctx.Unsupported.Add(new UnsupportedWarning(
+                Element: "p:bg.image_rel",
+                SlidePath: slidePath,
+                Reason: "image-fill background references a slide-rels rId; replay slide has no matching ImagePart and PowerPoint may show a missing-image marker"));
+        }
+        items.Add(new BatchItem
+        {
+            Command = "raw-set",
+            Part = slidePath,
+            Xpath = "/p:sld/p:cSld",
+            Action = "prepend",
             Xml = canon,
         });
     }
