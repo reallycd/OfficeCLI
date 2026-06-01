@@ -51,14 +51,17 @@ public partial class PowerPointHandler
                 }
                 else
                 {
-                    // /slide[N]/group[K] — add the shape inside the group, not at
-                    // slide root. Required by dump-replay: empty groups are emitted
-                    // first, then per-child `add shape parent=/slide/group[K]`.
-                    var groupParentMatch = Regex.Match(parentPath, @"^/slide\[(\d+)\]/group\[(\d+)\]$");
+                    // /slide[N]/group[K]/group[L]/… — add the shape inside the
+                    // (possibly nested) group, not at slide root. Required by
+                    // dump-replay: empty groups are emitted first, then
+                    // per-child `add shape parent=/slide/group[K]/…`. Groups
+                    // can nest arbitrarily deep; walk every group[K] segment
+                    // to resolve the final insertion container.
+                    // CONSISTENCY(group-nest): mirrors EmitGroup recursion.
+                    var groupParentMatch = Regex.Match(parentPath, @"^/slide\[(\d+)\]((?:/group\[\d+\])+)$");
                     if (groupParentMatch.Success)
                     {
                         slideIdx = int.Parse(groupParentMatch.Groups[1].Value);
-                        var grpIdx = int.Parse(groupParentMatch.Groups[2].Value);
                         slideParts = GetSlideParts().ToList();
                         if (slideIdx < 1 || slideIdx > slideParts.Count)
                             throw new ArgumentException($"Slide {slideIdx} not found (total: {slideParts.Count})");
@@ -66,14 +69,22 @@ public partial class PowerPointHandler
                         var slideG = GetSlide(slidePart);
                         shapeTree = slideG.CommonSlideData?.ShapeTree
                             ?? throw new InvalidOperationException("Slide has no shape tree");
-                        var groups = shapeTree.Elements<GroupShape>().ToList();
-                        if (grpIdx < 1 || grpIdx > groups.Count)
-                            throw new ArgumentException($"Group {grpIdx} not found on slide {slideIdx} (total: {groups.Count})");
-                        insertContainer = groups[grpIdx - 1];
+                        OpenXmlCompositeElement currentContainer = shapeTree;
+                        var grpSegments = Regex.Matches(groupParentMatch.Groups[2].Value, @"/group\[(\d+)\]");
+                        foreach (Match seg in grpSegments)
+                        {
+                            var grpIdx = int.Parse(seg.Groups[1].Value);
+                            var groups = currentContainer.Elements<GroupShape>().ToList();
+                            if (grpIdx < 1 || grpIdx > groups.Count)
+                                throw new ArgumentException(
+                                    $"Group {grpIdx} not found under {currentContainer.LocalName} on slide {slideIdx} (total: {groups.Count})");
+                            currentContainer = groups[grpIdx - 1];
+                        }
+                        insertContainer = currentContainer;
                         ownerPart = slidePart;
                         ownerRoot = slideG;
                         returnPathPrefix = $"/slide[{slideIdx}]";
-                        groupResultPathPrefix = $"/slide[{slideIdx}]/group[{grpIdx}]";
+                        groupResultPathPrefix = $"/slide[{slideIdx}]{groupParentMatch.Groups[2].Value}";
                     }
                     else
                     {
