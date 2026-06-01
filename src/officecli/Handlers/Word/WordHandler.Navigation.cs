@@ -1971,7 +1971,11 @@ public partial class WordHandler
                     // CONSISTENCY(docx-hyperlink-canonical-url): schema docx/hyperlink.json
                     // declares `url` as the canonical key; `link` is accepted as an input
                     // alias by Add/Set but Get normalizes output to `url`.
-                    if (rel != null) node.Format["url"] = rel.Uri.ToString();
+                    // Use OriginalString rather than ToString() — System.Uri normalises
+                    // a bare authority by appending a trailing `/` (e.g.
+                    // `https://example.com` → `https://example.com/`), which would
+                    // surface as a get-side drift the on-disk .rels Target lacks.
+                    if (rel != null) node.Format["url"] = rel.Uri.OriginalString;
                 }
                 catch { }
             }
@@ -2040,7 +2044,7 @@ public partial class WordHandler
             {
                 var rel = ResolveHyperlinkRelationship(hyperlink, relId);
                 // CONSISTENCY(docx-hyperlink-canonical-url): see note above.
-                if (rel != null) node.Format["url"] = rel.Uri.ToString();
+                if (rel != null) node.Format["url"] = rel.Uri.OriginalString;
             }
             catch { }
         }
