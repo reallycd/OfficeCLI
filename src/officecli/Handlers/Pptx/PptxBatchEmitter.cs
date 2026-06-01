@@ -461,6 +461,18 @@ public static partial class PptxBatchEmitter
             ? new Dictionary<string, List<DocumentNode>>(StringComparer.Ordinal)
             : BuildSlideAnimationIndex(ppt, slideNum);
 
+        // R48: connectors can forward-reference shapes (source spTree may
+        // hold a <p:cxnSp> ahead of a <p:sp> the connector's start/end
+        // points target). The semantic walk dispatches in source spTree
+        // order, so a forward-referencing connector emits its `add connector`
+        // row with `from=/slide[N]/shape[K]` BEFORE shape[K] exists in the
+        // replay slide — AddConnector then throws "Shape index K out of
+        // range" and the whole slide goes uncreated. Hold connector emits
+        // in a per-slide buffer and flush AFTER the rest of the loop so
+        // every referenced shape has been added by then. Z-order regresses
+        // for the rare cross-referencing case but no slide gets corrupted.
+        var deferredConnectors = new List<DocumentNode>();
+
         var ord = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var child in fullSlide.Children)
         {
@@ -497,8 +509,12 @@ public static partial class PptxBatchEmitter
                     }
                     break;
                 case "connector":
+                    // R48: defer to slide-end so any forward-referenced
+                    // <p:sp> the connector's start/end points to has been
+                    // added by the time AddConnector resolves the
+                    // /slide[N]/shape[K] form.
                     ord["connector"] = ord.GetValueOrDefault("connector", 0) + 1;
-                    EmitConnector(ppt, child, slidePath, items, ctx);
+                    deferredConnectors.Add(child);
                     break;
                 case "group":
                     ord["group"] = ord.GetValueOrDefault("group", 0) + 1;
@@ -576,6 +592,11 @@ public static partial class PptxBatchEmitter
                     break;
             }
         }
+
+        // R48: flush deferred connectors — every referenced <p:sp> now
+        // exists in the rebuilt slide so /slide[N]/shape[K] resolves.
+        foreach (var cxnChild in deferredConnectors)
+            EmitConnector(ppt, cxnChild, slidePath, items, ctx);
 
         // Raw-XML passthrough for exotic transition / timing content. Emitted
         // AFTER all shape/animation rows so they replace anything the semantic
