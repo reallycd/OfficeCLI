@@ -60,6 +60,16 @@ public static partial class PptxBatchEmitter
         // shape-level animation keys; the fine-grained rows carry trigger
         // / delay / direction / easing that the compound form loses.
         "animation",
+        // R14-bug5: ReadShapeAnimation also surfaces chartBuild on the
+        // chart node's Format bag (mirroring how `animation` lives there
+        // for non-chart shapes). chart.set / chart.add do not consume
+        // chartBuild — it belongs on the per-animation row built by
+        // EmitAnimationsForShape, which reads it directly from the
+        // per-animation Format bag exposed by Query("animation"). Without
+        // this filter, dump emitted `chartBuild=category` as a chart
+        // add prop AND the animation row was missing entirely (bug 5
+        // double-fault).
+        "chartBuild",
     };
 
     // Shape-level `animation` is filtered above. The same readback emits

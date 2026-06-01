@@ -504,7 +504,22 @@ public static partial class PptxBatchEmitter
                     break;
                 case "chart":
                     ord["chart"] = ord.GetValueOrDefault("chart", 0) + 1;
-                    EmitChart(ppt, child, slidePath, items, ctx, ord["chart"]);
+                    {
+                        EmitChart(ppt, child, slidePath, items, ctx, ord["chart"]);
+                        // R14-bug5: chart-targeted animations were never emitted
+                        // because BuildSlideAnimationIndex only indexed shape
+                        // hosts, and the chart switch arm here never called
+                        // EmitAnimationsForShape. The result: dumping a deck
+                        // with a chart animation produced 0 `add animation`
+                        // rows; on replay the chart entered as a static
+                        // graphicFrame with no <p:timing> entry. Also
+                        // chartBuild was being routed onto chart's add props
+                        // (which chart.set / chart.add do not consume), so
+                        // even a manual replay couldn't surface a per-series/
+                        // per-category build. Re-route the animation list now.
+                        var chartReplay = $"{slidePath}/chart[{ord["chart"]}]";
+                        EmitAnimationsForShape(GetAnimationsForChartChild(animIndex, child, ord["chart"]), chartReplay, items);
+                    }
                     break;
                 case "video":
                 case "audio":
@@ -1346,6 +1361,11 @@ public static partial class PptxBatchEmitter
     // animation nodes on that shape. Query("animation") paths use either
     // /slide[N]/shape[@id=X]/animation[A] or /slide[N]/shape[K]/animation[A]
     // depending on whether cNvPr.Id is present.
+    // R14-bug5: also accept the `chart[…]/animation[A]` path shape — Query
+    // emits animations on a chart as /slide[N]/chart[@id=X]/animation[A]
+    // (or positional chart[K]). Without this, chart-targeted animations
+    // never landed in the per-slide index and EmitChart had no chance to
+    // re-emit them.
     private static Dictionary<string, List<DocumentNode>> BuildSlideAnimationIndex(
         PowerPointHandler ppt, int slideNum)
     {
@@ -1355,22 +1375,44 @@ public static partial class PptxBatchEmitter
         catch { return map; }
 
         var slidePrefix = $"/slide[{slideNum}]/";
+        // Capture both the host element name (shape | chart | picture | …)
+        // and the selector inside the brackets so callers can lookup with
+        // a prefix like "chart:@id=10" / "shape:5".
         var rx = new System.Text.RegularExpressions.Regex(
-            @"^/slide\[\d+\]/shape\[([^\]]+)\]/animation\[\d+\]$");
+            @"^/slide\[\d+\]/(?<host>\w+)\[(?<sel>[^\]]+)\]/animation\[\d+\]$");
         foreach (var anim in all)
         {
             if (!anim.Path.StartsWith(slidePrefix, StringComparison.Ordinal)) continue;
             var m = rx.Match(anim.Path);
             if (!m.Success) continue;
-            var key = m.Groups[1].Value; // either "5" (positional) or "@id=10" form
-            if (!map.TryGetValue(key, out var list))
+            var host = m.Groups["host"].Value;
+            var sel = m.Groups["sel"].Value;
+            // Legacy callers expect bare "@id=…" / "5" keys for shape; preserve
+            // that shape and emit a duplicate prefixed key for non-shape hosts.
+            var legacyKey = host == "shape" ? sel : $"{host}:{sel}";
+            if (!map.TryGetValue(legacyKey, out var list))
             {
                 list = new List<DocumentNode>();
-                map[key] = list;
+                map[legacyKey] = list;
             }
             list.Add(anim);
         }
         return map;
+    }
+
+    // R14-bug5: chart variant of GetAnimationsForChild. chart synthesizes its
+    // own positional ordinal (separate from shape[]), so the index key is
+    // either `chart:@id=X` or `chart:K`.
+    private static List<DocumentNode> GetAnimationsForChartChild(
+        Dictionary<string, List<DocumentNode>> map, DocumentNode chartChild, int chartOrdinal)
+    {
+        if (chartChild.Format.TryGetValue("id", out var cidObj) && cidObj != null)
+        {
+            var idKey = $"chart:@id={cidObj}";
+            if (map.TryGetValue(idKey, out var byId)) return byId;
+        }
+        if (map.TryGetValue($"chart:{chartOrdinal}", out var byPos)) return byPos;
+        return new List<DocumentNode>();
     }
 
     // Resolve the animation list for the shape currently being emitted.
