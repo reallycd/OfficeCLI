@@ -135,6 +135,22 @@ public partial class PowerPointHandler
                     || (!hasGeometryProp && hasTextProp);
                 var newShape = CreateTextShape(shapeId, shapeName, text, false, isTextBoxFlavor);
 
+                // CONSISTENCY(splocks-round-trip): preserve <a:spLocks noGrp="1"/>
+                // when dump captured it. Regular shapes default to no lock
+                // (PowerPoint authors them without spLocks); only emit when
+                // the prop is explicitly truthy.
+                if ((properties.TryGetValue("noGrp", out var shNoGrpStr)
+                        || properties.TryGetValue("nogrp", out shNoGrpStr))
+                    && IsTruthy(shNoGrpStr))
+                {
+                    var cNvSp = newShape.NonVisualShapeProperties?.NonVisualShapeDrawingProperties;
+                    if (cNvSp != null)
+                    {
+                        cNvSp.RemoveAllChildren<Drawing.ShapeLocks>();
+                        cNvSp.AppendChild(new Drawing.ShapeLocks { NoGrouping = true });
+                    }
+                }
+
                 // CONSISTENCY(font-dotted-alias): mirror Set's font.<attr> aliases
                 // (commit 80fb739e). Without these, `add shape --prop font.name=Arial`
                 // silently dropped while `set --prop font.name=Arial` succeeded.

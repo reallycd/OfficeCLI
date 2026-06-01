@@ -607,6 +607,17 @@ public partial class PowerPointHandler
         if (phTypeStr != null) node.Format["phType"] = phTypeStr;
         if (phElemForNode?.Index?.Value is uint phIdx) node.Format["phIndex"] = (int)phIdx;
 
+        // CONSISTENCY(splocks-round-trip): <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+        // is the on-disk marker that the shape cannot be ungrouped (PowerPoint
+        // writes it on every placeholder it generates). Without surfacing it,
+        // dump→replay drops the spLocks element and downstream tools see the
+        // placeholder as a free-form shape. Read the noGrp attribute; other
+        // spLocks/* attrs follow the same shape if/when they're needed.
+        var spLocks = shape.NonVisualShapeProperties?.NonVisualShapeDrawingProperties
+            ?.GetFirstChild<Drawing.ShapeLocks>();
+        if (spLocks?.NoGrouping?.Value == true)
+            node.Format["noGrp"] = true;
+
         // CONSISTENCY(equation-formula-readback): surface the OMath as a LaTeX
         // string on Get so dump emitter can carry it as `formula=...` on
         // `add equation` — AddEquation requires formula/text or it throws.

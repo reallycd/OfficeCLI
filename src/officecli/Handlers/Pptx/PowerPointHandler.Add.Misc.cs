@@ -823,9 +823,22 @@ public partial class PowerPointHandler
             else if (phSizeKey == "quarter") phElem.Size = PlaceholderSizeValues.Quarter;
         }
         appNvPr.AppendChild(phElem);
+        // CONSISTENCY(splocks-round-trip): real PowerPoint writes
+        // <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr> on every placeholder.
+        // Dump captures noGrp as a Format key; preserve it on replay so
+        // dump→batch→replay does not silently strip the lock element.
+        // Default to noGrp=true (mirrors PowerPoint's authoring default for
+        // placeholders); honor an explicit `noGrp=false` to omit the lock.
+        var phCNvSpPr = new NonVisualShapeDrawingProperties();
+        bool phNoGrp = true;
+        if (properties.TryGetValue("noGrp", out var phNoGrpStr)
+            || properties.TryGetValue("nogrp", out phNoGrpStr))
+            phNoGrp = IsTruthy(phNoGrpStr);
+        if (phNoGrp)
+            phCNvSpPr.AppendChild(new Drawing.ShapeLocks { NoGrouping = true });
         shape.NonVisualShapeProperties = new NonVisualShapeProperties(
             new NonVisualDrawingProperties { Id = phId, Name = phName },
-            new NonVisualShapeDrawingProperties(),
+            phCNvSpPr,
             appNvPr
         );
         // R27-1: write an EXPLICIT <a:xfrm> on every placeholder so its position
@@ -963,6 +976,9 @@ public partial class PowerPointHandler
             // already injected a PresetGeometry where needed. Forwarding would
             // be a no-op at best, an unsupported_property warning at worst.
             "geometry",
+            // CONSISTENCY(splocks-round-trip): consumed above when building
+            // the cNvSpPr ShapeLocks element. Do not forward to Set.
+            "noGrp", "nogrp",
         };
         var passthrough = properties
             .Where(kv => !consumed.Contains(kv.Key))
