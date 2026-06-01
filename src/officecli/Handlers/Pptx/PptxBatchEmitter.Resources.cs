@@ -110,6 +110,33 @@ public static partial class PptxBatchEmitter
         if (string.IsNullOrEmpty(xml) || !xml.StartsWith("<")) return false;
         xml = CanonicalizeRawXml(xml);
 
+        // Emit ImageParts attached to this master BEFORE the raw-set replace.
+        // The master XML carries <p:pic> blipFill r:embed="rIdN" references;
+        // without a matching ImagePart + relationship the post-replay validator
+        // flags "rIdN does not exist" and PowerPoint refuses to open
+        // (templates with decorative master-level images, e.g. gov_bja_template
+        // master2's blue band). add-part image pins the source's rId so the
+        // raw-set'd master XML resolves on replay.
+        try
+        {
+            foreach (var imageInfo in ppt.GetMasterImageParts(idx))
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "add-part",
+                    Parent = $"/slideMaster[{idx}]",
+                    Type = "image",
+                    Props = new Dictionary<string, string>
+                    {
+                        ["rid"] = imageInfo.RelId,
+                        ["content-type"] = imageInfo.ContentType,
+                        ["data"] = imageInfo.Base64Data,
+                    },
+                });
+            }
+        }
+        catch { /* best-effort — master raw replace still runs */ }
+
         items.Add(new BatchItem
         {
             Command = "raw-set",
@@ -134,6 +161,28 @@ public static partial class PptxBatchEmitter
         catch { return false; }
         if (string.IsNullOrEmpty(xml) || !xml.StartsWith("<")) return false;
         xml = CanonicalizeRawXml(xml);
+
+        // Mirrors EmitMasterRawOne — layout-level ImageParts must materialise
+        // before the raw-set replace so r:embed references survive.
+        try
+        {
+            foreach (var imageInfo in ppt.GetLayoutImageParts(idx))
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "add-part",
+                    Parent = $"/slideLayout[{idx}]",
+                    Type = "image",
+                    Props = new Dictionary<string, string>
+                    {
+                        ["rid"] = imageInfo.RelId,
+                        ["content-type"] = imageInfo.ContentType,
+                        ["data"] = imageInfo.Base64Data,
+                    },
+                });
+            }
+        }
+        catch { /* best-effort */ }
 
         items.Add(new BatchItem
         {

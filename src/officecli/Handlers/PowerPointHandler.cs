@@ -1083,9 +1083,119 @@ public partial class PowerPointHandler : IDocumentHandler
                 var encodedOle = $"ole={oleActualRid};thumbnail={oleThumbActualRid}";
                 return (encodedOle, parentPartPath);
 
+            case "image":
+                // Generic ImagePart attached to a slide / slideMaster / slideLayout
+                // / notesMaster. Used by dump→replay to round-trip image
+                // references that live in raw-set'd master/layout XML — the
+                // master raw XML carries `r:embed="rIdN"` on <p:pic> blipFills,
+                // but the underlying ImagePart is enumerated separately by the
+                // SDK and was never re-emitted, so post-replay validate flagged
+                // "rIdN does not exist" on slideMaster2 etc.
+                //
+                // Required properties:
+                //   data         = base64 image bytes
+                // Optional properties:
+                //   content-type = "image/png" / "image/jpeg" / "image/gif" / …
+                //                  (default "image/png")
+                //   rid          = pinned relationship id; when omitted the SDK
+                //                  allocates one
+                OpenXmlPart imageHost = parentPartPath switch
+                {
+                    "/" => presentationPart,
+                    "/notesMaster" => (OpenXmlPart?)presentationPart.NotesMasterPart
+                        ?? throw new ArgumentException("add-part image /notesMaster: no notes master in deck"),
+                    _ => null!,
+                };
+                if (imageHost == null)
+                {
+                    var smMatch = System.Text.RegularExpressions.Regex.Match(parentPartPath, @"^/slideMaster\[(\d+)\]$");
+                    var slMatch = smMatch.Success ? null : System.Text.RegularExpressions.Regex.Match(parentPartPath, @"^/slideLayout\[(\d+)\]$");
+                    var sldMatch = (smMatch.Success || (slMatch?.Success ?? false)) ? null : System.Text.RegularExpressions.Regex.Match(parentPartPath, @"^/slide\[(\d+)\]$");
+                    if (smMatch.Success)
+                    {
+                        var smIdx = int.Parse(smMatch.Groups[1].Value);
+                        var smParts = presentationPart.SlideMasterParts.ToList();
+                        if (smIdx < 1) throw new ArgumentException($"slideMaster index {smIdx} out of range");
+                        if (smIdx > smParts.Count)
+                        {
+                            // CONSISTENCY(grow-on-rawset): mirror RawSet's auto-grow.
+                            // Dump emits add-part image /slideMaster[N] BEFORE the
+                            // raw-set replace, so on a blank target the master slot
+                            // doesn't exist yet — grow to idx so the ImagePart can
+                            // attach to the right host.
+                            GrowSlideMasterParts(smIdx);
+                            smParts = presentationPart.SlideMasterParts.ToList();
+                            if (smIdx > smParts.Count)
+                                throw new ArgumentException($"slideMaster index {smIdx} out of range (total {smParts.Count})");
+                        }
+                        imageHost = smParts[smIdx - 1];
+                    }
+                    else if (slMatch != null && slMatch.Success)
+                    {
+                        var slIdx = int.Parse(slMatch.Groups[1].Value);
+                        var slParts = presentationPart.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
+                        if (slIdx < 1) throw new ArgumentException($"slideLayout index {slIdx} out of range");
+                        if (slIdx > slParts.Count)
+                        {
+                            GrowSlideLayoutParts(slIdx);
+                            slParts = presentationPart.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
+                            if (slIdx > slParts.Count)
+                                throw new ArgumentException($"slideLayout index {slIdx} out of range (total {slParts.Count})");
+                        }
+                        imageHost = slParts[slIdx - 1];
+                    }
+                    else if (sldMatch != null && sldMatch.Success)
+                    {
+                        var sldIdx = int.Parse(sldMatch.Groups[1].Value);
+                        var sldParts = GetSlideParts().ToList();
+                        if (sldIdx < 1 || sldIdx > sldParts.Count)
+                            throw new ArgumentException($"slide index {sldIdx} out of range");
+                        imageHost = sldParts[sldIdx - 1];
+                    }
+                    else
+                        throw new ArgumentException(
+                            "add-part image: parent must be /slide[N], /slideMaster[N], /slideLayout[N], or /notesMaster");
+                }
+
+                if (properties == null || !properties.TryGetValue("data", out var imgB64) || string.IsNullOrEmpty(imgB64))
+                    throw new ArgumentException("add-part image requires property 'data' (base64 binary)");
+                byte[] imgBytes;
+                try { imgBytes = Convert.FromBase64String(imgB64); }
+                catch (FormatException) { throw new ArgumentException("add-part image: 'data' is not valid base64"); }
+
+                var imgCT = properties.TryGetValue("content-type", out var ict) && !string.IsNullOrEmpty(ict)
+                    ? ict
+                    : "image/png";
+                var imgPartType = imgCT switch
+                {
+                    "image/png" => ImagePartType.Png,
+                    "image/jpeg" => ImagePartType.Jpeg,
+                    "image/jpg" => ImagePartType.Jpeg,
+                    "image/gif" => ImagePartType.Gif,
+                    "image/bmp" => ImagePartType.Bmp,
+                    "image/tiff" => ImagePartType.Tiff,
+                    "image/x-emf" => ImagePartType.Emf,
+                    "image/x-wmf" => ImagePartType.Wmf,
+                    _ => ImagePartType.Png,
+                };
+                string? pinnedImgRid = properties.TryGetValue("rid", out var prid) && !string.IsNullOrEmpty(prid) ? prid : null;
+                ImagePart imgPart = imageHost switch
+                {
+                    SlidePart sp           => !string.IsNullOrEmpty(pinnedImgRid) ? sp.AddImagePart(imgPartType, pinnedImgRid) : sp.AddImagePart(imgPartType),
+                    SlideMasterPart smp    => !string.IsNullOrEmpty(pinnedImgRid) ? smp.AddImagePart(imgPartType, pinnedImgRid) : smp.AddImagePart(imgPartType),
+                    SlideLayoutPart sllp   => !string.IsNullOrEmpty(pinnedImgRid) ? sllp.AddImagePart(imgPartType, pinnedImgRid) : sllp.AddImagePart(imgPartType),
+                    NotesMasterPart nmp    => !string.IsNullOrEmpty(pinnedImgRid) ? nmp.AddImagePart(imgPartType, pinnedImgRid) : nmp.AddImagePart(imgPartType),
+                    NotesSlidePart nsp     => !string.IsNullOrEmpty(pinnedImgRid) ? nsp.AddImagePart(imgPartType, pinnedImgRid) : nsp.AddImagePart(imgPartType),
+                    _ => throw new ArgumentException($"add-part image: unsupported host part type {imageHost.GetType().Name}"),
+                };
+                using (var imgStream = new MemoryStream(imgBytes))
+                    imgPart.FeedData(imgStream);
+                var imgActualRid = imageHost.GetIdOfPart(imgPart);
+                return (imgActualRid, parentPartPath);
+
             default:
                 throw new ArgumentException(
-                    $"Unknown part type: {partType}. Supported: chart, smartart, video, audio, model3d, ole");
+                    $"Unknown part type: {partType}. Supported: chart, smartart, video, audio, model3d, ole, image");
         }
     }
 
@@ -1129,6 +1239,55 @@ public partial class PowerPointHandler : IDocumentHandler
         _doc.PresentationPart?.SlideMasterParts.Count() ?? 0;
     internal int SlideLayoutCount =>
         _doc.PresentationPart?.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).Count() ?? 0;
+
+    /// <summary>
+    /// Enumerate ImageParts attached to a slideMaster — one entry per
+    /// (rId, content-type, base64 bytes). Used by PptxBatchEmitter to emit
+    /// `add-part image` rows so a raw-set'd master XML that references
+    /// <c>r:embed="rIdN"</c> on <c>&lt;p:pic&gt;</c> blipFills replays
+    /// against an ImagePart with the same rId. Returns an empty list when
+    /// the master has no embedded images or the index is out of range.
+    /// </summary>
+    internal readonly record struct MasterImageInfo(string RelId, string ContentType, string Base64Data);
+
+    internal IReadOnlyList<MasterImageInfo> GetMasterImageParts(int masterIdx)
+    {
+        var result = new List<MasterImageInfo>();
+        var pp = _doc.PresentationPart;
+        if (pp == null) return result;
+        var masters = pp.SlideMasterParts.ToList();
+        if (masterIdx < 1 || masterIdx > masters.Count) return result;
+        var master = masters[masterIdx - 1];
+        foreach (var img in master.ImageParts)
+        {
+            var rid = master.GetIdOfPart(img);
+            using var s = img.GetStream();
+            using var ms = new MemoryStream();
+            s.CopyTo(ms);
+            result.Add(new MasterImageInfo(rid, img.ContentType, Convert.ToBase64String(ms.ToArray())));
+        }
+        return result;
+    }
+
+    /// <summary>Same as <see cref="GetMasterImageParts"/> for slideLayouts.</summary>
+    internal IReadOnlyList<MasterImageInfo> GetLayoutImageParts(int layoutIdx)
+    {
+        var result = new List<MasterImageInfo>();
+        var pp = _doc.PresentationPart;
+        if (pp == null) return result;
+        var layouts = pp.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
+        if (layoutIdx < 1 || layoutIdx > layouts.Count) return result;
+        var layout = layouts[layoutIdx - 1];
+        foreach (var img in layout.ImageParts)
+        {
+            var rid = layout.GetIdOfPart(img);
+            using var s = img.GetStream();
+            using var ms = new MemoryStream();
+            s.CopyTo(ms);
+            result.Add(new MasterImageInfo(rid, img.ContentType, Convert.ToBase64String(ms.ToArray())));
+        }
+        return result;
+    }
     internal bool HasNotesMaster =>
         _doc.PresentationPart?.NotesMasterPart != null;
     // Exposed for PptxBatchEmitter so it can iterate slides without going
