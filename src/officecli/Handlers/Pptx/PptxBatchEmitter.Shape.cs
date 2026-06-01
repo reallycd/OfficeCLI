@@ -239,11 +239,25 @@ public static partial class PptxBatchEmitter
         // Replay imports that bag into AcquireShapeId which throws on
         // intra-slide-tree collision — so a deck where two placeholders
         // legitimately carry id=1 (e.g. layout-bound title + reused-from-
-        // layout shape) breaks the batch. Animation spid references target
-        // free-form shapes, not placeholders, so dropping the placeholder
-        // id is safe; AcquireShapeId auto-assigns a fresh one from the
-        // 10000+ range and the placeholder still resolves positionally.
-        props.Remove("id");
+        // layout shape) breaks the batch. AcquireShapeId auto-assigns a
+        // fresh one from the 10000+ range and the placeholder still
+        // resolves positionally.
+        //
+        // CONSISTENCY(placeholder-id-preserve-on-spTgt-ref): EXCEPT when the
+        // slide's raw <p:timing> tree references that id via <p:spTgt
+        // spid="N"/>. Exotic timing is round-tripped via raw-set passthrough
+        // (literal XML — see EmitRawSlideSlice), which keeps the original
+        // spid; auto-assigning a fresh id to the targeted placeholder would
+        // leave every spTgt dangling. Keep the placeholder id only when at
+        // least one spTgt on this slide names it.
+        bool keepId = false;
+        if (props.TryGetValue("id", out var phIdStr)
+            && uint.TryParse(phIdStr, out var phId))
+        {
+            var sptgts = GetSlideSpTgtIds(ppt, parentSlidePath, ctx);
+            if (sptgts.Contains(phId)) keepId = true;
+        }
+        if (!keepId) props.Remove("id");
 
         items.Add(new BatchItem
         {
@@ -718,5 +732,35 @@ public static partial class PptxBatchEmitter
             Type = "run",
             Props = props.Count > 0 ? props : null,
         });
+    }
+
+    // CONSISTENCY(placeholder-id-preserve-on-spTgt-ref): per-slide one-shot
+    // scan of the raw <p:timing> tree for every cNvPr id named by a
+    // <p:spTgt spid="N"/>. The full timing tree may travel as raw-set
+    // passthrough on exotic content, so the literal spid in that XML must
+    // match the placeholder cNvPr.Id we actually emit. Cached on the
+    // SlideEmitContext to keep EmitPlaceholder O(1) past the first call.
+    private static HashSet<uint> GetSlideSpTgtIds(
+        PowerPointHandler ppt, string slidePath, SlideEmitContext ctx)
+    {
+        if (ctx.SlideTimingSpTgtIds.TryGetValue(slidePath, out var cached))
+            return cached;
+        var ids = new HashSet<uint>();
+        string xml;
+        try { xml = ppt.Raw(slidePath); }
+        catch { ctx.SlideTimingSpTgtIds[slidePath] = ids; return ids; }
+        // Cheap regex over the slide-level <p:timing> slice; safe because
+        // any prefix that resolves to the OOXML pres namespace lands as
+        // `p:spTgt` (the package writer doesn't realias `p`).
+        var rx = new System.Text.RegularExpressions.Regex(
+            @"<p:spTgt\s+spid=""(\d+)""",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+        foreach (System.Text.RegularExpressions.Match m in rx.Matches(xml))
+        {
+            if (uint.TryParse(m.Groups[1].Value, out var n))
+                ids.Add(n);
+        }
+        ctx.SlideTimingSpTgtIds[slidePath] = ids;
+        return ids;
     }
 }

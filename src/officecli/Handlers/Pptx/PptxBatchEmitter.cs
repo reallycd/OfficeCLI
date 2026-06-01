@@ -34,6 +34,16 @@ public static partial class PptxBatchEmitter
         // throws "Slide jump target out of range". Defer those props into
         // a second set-pass appended at the end of EmitPptx.
         public List<BatchItem> DeferredLinks { get; } = new();
+
+        // CONSISTENCY(placeholder-id-preserve-on-spTgt-ref): cache the set
+        // of cNvPr ids that the slide's raw <p:timing> tree references via
+        // <p:spTgt spid="N"/>. Used by EmitPlaceholder to keep the original
+        // id on a placeholder whose id is the target of an animation (raw-
+        // set timing slice keeps the literal spid; if the placeholder were
+        // auto-assigned a fresh 10000+ id, every spTgt would dangle).
+        // Lazily populated per slidePath.
+        public Dictionary<string, HashSet<uint>> SlideTimingSpTgtIds { get; } =
+            new(StringComparer.Ordinal);
     }
 
     /// <summary>
