@@ -744,6 +744,24 @@ public partial class PowerPointHandler
         if (presetGeom?.Preset?.HasValue == true)
         {
             node.Format["geometry"] = presetGeom.Preset.InnerText;
+            // CONSISTENCY(preset-adj-handles): <a:avLst><a:gd name="adj"
+            // fmla="val N"/>...</a:avLst> carries per-preset adjust handle
+            // values (rounded-rect corner radius, callout pointer tail,
+            // arrow head proportions, etc.). Silently dropping them on
+            // dump→replay reverts every preset to its default proportions
+            // — a visible geometry shift. Surface as `adj=adj1:N,adj2:M`
+            // (canonical key for the bag, comma-joined per handle); Set /
+            // Add accept the same form on the way back.
+            var avLst = presetGeom.GetFirstChild<Drawing.AdjustValueList>();
+            if (avLst != null)
+            {
+                var guides = avLst.Elements<Drawing.ShapeGuide>()
+                    .Where(g => g.Name?.HasValue == true && g.Formula?.HasValue == true)
+                    .Select(g => $"{g.Name!.Value}:{g.Formula!.Value}")
+                    .ToList();
+                if (guides.Count > 0)
+                    node.Format["adj"] = string.Join(",", guides);
+            }
         }
         else
         {

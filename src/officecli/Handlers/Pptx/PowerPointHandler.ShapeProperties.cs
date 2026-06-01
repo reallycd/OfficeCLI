@@ -687,6 +687,28 @@ public partial class PowerPointHandler
                     break;
                 }
 
+                case "adj":
+                {
+                    // CONSISTENCY(preset-adj-handles): set the avLst on the
+                    // shape's PresetGeometry. The shape must already carry
+                    // a preset (Set adj on a custGeom is meaningless — its
+                    // own avLst is part of the custom path); if there's
+                    // none yet, materialize an empty preset rectangle so
+                    // the caller's adj values land somewhere predictable
+                    // rather than throwing.
+                    var spPrAdj = shape.ShapeProperties ?? (shape.ShapeProperties = new ShapeProperties());
+                    var prstAdj = spPrAdj.GetFirstChild<Drawing.PresetGeometry>();
+                    if (prstAdj == null)
+                    {
+                        prstAdj = EnsurePresetGeometry(spPrAdj);
+                        prstAdj.Preset = Drawing.ShapeTypeValues.Rectangle;
+                    }
+                    var avLst = prstAdj.GetFirstChild<Drawing.AdjustValueList>()
+                        ?? prstAdj.AppendChild(new Drawing.AdjustValueList())!;
+                    ApplyAdjustHandles(avLst, value);
+                    break;
+                }
+
                 case "geometry" or "path" when key.ToLowerInvariant() != "path" || shape.ShapeProperties != null:
                 {
                     var spPr = shape.ShapeProperties;

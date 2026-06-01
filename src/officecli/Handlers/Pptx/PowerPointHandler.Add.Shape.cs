@@ -560,8 +560,22 @@ public partial class PowerPointHandler
                         // the same reason).
                         if (!TryParsePresetShape(presetName, out var presetGeom))
                             throw new ArgumentException($"Unknown shape geometry: '{presetName}'");
+                        var avLstForAdd = new Drawing.AdjustValueList();
+                        // CONSISTENCY(preset-adj-handles): NodeBuilder surfaces
+                        // <a:avLst><a:gd name="adj" fmla="val N"/>...</a:avLst>
+                        // as the canonical `adj=name:fmla,...` Format key (the
+                        // form "adj=adj1:val 6000,adj2:val 12000" round-trips
+                        // through dump→replay). Repopulate <a:gd> children
+                        // when the prop bag carries adj=...; without this,
+                        // every preset reverts to its OOXML default
+                        // proportions even though dump captured the values.
+                        if (properties.TryGetValue("adj", out var adjSpec)
+                            && !string.IsNullOrWhiteSpace(adjSpec))
+                        {
+                            ApplyAdjustHandles(avLstForAdd, adjSpec);
+                        }
                         newShape.ShapeProperties.AppendChild(
-                            new Drawing.PresetGeometry(new Drawing.AdjustValueList()) { Preset = presetGeom }
+                            new Drawing.PresetGeometry(avLstForAdd) { Preset = presetGeom }
                         );
                     }
                 }

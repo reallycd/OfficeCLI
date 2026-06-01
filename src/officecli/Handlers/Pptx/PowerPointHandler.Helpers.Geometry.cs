@@ -251,4 +251,35 @@ public partial class PowerPointHandler
             default: return false;
         }
     }
+
+    /// <summary>
+    /// Populate an &lt;a:avLst&gt; with &lt;a:gd&gt; adjust handles from a
+    /// canonical <c>adj=name:fmla,name:fmla</c> spec. Pre-existing children
+    /// on the avLst are cleared first so a re-apply replaces rather than
+    /// appends. Both name and fmla are pass-through strings — the OOXML
+    /// schema accepts any non-empty token for @name (preset-defined,
+    /// usually adj / adj1 / adj2 / …) and any well-formed formula
+    /// expression for @fmla ("val N", "*/ adj1 width …", named references
+    /// resolved by the preset's own definition).
+    /// </summary>
+    internal static void ApplyAdjustHandles(Drawing.AdjustValueList avLst, string spec)
+    {
+        avLst.RemoveAllChildren<Drawing.ShapeGuide>();
+        if (string.IsNullOrWhiteSpace(spec)) return;
+        foreach (var raw in spec.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var entry = raw.Trim();
+            if (entry.Length == 0) continue;
+            var colonIdx = entry.IndexOf(':');
+            if (colonIdx <= 0 || colonIdx == entry.Length - 1)
+                throw new ArgumentException(
+                    $"Invalid adj spec '{entry}'. Expected 'name:formula' tokens (e.g. 'adj1:val 6000').");
+            var name = entry[..colonIdx].Trim();
+            var fmla = entry[(colonIdx + 1)..].Trim();
+            if (name.Length == 0 || fmla.Length == 0)
+                throw new ArgumentException(
+                    $"Invalid adj spec '{entry}'. Both name and formula must be non-empty.");
+            avLst.AppendChild(new Drawing.ShapeGuide { Name = name, Formula = fmla });
+        }
+    }
 }
