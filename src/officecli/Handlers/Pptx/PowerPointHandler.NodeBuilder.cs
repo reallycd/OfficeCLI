@@ -1274,6 +1274,13 @@ public partial class PowerPointHandler
             if (prstTxWarp?.Preset?.HasValue == true)
                 node.Format["textWarp"] = prstTxWarp.Preset.InnerText;
 
+            // Word-wrap (a:bodyPr @wrap = "square" | "none"). Set already
+            // accepts wrap=true/false and writes Square/None; Get must
+            // surface it so dump→replay preserves the attribute. Match the
+            // cell-level reader at line 397.
+            if (bodyPr.Wrap?.HasValue == true)
+                node.Format["wrap"] = bodyPr.Wrap.Value != Drawing.TextWrappingValues.None;
+
             // AutoFit — surface only when the source bodyPr carries an
             // explicit child. An empty <a:bodyPr/> inherits from the
             // layout/master cascade; emitting "none" as the default forces
