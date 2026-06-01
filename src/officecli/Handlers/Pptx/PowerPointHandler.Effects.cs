@@ -72,6 +72,32 @@ public partial class PowerPointHandler
     private static Drawing.OuterShadow BuildOuterShadow(string value)
         => OfficeCli.Core.DrawingEffectsHelper.BuildOuterShadow(value, BuildColorElement);
 
+    /// <summary>
+    /// Apply inner shadow effect to ShapeProperties. Format matches the outer
+    /// shadow variant — "COLOR[-BLUR[-ANGLE[-DIST[-OPACITY]]]]" / "none".
+    /// Lives alongside `shadow` (outer) as a distinct effectLst child so a
+    /// shape may carry both without one overwriting the other.
+    /// </summary>
+    private static void ApplyInnerShadow(ShapeProperties spPr, string value)
+    {
+        var effectList = EnsureEffectList(spPr);
+        effectList.RemoveAllChildren<Drawing.InnerShadow>();
+
+        if (value.Equals("none", StringComparison.OrdinalIgnoreCase) || value.Equals("false", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!effectList.HasChildren) spPr.RemoveChild(effectList);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException("innerShadow value cannot be empty. Use 'none' to remove inner shadow.");
+
+        InsertEffectInOrder(effectList, BuildInnerShadow(value));
+    }
+
+    private static Drawing.InnerShadow BuildInnerShadow(string value)
+        => OfficeCli.Core.DrawingEffectsHelper.BuildInnerShadow(value, BuildColorElement);
+
     private static Drawing.Glow BuildGlow(string value)
         => OfficeCli.Core.DrawingEffectsHelper.BuildGlow(value, BuildColorElement);
 

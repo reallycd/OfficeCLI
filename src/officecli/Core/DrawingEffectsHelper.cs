@@ -53,6 +53,37 @@ internal static class DrawingEffectsHelper
     }
 
     /// <summary>
+    /// Build an InnerShadow element from a value string. Mirrors BuildOuterShadow
+    /// — InnerShadow's CT_InnerShadow has BlurRadius / Distance / Direction
+    /// (no Alignment, no RotateWithShape), plus a color child supporting alpha.
+    /// Format: "COLOR[-BLUR[-ANGLE[-DIST[-OPACITY]]]]"
+    /// Defaults: blur=4pt, angle=45°, dist=3pt, opacity=40%
+    /// </summary>
+    public static Drawing.InnerShadow BuildInnerShadow(string value, Func<string, OpenXmlElement> colorBuilder)
+    {
+        var parts = SplitEffectParts(value);
+        var blurPt = ParseParam(parts, 1, 4.0, "innerShadow blur");
+        var angleDeg = ParseParam(parts, 2, 45.0, "innerShadow angle");
+        var distPt = ParseParam(parts, 3, 3.0, "innerShadow distance");
+        bool hasExplicitOpacity = parts.Length > 4;
+        var opacity = ParseParam(parts, 4, 40.0, "innerShadow opacity");
+
+        var shadow = new Drawing.InnerShadow
+        {
+            BlurRadius = (long)(blurPt * EmuConverter.EmuPerPoint),
+            Distance = (long)(distPt * EmuConverter.EmuPerPoint),
+            Direction = (int)(angleDeg * 60000),
+        };
+        var clr = colorBuilder(parts[0]);
+        bool colorHasAlpha = clr.GetFirstChild<Drawing.Alpha>() != null;
+        bool colorEncodesAlpha = ColorEncodesExplicitAlpha(parts[0]);
+        if (hasExplicitOpacity || (!colorHasAlpha && !colorEncodesAlpha))
+            SetAlphaChild(clr, (int)(opacity * 1000));
+        shadow.AppendChild(clr);
+        return shadow;
+    }
+
+    /// <summary>
     /// Build a Glow element from a value string.
     /// Format: "COLOR[-RADIUS[-OPACITY]]"
     /// Defaults: radius=8pt, opacity=75%

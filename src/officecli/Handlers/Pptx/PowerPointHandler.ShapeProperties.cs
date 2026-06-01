@@ -1315,6 +1315,20 @@ public partial class PowerPointHandler
                     break;
                 }
 
+                case "innershadow":
+                {
+                    // bt-1: NodeBuilder ignored <a:innerShdw> on dump, so any
+                    // shape effectLst carrying an inner shadow lost it on
+                    // dump→replay. Mirror the outer-shadow case — same
+                    // input vocabulary, separate effectLst child.
+                    var spPr = shape.ShapeProperties;
+                    if (spPr == null) { unsupported.Add(key); break; }
+                    var innerVal = value;
+                    if (IsValidBooleanString(innerVal) && IsTruthy(innerVal)) innerVal = "000000";
+                    ApplyInnerShadow(spPr, innerVal);
+                    break;
+                }
+
                 case "reflection":
                 {
                     var spPr = shape.ShapeProperties;

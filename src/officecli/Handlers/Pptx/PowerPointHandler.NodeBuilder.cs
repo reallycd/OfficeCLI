@@ -1164,6 +1164,22 @@ public partial class PowerPointHandler
                 var opacity = alphaEl?.Val?.HasValue == true ? $"{alphaEl.Val.Value / 1000.0:0.##}" : "100";
                 node.Format["shadow"] = $"{shadowColor}-{blurPt}-{angleDeg}-{distPt}-{opacity}";
             }
+            // bt-1: surface <a:innerShdw> as `innerShadow=COLOR-BLUR-ANGLE-DIST-OPACITY`
+            // (parallel to `shadow=` for outer). Without this readback the dump
+            // path silently dropped every inner-shadow effect; replay then
+            // produced a flat shape with no inset highlight (Apple-style
+            // pressed-button look, decorative card insets).
+            var innerShadow = activeEffectList.GetFirstChild<Drawing.InnerShadow>();
+            if (innerShadow != null)
+            {
+                var isColor = EnsureEightDigitHexForEffect(ReadColorFromElement(innerShadow) ?? "000000");
+                var isBlur = innerShadow.BlurRadius?.HasValue == true ? $"{innerShadow.BlurRadius.Value / EmuConverter.EmuPerPointF:0.##}" : "4";
+                var isAngle = innerShadow.Direction?.HasValue == true ? $"{innerShadow.Direction.Value / 60000.0:0.##}" : "45";
+                var isDist = innerShadow.Distance?.HasValue == true ? $"{innerShadow.Distance.Value / EmuConverter.EmuPerPointF:0.##}" : "3";
+                var isAlpha = innerShadow.Descendants<Drawing.Alpha>().FirstOrDefault();
+                var isOpacity = isAlpha?.Val?.HasValue == true ? $"{isAlpha.Val.Value / 1000.0:0.##}" : "100";
+                node.Format["innerShadow"] = $"{isColor}-{isBlur}-{isAngle}-{isDist}-{isOpacity}";
+            }
             var glow = activeEffectList.GetFirstChild<Drawing.Glow>();
             if (glow != null)
             {
