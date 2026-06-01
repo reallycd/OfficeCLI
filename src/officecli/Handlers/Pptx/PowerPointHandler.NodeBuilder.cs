@@ -743,10 +743,16 @@ public partial class PowerPointHandler
                 var lin = shapeGradFill.GetFirstChild<Drawing.LinearGradientFill>();
                 var deg = lin?.Angle?.Value != null ? lin.Angle.Value / 60000.0 : 0.0;
 
-                // Gradient opacity (from first stop's alpha)
-                var gradAlpha = stops[0].GetFirstChild<Drawing.RgbColorModelHex>()?.GetFirstChild<Drawing.Alpha>()?.Val?.Value
-                    ?? stops[0].GetFirstChild<Drawing.SchemeColor>()?.GetFirstChild<Drawing.Alpha>()?.Val?.Value;
-                if (gradAlpha.HasValue) node.Format["opacity"] = $"{gradAlpha.Value / 100000.0:0.##}";
+                // CONSISTENCY(gradient-alpha-source): the gradient= string emitted by
+                // ReadGradientString already encodes per-stop alpha (either as
+                // `#RRGGBBAA` or `+alpha=permille` suffix). Emitting Format["opacity"]
+                // from the first stop's alpha here triggers AddShape's "apply opacity
+                // to every gradient stop" loop on replay, which overwrites the source's
+                // distinct per-stop alphas with the uniform first-stop value — e.g.
+                // beautiful-deck.pptx slide 1 AccentTL (radial halo: stop0 alpha=15000,
+                // stop1 alpha=0) lost its outer-transparent stop and surfaced as a
+                // solid 15% opaque disc on replay. Per-stop alpha rides through the
+                // gradient= round-trip; do not double-emit it as a shape-level opacity.
             }
         }
         if (shape.ShapeProperties?.GetFirstChild<Drawing.NoFill>() != null) node.Format["fill"] = "none";
