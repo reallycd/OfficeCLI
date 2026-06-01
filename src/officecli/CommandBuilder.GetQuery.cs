@@ -194,8 +194,12 @@ static partial class CommandBuilder
             // aliases (bold -> font.bold, size -> font.size, ...) via the handler's
             // MatchesCellSelector alias map. The CLI-level AttributeFilter post-filter
             // must apply the same normalization or it silently drops every hit.
+            // SelectorTargetsCells strips an optional sheet prefix (Sheet1!cell...,
+            // /Sheet1/cell...) before the element check — without it, sheet-scoped
+            // cell selectors skip alias normalization and format-attribute filters
+            // drop all matches.
             if (handler is OfficeCli.Handlers.ExcelHandler
-                && selector.TrimStart().StartsWith("cell", StringComparison.OrdinalIgnoreCase))
+                && OfficeCli.Handlers.ExcelHandler.SelectorTargetsCells(selector))
             {
                 filters = OfficeCli.Core.AttributeFilter.NormalizeKeys(
                     filters, OfficeCli.Handlers.ExcelHandler.ResolveCellAttributeAlias);

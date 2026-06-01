@@ -202,6 +202,19 @@ public partial class ExcelHandler
     public static string ResolveCellAttributeAlias(string key)
         => _cellSelectorAliases.TryGetValue(key, out var canonical) ? canonical : key;
 
+    // CONSISTENCY(cell-selector-alias): true when a query selector targets cells,
+    // accounting for an optional sheet prefix — bare "cell[...]", Excel-native
+    // "Sheet1!cell[...]", or path-style "/Sheet1/cell[...]". The CLI and resident
+    // query post-filters use this to decide whether to apply cell attribute-alias
+    // normalization (bold -> font.bold, ...). Without stripping the prefix, a
+    // sheet-scoped cell selector skipped normalization and every format-attribute
+    // filter silently dropped all matches.
+    public static bool SelectorTargetsCells(string? selector)
+    {
+        var element = Regex.Replace((selector ?? "").TrimStart(), @"^(?:[^/!\[]+!|/[^/]+/)", "");
+        return element.StartsWith("cell", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool MatchesFormatAttributes(DocumentNode node, CellSelector selector)
     {
         if (selector.FormatEquals != null)

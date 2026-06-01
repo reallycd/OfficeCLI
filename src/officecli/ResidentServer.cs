@@ -1494,8 +1494,10 @@ public class ResidentServer : IDisposable
         // CONSISTENCY(cell-selector-alias): mirror the direct-mode normalization in
         // CommandBuilder.GetQuery.cs — without this, resident-mode Excel cell queries
         // with short aliases (bold, size, ...) silently drop every hit (BUG-R17-01).
+        // SelectorTargetsCells strips an optional sheet prefix first, or sheet-
+        // scoped cell selectors skip normalization and drop all matches.
         if (_handler is ExcelHandler
-            && selector.TrimStart().StartsWith("cell", StringComparison.OrdinalIgnoreCase))
+            && ExcelHandler.SelectorTargetsCells(selector))
         {
             filters = AttributeFilter.NormalizeKeys(filters, ExcelHandler.ResolveCellAttributeAlias);
         }
