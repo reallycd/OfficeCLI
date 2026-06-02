@@ -1398,6 +1398,71 @@ public partial class PowerPointHandler
                     break;
                 }
 
+                case "effectsraw":
+                {
+                    // R58 bt-2: <a:effectLst> verbatim passthrough. The
+                    // compressed shadow/innerShadow/glow/fillOverlay/reflection/
+                    // softEdge/blur readers handle the well-known children,
+                    // but real decks carry tint / lum / hsl / alphaModFix /
+                    // clrChange / duotone / biLevel / xfrm / relOff children
+                    // on the spPr effectLst (the reported case was
+                    // <a:effectLst><a:tint amt="50000"/></a:effectLst>). These
+                    // have no compressible string surface, so the only round-
+                    // trip-safe form is the verbatim OuterXml. Mirrors
+                    // effectDagRaw / fillOverlayRaw — lift attrs + InnerXml,
+                    // install a fresh <a:effectLst> in schema-correct position
+                    // (which EnsureEffectList already handles). Wins over any
+                    // compressed sibling keys emitted from the same source
+                    // effectLst: replaces the whole element wholesale.
+                    var spPr = shape.ShapeProperties;
+                    if (spPr == null) { unsupported.Add(key); break; }
+                    spPr.RemoveAllChildren<Drawing.EffectList>();
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        try
+                        {
+                            var raw = value.Contains("xmlns:a=")
+                                ? value
+                                : value.Replace("<a:effectLst",
+                                    "<a:effectLst xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"");
+                            var freshList = new Drawing.EffectList();
+                            using var sr = new System.IO.StringReader(raw);
+                            using var xr = System.Xml.XmlReader.Create(sr);
+                            xr.MoveToContent();
+                            if (xr.HasAttributes)
+                            {
+                                while (xr.MoveToNextAttribute())
+                                {
+                                    if (xr.Prefix == "xmlns" || xr.Name == "xmlns") continue;
+                                    freshList.SetAttribute(new OpenXmlAttribute(
+                                        xr.Prefix, xr.LocalName, xr.NamespaceURI, xr.Value));
+                                }
+                                xr.MoveToElement();
+                            }
+                            if (!xr.IsEmptyElement)
+                            {
+                                var inner = xr.ReadInnerXml();
+                                if (!string.IsNullOrWhiteSpace(inner))
+                                    freshList.InnerXml = inner;
+                            }
+                            // EnsureEffectList knows the schema-correct
+                            // insertion slot (between ln and scene3d/sp3d/
+                            // extLst). Re-use that helper rather than open-
+                            // coding the InsertBefore chain.
+                            var inserted = EnsureEffectList(spPr);
+                            // EnsureEffectList created an empty placeholder;
+                            // replace it with the fresh, populated list.
+                            inserted.InsertAfterSelf(freshList);
+                            inserted.Remove();
+                        }
+                        catch
+                        {
+                            unsupported.Add(key);
+                        }
+                    }
+                    break;
+                }
+
                 case "filloverlayraw":
                 {
                     // bt-1 dump→replay path. Value is the verbatim

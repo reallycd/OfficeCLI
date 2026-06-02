@@ -45,6 +45,31 @@ public partial class PowerPointHandler
         return color;
     }
 
+    // R58 bt-2: the effectLst walker above consumes outerShdw / innerShdw /
+    // glow / fillOverlay / reflection / softEdge / blur. Any other child
+    // (tint, lum, hsl, alphaModFix, clrChange, duotone, biLevel, xfrm, …)
+    // has no compressible string surface; falling back to verbatim-XML
+    // passthrough via `effectsRaw` is the only way to round-trip it.
+    // Keep this allowlist in sync with the walker; new compressible readers
+    // added above must add their LocalName here so they do not trigger the
+    // raw fallback on their own.
+    private static readonly HashSet<string> HandledEffectListChildren =
+        new(StringComparer.Ordinal)
+        {
+            "outerShdw", "innerShdw", "glow", "fillOverlay",
+            "reflection", "softEdge", "blur",
+        };
+
+    private static bool HasUnhandledEffectListChild(Drawing.EffectList effectList)
+    {
+        foreach (var child in effectList.Elements())
+        {
+            if (!HandledEffectListChildren.Contains(child.LocalName))
+                return true;
+        }
+        return false;
+    }
+
     private List<DocumentNode> GetSlideChildNodes(SlidePart slidePart, int slideNum, int depth)
     {
         var children = new List<DocumentNode>();
@@ -1431,6 +1456,22 @@ public partial class PowerPointHandler
                 // the effects readback surface and broke dump round-trip
                 // when set softEdge=<value> re-parses the readback.
                 node.Format["softEdge"] = $"{softEdge.Radius.Value / EmuConverter.EmuPerPointF:0.##}pt";
+
+            // R58 bt-2: surface the entire effectLst as `effectsRaw=<OuterXml>`
+            // when it contains any child the compressed walker above does not
+            // consume. Source decks carry tint / lum / hsl / alphaModFix /
+            // clrChange / duotone / etc. children on the spPr effectLst — the
+            // reported case was `<a:effectLst><a:tint amt="50000"/></a:effectLst>`
+            // — and the walker silently drops them on dump-then-replay. Mirror
+            // the effectDagRaw / fillOverlayRaw passthrough: a verbatim XML
+            // surface is the only round-trip-safe form, since these children
+            // have no compressible string representation. On Set, effectsRaw
+            // replaces the entire effectLst (it wins over the compressed
+            // shadow= / glow= / reflection= / softEdge= / blur= keys that may
+            // also be emitted from the same source effectLst).
+            // CONSISTENCY(effects-raw-passthrough): mirrors effectDagRaw / fillOverlayRaw.
+            if (HasUnhandledEffectListChild(activeEffectList))
+                node.Format["effectsRaw"] = activeEffectList.OuterXml;
         }
 
         // R52 bt-2: surface <a:effectDag> as `effectDagRaw=<OuterXml>`.

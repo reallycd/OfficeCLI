@@ -198,6 +198,29 @@ public static partial class PptxBatchEmitter
         if (result.ContainsKey("innerShadowRaw"))
             result.Remove("innerShadow");
 
+        // R58 bt-2: effectsRaw is the whole-effectLst passthrough — when
+        // present, the compressed walker also emitted whichever well-known
+        // children it recognized (shadow=, innerShadow=, glow=, reflection=,
+        // softEdge=, blur=) and the per-child raw variants (shadowRaw etc.)
+        // alongside the tint/lum/clrChange child it could not compress. On
+        // Set, effectsraw replaces the entire effectLst wholesale — leaving
+        // the companion keys in the bag risks the secondary appliers running
+        // afterwards and re-introducing the dropped children's defaults. Drop
+        // the entire companion set so the raw install is authoritative.
+        if (result.ContainsKey("effectsRaw"))
+        {
+            result.Remove("shadow");
+            result.Remove("shadowRaw");
+            result.Remove("innerShadow");
+            result.Remove("innerShadowRaw");
+            result.Remove("glow");
+            result.Remove("reflection");
+            result.Remove("reflectionRaw");
+            result.Remove("softEdge");
+            result.Remove("blur");
+            result.Remove("fillOverlayRaw");
+        }
+
         // bt-B2: same shape as reflectionRaw — gradientRaw carries the
         // verbatim <a:gradFill flip=… ><a:tileRect/></a:gradFill>. The
         // companion semantic gradient=linear;… key would overwrite it via
