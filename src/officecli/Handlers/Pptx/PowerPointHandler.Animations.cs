@@ -453,9 +453,14 @@ public partial class PowerPointHandler
             //   bare prism (no attrs)               → "Cube"  in Exciting group
             //   isContent="1"                       → "Rotate" in Dynamic Content
             //   isContent="1" isInverted="1"        → "Orbit"  in Dynamic Content
-            // 'prism' is kept as the legacy CLI spelling; 'cube' is the modern
-            // UI alias for the same XML.
-            "prism" or "cube" => new DocumentFormat.OpenXml.Office2010.PowerPoint.PrismTransition(),
+            // 'prism' stays mapped to p14:prism. 'cube' was previously aliased
+            // onto prism, which silently rewrote a source `<p:cube/>` as a
+            // p14:prism wrapped in mc:AlternateContent (+ p:fade fallback) on
+            // round-trip. Emit a bare `<p:cube/>` in the presentation namespace
+            // so the source element survives. Built later as an unknown child.
+            "prism" => new DocumentFormat.OpenXml.Office2010.PowerPoint.PrismTransition(),
+            "cube" => new OpenXmlUnknownElement("p", "cube",
+                "http://schemas.openxmlformats.org/presentationml/2006/main"),
             "rotate" => new DocumentFormat.OpenXml.Office2010.PowerPoint.PrismTransition { IsContent = true },
             "orbit" => new DocumentFormat.OpenXml.Office2010.PowerPoint.PrismTransition { IsContent = true, IsInverted = true },
             // Clock UI tile = single-spoke wheel.
