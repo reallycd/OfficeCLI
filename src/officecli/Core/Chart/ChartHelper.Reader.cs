@@ -1376,6 +1376,24 @@ internal static partial class ChartHelper
         return ReadFormulaRef(catData);
     }
 
+    /// <summary>
+    /// Read the first cached string value from a <c:strLit> child of <c:tx>.
+    /// <c:strLit> is not a schema-valid child of <c:tx> (CT_SerTx allows only
+    /// <c:strRef> or <c:v>), but PowerPoint accepts the form and authoring
+    /// tools occasionally emit it. The SDK can't type those elements, so we
+    /// walk by LocalName and pull the first <c:pt>/<c:v>.
+    /// </summary>
+    private static string? ReadStrLitFirstValue(OpenXmlElement? serText)
+    {
+        if (serText == null) return null;
+        var strLit = serText.Elements().FirstOrDefault(e => e.LocalName == "strLit");
+        if (strLit == null) return null;
+        var pt = strLit.Elements().FirstOrDefault(e => e.LocalName == "pt");
+        if (pt == null) return null;
+        var v = pt.Elements().FirstOrDefault(e => e.LocalName == "v");
+        return v?.InnerText;
+    }
+
     internal static List<(string name, double[] values)> ReadAllSeries(C.PlotArea plotArea)
     {
         var result = new List<(string name, double[] values)>();
@@ -1385,7 +1403,11 @@ internal static partial class ChartHelper
                 (e.Parent.LocalName.Contains("Chart") || e.Parent.LocalName.Contains("chart"))))
         {
             var serText = ser.GetFirstChild<C.SeriesText>();
-            // c:tx may carry <c:strRef> (cached cell value) or <c:v> (literal).
+            // c:tx may carry <c:strRef> (cached cell value), bare <c:v> (literal),
+            // or — non-schema but emitted by some authoring tools — <c:strLit>
+            // (literal cached series-name table mirroring the category form).
+            // PowerPoint renders all three; SDK only types strRef and bare <c:v>,
+            // so the strLit branch is read via descendant element-name probing.
             // Prefer the cached value from strRef, fall back to the formula, then
             // literal <c:v>, so users who set series{N}.name=Sheet1!A1 still get
             // a meaningful name back from Get.
@@ -1402,7 +1424,9 @@ internal static partial class ChartHelper
             }
             else
             {
-                name = serText?.Descendants<C.NumericValue>().FirstOrDefault()?.Text ?? "?";
+                name = serText?.Descendants<C.NumericValue>().FirstOrDefault()?.Text
+                    ?? ReadStrLitFirstValue(serText)
+                    ?? "?";
             }
 
             var values = ReadNumericData(ser.GetFirstChild<C.Values>())
