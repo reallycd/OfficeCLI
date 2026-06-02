@@ -159,4 +159,65 @@ public partial class PowerPointHandler
             _ => null
         };
     }
+
+    /// <summary>
+    /// Get the cNvPr container (NonVisualDrawingProperties) for an element,
+    /// erased to OpenXmlElement so callers can read extLst across both
+    /// PresentationML (sp/pic/cxnSp) and DrawingML (graphicFrame) variants.
+    /// Mirrors GetCNvPrId across all element types so extLst content
+    /// (creationId, ...) can be read from a single accessor.
+    /// </summary>
+    internal static OpenXmlElement? GetCNvPr(OpenXmlElement element)
+    {
+        return element switch
+        {
+            Shape s => (OpenXmlElement?)s.NonVisualShapeProperties?.NonVisualDrawingProperties,
+            Picture p => (OpenXmlElement?)p.NonVisualPictureProperties?.NonVisualDrawingProperties,
+            GraphicFrame gf => (OpenXmlElement?)gf.NonVisualGraphicFrameProperties?.NonVisualDrawingProperties,
+            ConnectionShape c => (OpenXmlElement?)c.NonVisualConnectionShapeProperties?.NonVisualDrawingProperties,
+            GroupShape g => (OpenXmlElement?)g.NonVisualGroupShapeProperties?.NonVisualDrawingProperties,
+            _ => null
+        };
+    }
+
+    // bt-3: PowerPoint 2015+ stamps every shape with a stable creationId GUID
+    // stored inside cNvPr's extLst (ext uri "{FF2B5EF4-...}" → p15:creationId).
+    // Without surfacing this, dump→replay loses modern shape identity used by
+    // change tracking, comments, and timeline anchors.
+    private const string CreationIdExtUri = "{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}";
+
+    internal static string? ReadCNvPrCreationId(OpenXmlElement? element)
+    {
+        if (element == null) return null;
+        var cNvPr = GetCNvPr(element);
+        if (cNvPr == null) return null;
+        // Walk children by local name — the extLst element type differs
+        // between PresentationML and DrawingML cNvPr variants, and the
+        // creationId child sits in the p15 namespace. Local-name walk
+        // sidesteps the namespace zoo.
+        foreach (var child in cNvPr.ChildElements)
+        {
+            if (child.LocalName != "extLst") continue;
+            foreach (var ext in child.ChildElements)
+            {
+                if (ext.LocalName != "ext") continue;
+                string? uri = null;
+                foreach (var a in ext.GetAttributes())
+                {
+                    if (a.LocalName == "uri") { uri = a.Value; break; }
+                }
+                if (uri == null || !uri.Equals(CreationIdExtUri, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                foreach (var inner in ext.ChildElements)
+                {
+                    if (inner.LocalName != "creationId") continue;
+                    foreach (var a in inner.GetAttributes())
+                    {
+                        if (a.LocalName == "val") return a.Value;
+                    }
+                }
+            }
+        }
+        return null;
+    }
 }

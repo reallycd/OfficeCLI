@@ -172,6 +172,8 @@ public partial class PowerPointHandler
                 + grp.Elements<GroupShape>().Count()
         };
         grpNode.Format["name"] = grpName;
+        var grpCreationId = ReadCNvPrCreationId(grp);
+        if (grpCreationId != null) grpNode.Format["extLst.creationId"] = grpCreationId;
         var grpXfrm = grp.GroupShapeProperties?.TransformGroup;
         if (grpXfrm?.Offset?.X != null) grpNode.Format["x"] = FormatEmu(grpXfrm.Offset.X.Value);
         if (grpXfrm?.Offset?.Y != null) grpNode.Format["y"] = FormatEmu(grpXfrm.Offset.Y.Value);
@@ -226,6 +228,8 @@ public partial class PowerPointHandler
         node.Format["name"] = name;
         var tblId = GetCNvPrId(gf);
         if (tblId.HasValue) node.Format["id"] = tblId.Value;
+        var tblCreationId = ReadCNvPrCreationId(gf);
+        if (tblCreationId != null) node.Format["extLst.creationId"] = tblCreationId;
         node.Format["rows"] = rows.Count;
         node.Format["cols"] = cols;
 
@@ -706,6 +710,11 @@ public partial class PowerPointHandler
         if (!string.IsNullOrEmpty(shapeAlt)) node.Format["alt"] = shapeAlt;
         var shapeId = GetCNvPrId(shape);
         if (shapeId.HasValue) node.Format["id"] = shapeId.Value;
+        // bt-3: surface modern-PowerPoint creationId GUID stored on cNvPr's
+        // extLst so dump→replay preserves stable shape identity (used by
+        // change-tracking, comment anchors, animation timelines).
+        var shapeCreationId = ReadCNvPrCreationId(shape);
+        if (shapeCreationId != null) node.Format["extLst.creationId"] = shapeCreationId;
         // CONSISTENCY(istitle-bool): always emit isTitle so query selectors
         // `[isTitle=true]` and `[isTitle=false]` are both honored by the
         // AttributeFilter post-query pass (which checks node.Format directly).
@@ -1851,6 +1860,8 @@ public partial class PowerPointHandler
         node.Format["name"] = name;
         var picId = GetCNvPrId(pic);
         if (picId.HasValue) node.Format["id"] = picId.Value;
+        var picCreationId = ReadCNvPrCreationId(pic);
+        if (picCreationId != null) node.Format["extLst.creationId"] = picCreationId;
         // CONSISTENCY(media-alt-readback): emit alt for video/audio too — Set
         // accepts it and ViewAsIssues flags missing alt on audio/video <p:pic>
         // descendants, so Get must surface it to close the round-trip.
@@ -2178,6 +2189,8 @@ public partial class PowerPointHandler
         node.Format["name"] = name;
         var cxnId = GetCNvPrId(cxn);
         if (cxnId.HasValue) node.Format["id"] = cxnId.Value;
+        var cxnCreationId = ReadCNvPrCreationId(cxn);
+        if (cxnCreationId != null) node.Format["extLst.creationId"] = cxnCreationId;
 
         var spPr = cxn.ShapeProperties;
         var xfrm = spPr?.GetFirstChild<Drawing.Transform2D>();
