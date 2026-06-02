@@ -2421,6 +2421,37 @@ public partial class PowerPointHandler
         var transElem = trans.ChildElements.FirstOrDefault(c => c.LocalName != "extLst");
         if (transElem != null)
         {
+            // PowerPoint 2013+ "Exciting" gallery (<p15:prstTrans prst="..."/>)
+            // when it lives as a direct child of <p:transition> rather than wrapped
+            // in <mc:AlternateContent>. Without this intercept the generic switch
+            // falls through to default and emits transition=prsttrans, dropping the
+            // actual preset name carried in @prst (airplane, fallOver, pageCurlDouble,
+            // ...). Collapse to the preset token so it round-trips through Add/Set
+            // exactly like the mc-wrapped form handled by ParseTransitionFromXml.
+            // CONSISTENCY(transition-p15-readback): same canonical form as the
+            // mc-wrapper readback path — bare preset token; invX="1" surfaces as
+            // the `-out` suffix.
+            if (transElem.LocalName == "prstTrans")
+            {
+                var prstAttr = transElem.GetAttributes().FirstOrDefault(a => a.LocalName == "prst").Value;
+                if (!string.IsNullOrEmpty(prstAttr))
+                {
+                    var invXAttr = transElem.GetAttributes().FirstOrDefault(a => a.LocalName == "invX").Value;
+                    var invX = invXAttr == "1" || string.Equals(invXAttr, "true", StringComparison.OrdinalIgnoreCase);
+                    node.Format["transition"] = invX ? $"{prstAttr}-out" : prstAttr;
+
+                    if (trans.Speed?.HasValue == true)
+                        node.Format["transitionSpeed"] = trans.Speed.InnerText;
+                    if (trans.Duration != null)
+                        node.Format["transitionDuration"] = trans.Duration.Value;
+                    if (trans.AdvanceAfterTime != null)
+                        node.Format["advanceTime"] = trans.AdvanceAfterTime.Value;
+                    if (trans.AdvanceOnClick?.HasValue == true)
+                        node.Format["advanceClick"] = trans.AdvanceOnClick.Value;
+                    return;
+                }
+            }
+
             var typeName = transElem.LocalName.ToLowerInvariant() switch
             {
                 "fade"      => "fade",
