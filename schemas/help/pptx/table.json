@@ -40,10 +40,10 @@
   "properties": {
     "id": {
       "type": "number",
-      "add": false,
+      "add": true,
       "set": false,
       "get": true,
-      "description": "OOXML graphic frame id (cNvPr id). pptx-only readback.",
+      "description": "OOXML graphic frame id (cNvPr id). pptx-only. Accepted on add: AddTable honors a caller-supplied id (AcquireShapeId), and dump-replay re-emits it so the graphic frame id stays stable across round-trips. Cannot be changed after creation (set: false).",
       "readback": "integer (cNvPr graphic frame id)",
       "enforcement": "report"
     },
