@@ -1765,8 +1765,12 @@ public partial class PowerPointHandler
             if (fCs != null) node.Format["font.cs"] = fCs;
             var fs = run.RunProperties.FontSize?.Value;
             if (fs.HasValue) node.Format["size"] = $"{fs.Value / 100.0:0.##}pt";
-            if (run.RunProperties.Bold?.Value == true) node.Format["bold"] = true;
-            if (run.RunProperties.Italic?.Value == true) node.Format["italic"] = true;
+            // R52 bt-1: surface explicit b="0"/i="0" too — designers stamp
+            // `<a:rPr b="0"/>` to override an inherited bold from defRPr/lstStyle
+            // (e.g. roman headlines under an italic-by-default theme run). Same
+            // HasValue probe as the shape-level emit at line 1060.
+            if (run.RunProperties.Bold?.HasValue == true) node.Format["bold"] = run.RunProperties.Bold.Value;
+            if (run.RunProperties.Italic?.HasValue == true) node.Format["italic"] = run.RunProperties.Italic.Value;
             // CONSISTENCY(run-rtl): rPr carries an rtl attribute too; Set on a
             // run path writes here. Drawing.RunProperties doesn't expose it as a
             // typed property — read the raw attribute so Get on /paragraph/run
