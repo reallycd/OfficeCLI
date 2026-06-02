@@ -27,6 +27,13 @@ public static partial class PptxBatchEmitter
         // picture[K]/blipFill/blip xpath.
         string? clrChangeXml = ppt.GetPictureBlipClrChangeXml(picNode.Path);
 
+        // R56 bt-6: capture every other untyped blip child (alphaMod / blur /
+        // hsl / tint / <a:colorMod> channel modulation / ...) so dump→batch
+        // doesn't silently drop them. The typed children (alphaModFix /
+        // biLevel / duotone / lum / clrChange) ride the Format-key surface
+        // already and are filtered out by GetPictureBlipPassthroughChildrenXml.
+        var passthroughBlipChildren = ppt.GetPictureBlipPassthroughChildrenXml(picNode.Path);
+
         var binary = ppt.GetImageBinary(picNode.Path);
         if (binary.HasValue)
         {
@@ -108,19 +115,36 @@ public static partial class PptxBatchEmitter
         // replayPath form is `/slide[N]/picture[K]` where K is the
         // 1-based picture ordinal within spTree's <p:pic> siblings — the
         // same scope `p:pic[K]` resolves through the xpath engine.
-        if (clrChangeXml != null
+        if ((clrChangeXml != null || passthroughBlipChildren.Count > 0)
             && System.Text.RegularExpressions.Regex.Match(replayPath,
                 @"^/slide\[(\d+)\]/picture\[(\d+)\]$") is { Success: true } picM)
         {
             var picOrd = int.Parse(picM.Groups[2].Value);
-            items.Add(new BatchItem
+            var blipXpath = $"/p:sld/p:cSld/p:spTree/p:pic[{picOrd}]/p:blipFill/a:blip";
+            if (clrChangeXml != null)
             {
-                Command = "raw-set",
-                Part = parentSlidePath,
-                Xpath = $"/p:sld/p:cSld/p:spTree/p:pic[{picOrd}]/p:blipFill/a:blip",
-                Action = "append",
-                Xml = clrChangeXml,
-            });
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = parentSlidePath,
+                    Xpath = blipXpath,
+                    Action = "append",
+                    Xml = clrChangeXml,
+                });
+            }
+            // R56 bt-6: each untyped blip child is replayed as its own append.
+            // Source order is preserved (foreach over ChildElements upstream).
+            foreach (var childXml in passthroughBlipChildren)
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = parentSlidePath,
+                    Xpath = blipXpath,
+                    Action = "append",
+                    Xml = childXml,
+                });
+            }
         }
     }
 

@@ -1893,6 +1893,61 @@ public partial class PowerPointHandler : IDocumentHandler
         return clrChange?.OuterXml;
     }
 
+    // R56 bt-6: return outer XML for every <a:blip> child the typed Add/Set
+    // surface does NOT cover, so dump→batch can re-inject them via raw-set
+    // passthrough. Standard typed-handled children (filtered out): a:alphaModFix
+    // (opacity), a:biLevel, a:duotone, a:lum + legacy lumOff/lumMod
+    // (brightness/contrast), a:clrChange (already round-tripped via the
+    // dedicated GetPictureBlipClrChangeXml + EmitPicture raw-set).
+    // Everything else — alphaBiLevel, alphaCeiling, alphaFloor, alphaInv,
+    // alphaMod, alphaRepl, blur, clrRepl, fillOverlay, grayscl, hsl, tint,
+    // extLst, plus non-schema extension elements like <a:colorMod> seen in
+    // the wild — was silently dropped on dump. Mirrors the path-resolution
+    // preamble in GetPictureBlipClrChangeXml verbatim.
+    public IReadOnlyList<string> GetPictureBlipPassthroughChildrenXml(string picturePath)
+    {
+        var empty = (IReadOnlyList<string>)Array.Empty<string>();
+        var m = Regex.Match(picturePath,
+            @"^/slide\[(\d+)\]/(?:.+/)?picture\[(?:@id=)?(\d+)\]$");
+        if (!m.Success) return empty;
+        var slideIdx = int.Parse(m.Groups[1].Value);
+        var idOrIdx = int.Parse(m.Groups[2].Value);
+        var byId = picturePath.Contains("@id=", StringComparison.Ordinal);
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return empty;
+        var slidePart = parts[slideIdx - 1];
+        var shapeTree = GetSlide(slidePart).CommonSlideData?.ShapeTree;
+        if (shapeTree == null) return empty;
+        var pictures = shapeTree.Descendants<Picture>().ToList();
+        Picture? pic = byId
+            ? pictures.FirstOrDefault(p =>
+                p.NonVisualPictureProperties?.NonVisualDrawingProperties?.Id?.Value
+                    == (uint)idOrIdx)
+            : (idOrIdx >= 1 && idOrIdx <= pictures.Count ? pictures[idOrIdx - 1] : null);
+        if (pic == null) return empty;
+        var blip = pic.BlipFill?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Blip>();
+        if (blip == null) return empty;
+        var result = new List<string>();
+        foreach (var kid in blip.ChildElements)
+        {
+            // Skip the typed-handled blip children — Add/Set already
+            // round-trips these via Format keys.
+            if (kid is DocumentFormat.OpenXml.Drawing.AlphaModulationFixed) continue;
+            if (kid is DocumentFormat.OpenXml.Drawing.BiLevel) continue;
+            if (kid is DocumentFormat.OpenXml.Drawing.Duotone) continue;
+            if (kid is DocumentFormat.OpenXml.Drawing.LuminanceEffect) continue;
+            if (kid is DocumentFormat.OpenXml.Drawing.ColorChange) continue;
+            // Legacy invalid markup written by older builds — NodeBuilder
+            // already maps these to brightness/contrast Format keys so the
+            // Set-side path re-writes them as <a:lum>. Don't double-emit.
+            if (kid.LocalName is "lumOff" or "lumMod"
+                && kid.NamespaceUri == "http://schemas.openxmlformats.org/drawingml/2006/main")
+                continue;
+            result.Add(kid.OuterXml);
+        }
+        return result;
+    }
+
     // Probe whether a shape's NonVisualDrawingProperties carries a
     // hlinkClick child. Used by PptxBatchEmitter.EmitShape to disambiguate
     // a Format["link"] surfaced by NodeBuilder's single-run shortcut
