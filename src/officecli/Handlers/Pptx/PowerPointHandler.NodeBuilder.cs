@@ -1060,11 +1060,23 @@ public partial class PowerPointHandler
                       ?? new List<Drawing.Run>();
         bool hasMixedSize = false;
         bool hasMixedColor = false;
+        // R60 fuzzer regression: bold/italic must also be heterogeneity-probed.
+        // A textbox whose first run is bold (e.g. "AV AT WA — kern=0  ") and
+        // whose sibling runs are roman silently surfaced bold=true at shape
+        // level — dump→replay then emitted `add textbox bold=true` and the
+        // shape-default styling bled bold onto every default (unstyled) run.
+        // Same for italic on the subscript/superscript-alias textbox where
+        // a leading italic run lifted italic onto siblings (Custom: / higher /
+        // lower lost their roman style on replay).
+        bool hasMixedBold = false;
+        bool hasMixedItalic = false;
         if (allRuns.Count > 1)
         {
             string? firstSizeKey = null;
             string? firstColorKey = null;
-            bool sizeSeen = false, colorSeen = false;
+            string? firstBoldKey = null;
+            string? firstItalicKey = null;
+            bool sizeSeen = false, colorSeen = false, boldSeen = false, italicSeen = false;
             foreach (var r in allRuns)
             {
                 var rp = r.RunProperties;
@@ -1077,6 +1089,14 @@ public partial class PowerPointHandler
                 var colKey = col ?? "(unset)";
                 if (!colorSeen) { firstColorKey = colKey; colorSeen = true; }
                 else if (firstColorKey != colKey) hasMixedColor = true;
+
+                var boldKey = rp?.Bold?.HasValue == true ? (rp.Bold.Value ? "1" : "0") : "(unset)";
+                if (!boldSeen) { firstBoldKey = boldKey; boldSeen = true; }
+                else if (firstBoldKey != boldKey) hasMixedBold = true;
+
+                var italicKey = rp?.Italic?.HasValue == true ? (rp.Italic.Value ? "1" : "0") : "(unset)";
+                if (!italicSeen) { firstItalicKey = italicKey; italicSeen = true; }
+                else if (firstItalicKey != italicKey) hasMixedItalic = true;
             }
         }
         if (firstRun?.RunProperties != null)
@@ -1110,8 +1130,8 @@ public partial class PowerPointHandler
             var fontSize = firstRun.RunProperties.FontSize?.Value;
             if (fontSize.HasValue && !hasMixedSize) node.Format["size"] = $"{fontSize.Value / 100.0:0.##}pt";
 
-            if (firstRun.RunProperties.Bold?.HasValue == true) node.Format["bold"] = firstRun.RunProperties.Bold.Value;
-            if (firstRun.RunProperties.Italic?.HasValue == true) node.Format["italic"] = firstRun.RunProperties.Italic.Value;
+            if (firstRun.RunProperties.Bold?.HasValue == true && !hasMixedBold) node.Format["bold"] = firstRun.RunProperties.Bold.Value;
+            if (firstRun.RunProperties.Italic?.HasValue == true && !hasMixedItalic) node.Format["italic"] = firstRun.RunProperties.Italic.Value;
             // CONSISTENCY(rPr-cap): mirror cap attribute readback so shape-level
             // Get matches Set's allCaps/cap input (Set writes rPr cap="all"/"small").
             if (firstRun.RunProperties.Capital?.HasValue == true && firstRun.RunProperties.Capital.Value != Drawing.TextCapsValues.None)
