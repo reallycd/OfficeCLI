@@ -96,7 +96,23 @@ public partial class PowerPointHandler
                     children.Add(ShapeToNode(shape, slideNum, shapeIdx, depth, slidePart, parentPathPrefix));
                     break;
                 case GraphicFrame gf:
-                    if (gf.Descendants<Drawing.Table>().Any())
+                    // bt-5: detect by graphicData URI FIRST. A tblPr/extLst
+                    // carrying an unknown <a:ext uri> (a16:tblExt, p15:
+                    // trackedChange, vendor extensions) can defeat the
+                    // strongly-typed Descendants<Drawing.Table>() probe when
+                    // the OpenXml SDK reads the unknown ext payload as an
+                    // OpenXmlUnknownElement child of tblPr and the tblPr
+                    // itself surfaces as an unknown — the typed Table walk
+                    // then yields zero results and the entire graphicFrame
+                    // falls through every branch, dropping silently from
+                    // dump. URI-based detection is invariant against tblPr
+                    // extLst content so the table survives even when the
+                    // typed accessor stalls.
+                    var gfGraphicData = gf.Graphic?.GraphicData;
+                    var gfUri = gfGraphicData?.Uri?.Value;
+                    bool gfIsTable = gf.Descendants<Drawing.Table>().Any()
+                        || (gfUri?.Equals(TableGraphicDataUri, StringComparison.OrdinalIgnoreCase) == true);
+                    if (gfIsTable)
                     {
                         tblIdx++;
                         children.Add(TableToNode(gf, slideNum, tblIdx, depth, parentPathPrefix));
@@ -231,6 +247,13 @@ public partial class PowerPointHandler
     private const string SmartArtGraphicDataUri =
         "http://schemas.openxmlformats.org/drawingml/2006/diagram";
 
+    // bt-5: table graphicFrame URI — used as a defensive fallback when the
+    // strongly-typed Descendants<Drawing.Table>() probe fails because tblPr's
+    // extLst contains unrecognized extension content (a16:tblExt, p15:
+    // trackedChange) that confuses the SDK's tbl-subtree typing.
+    private const string TableGraphicDataUri =
+        "http://schemas.openxmlformats.org/drawingml/2006/table";
+
     internal static bool IsSmartArtGraphicFrame(GraphicFrame gf)
     {
         var data = gf.Graphic?.GraphicData;
@@ -278,8 +301,14 @@ public partial class PowerPointHandler
 
     private static DocumentNode TableToNode(GraphicFrame gf, int slideNum, int tblIdx, int depth, string? parentPathPrefix = null)
     {
-        var table = gf.Descendants<Drawing.Table>().First();
-        var rows = table.Elements<Drawing.TableRow>().ToList();
+        // bt-5: the typed Drawing.Table accessor can return zero results when
+        // tblPr's extLst carries unrecognized extension content that the
+        // OpenXml SDK fails to type-bind. The graphicFrame walker above falls
+        // back to detecting by graphicData URI; mirror that fallback here so
+        // we don't throw on .First() when typed Table is absent but the
+        // graphicData URI confirms a table host.
+        var table = gf.Descendants<Drawing.Table>().FirstOrDefault();
+        var rows = table?.Elements<Drawing.TableRow>().ToList() ?? new List<Drawing.TableRow>();
         var cols = rows.FirstOrDefault()?.Elements<Drawing.TableCell>().Count() ?? 0;
         var name = gf.NonVisualGraphicFrameProperties?.NonVisualDrawingProperties?.Name?.Value ?? "Table";
 
@@ -302,12 +331,12 @@ public partial class PowerPointHandler
         node.Format["rows"] = rows.Count;
         node.Format["cols"] = cols;
 
-        var gridCols = table.TableGrid?.Elements<Drawing.GridColumn>().ToList();
+        var gridCols = table?.TableGrid?.Elements<Drawing.GridColumn>().ToList();
         if (gridCols != null && gridCols.Count > 0)
             node.Format["colWidths"] = string.Join(",", gridCols.Select(gc => gc.Width?.Value is long w ? FormatEmu(w) : "0"));
 
         // Table style
-        var tblPr = table.GetFirstChild<Drawing.TableProperties>();
+        var tblPr = table?.GetFirstChild<Drawing.TableProperties>();
         var tableStyleId = tblPr?.GetFirstChild<Drawing.TableStyleId>()?.InnerText;
         if (!string.IsNullOrEmpty(tableStyleId))
         {
@@ -332,7 +361,7 @@ public partial class PowerPointHandler
         // Outer-edge border aggregation (PPT has no table-level border element).
         // Scan the outer edges across cells; emit per-side keys when uniform,
         // and 'border.all' shorthand when all four sides match.
-        AggregateTableOuterBorders(table, rows, node);
+        if (table != null) AggregateTableOuterBorders(table, rows, node);
 
         // Position
         var offset = gf.Transform?.Offset;
@@ -635,7 +664,13 @@ public partial class PowerPointHandler
                     yield return new RenderableYield(cxn, parentPath, "connector", cxnIdx);
                     break;
                 case GraphicFrame gf:
-                    if (gf.Descendants<Drawing.Table>().Any())
+                    // bt-5: mirror the BuildChildNodesIntoContainer URI-fallback
+                    // so an unknown tblPr extLst doesn't dropkick the table
+                    // from query/view either.
+                    var uri2 = gf.Graphic?.GraphicData?.Uri?.Value;
+                    bool isTable2 = gf.Descendants<Drawing.Table>().Any()
+                        || (uri2?.Equals(TableGraphicDataUri, StringComparison.OrdinalIgnoreCase) == true);
+                    if (isTable2)
                     {
                         tblIdx++;
                         yield return new RenderableYield(gf, parentPath, "table", tblIdx);
