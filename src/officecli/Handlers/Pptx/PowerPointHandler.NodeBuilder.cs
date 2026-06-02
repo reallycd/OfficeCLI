@@ -1211,6 +1211,18 @@ public partial class PowerPointHandler
                 var glowOpacity = glowAlpha?.Val?.HasValue == true ? $"{glowAlpha.Val.Value / 1000.0:0.##}" : "100";
                 node.Format["glow"] = $"{glowColor}-{radiusPt}-{glowOpacity}";
             }
+            // bt-1: <a:fillOverlay blend="darken|lighten|mult|over|screen"><a:solidFill>…</>
+            // is a composited fill on top of the shape's main fill — modern
+            // PowerPoint decks use it for theme-tinted card insets. The
+            // effectLst walker only consumed the well-known outerShdw / glow /
+            // reflection / softEdge children, so fillOverlay was silently
+            // dropped on dump→replay. Surface OuterXml as fillOverlayRaw
+            // (passthrough mirrors shadowRaw / reflectionRaw); a compressed
+            // `fillOverlay=blend:color` form would lose alpha/gradient overlay
+            // variants, so raw is the conservative choice.
+            var fillOverlay = activeEffectList.GetFirstChild<Drawing.FillOverlay>();
+            if (fillOverlay != null)
+                node.Format["fillOverlayRaw"] = fillOverlay.OuterXml;
             var reflEl = activeEffectList.GetFirstChild<Drawing.Reflection>();
             if (reflEl != null)
             {

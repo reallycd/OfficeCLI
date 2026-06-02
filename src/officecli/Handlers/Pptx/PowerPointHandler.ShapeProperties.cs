@@ -1366,6 +1366,55 @@ public partial class PowerPointHandler
                     break;
                 }
 
+                case "filloverlayraw":
+                {
+                    // bt-1 dump→replay path. Value is the verbatim
+                    // <a:fillOverlay blend=…>…</a:fillOverlay>. ApplyShadow /
+                    // BuildGlow have no equivalent for fillOverlay; without
+                    // raw passthrough the composited tint is dropped from
+                    // the shape's effectLst on every round-trip.
+                    var spPr = shape.ShapeProperties;
+                    if (spPr == null) { unsupported.Add(key); break; }
+                    var effectList = EnsureEffectList(spPr);
+                    effectList.RemoveAllChildren<Drawing.FillOverlay>();
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        try
+                        {
+                            var raw = value.Contains("xmlns:a=")
+                                ? value
+                                : value.Replace("<a:fillOverlay",
+                                    "<a:fillOverlay xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"");
+                            var overlay = new Drawing.FillOverlay();
+                            using var sr = new System.IO.StringReader(raw);
+                            using var xr = System.Xml.XmlReader.Create(sr);
+                            xr.MoveToContent();
+                            if (xr.HasAttributes)
+                            {
+                                while (xr.MoveToNextAttribute())
+                                {
+                                    if (xr.Prefix == "xmlns" || xr.Name == "xmlns") continue;
+                                    overlay.SetAttribute(new OpenXmlAttribute(
+                                        xr.Prefix, xr.LocalName, xr.NamespaceURI, xr.Value));
+                                }
+                                xr.MoveToElement();
+                            }
+                            if (!xr.IsEmptyElement)
+                            {
+                                var inner = xr.ReadInnerXml();
+                                if (!string.IsNullOrWhiteSpace(inner))
+                                    overlay.InnerXml = inner;
+                            }
+                            InsertEffectInOrder(effectList, overlay);
+                        }
+                        catch
+                        {
+                            unsupported.Add(key);
+                        }
+                    }
+                    break;
+                }
+
                 case "glow":
                 {
                     var spPr = shape.ShapeProperties;
