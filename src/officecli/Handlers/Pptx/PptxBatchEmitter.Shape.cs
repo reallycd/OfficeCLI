@@ -78,6 +78,15 @@ public static partial class PptxBatchEmitter
         // single-run paragraphs and over-broad emit for multi-run ones.
         "shadow", "shadowRaw", "innerShadow", "innerShadowRaw", "glow",
         "reflection", "reflectionRaw", "softEdge", "blur",
+        // R57 bt-2: underline + its uLn/uFill companion keys live on
+        // <a:rPr> (run only). The collapse used to promote them onto the
+        // paragraph set bag, so a single-run colored underline replayed
+        // as `set …/paragraph[1] underline=single` AND `set …/shape[K]
+        // underline=single` — every run in the (re-added) paragraph,
+        // and the runless shape's endParaRPr, came back underlined. Keep
+        // them on the run so a true single-run underline emits exactly
+        // one `set …/run[1] underline=…` op.
+        "underline", "underline.color", "underline.width",
     };
 
     // Pull a `link=slide[N]` prop out of the bag and queue a deferred `set`
