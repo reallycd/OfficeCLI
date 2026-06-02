@@ -170,8 +170,13 @@ public partial class PowerPointHandler
                                 cropVals[ci] = ParseHelpers.SafeParseDouble(StripPct(parts[ci]), "crop");
                                 // CONSISTENCY(srcRect-negative): negative
                                 // percentages express OOXML outset cropping.
-                                if (cropVals[ci] < -100 || cropVals[ci] > 100)
-                                    throw new ArgumentException($"Invalid 'crop' value: '{parts[ci].Trim()}'. Crop percentage must be between -100 and 100.");
+                                // R60: relax upper bound to [-1000, 1000] —
+                                // PowerPoint accepts srcRect perMille values
+                                // up to ±1000000 (zoom past picture bounds);
+                                // Get emits the raw perMille/1000, so the
+                                // Set range must match for round-trip.
+                                if (cropVals[ci] < -1000 || cropVals[ci] > 1000)
+                                    throw new ArgumentException($"Invalid 'crop' value: '{parts[ci].Trim()}'. Crop percentage must be between -1000 and 1000.");
                             }
                             srcRect.Left = (int)(cropVals[0] * 1000);
                             srcRect.Top = (int)(cropVals[1] * 1000);
@@ -184,8 +189,9 @@ public partial class PowerPointHandler
                             var vCrop = ParseHelpers.SafeParseDouble(StripPct(parts[0]), "crop");
                             var hCrop = ParseHelpers.SafeParseDouble(StripPct(parts[1]), "crop");
                             // CONSISTENCY(srcRect-negative): outset cropping.
-                            if (vCrop < -100 || vCrop > 100 || hCrop < -100 || hCrop > 100)
-                                throw new ArgumentException($"Invalid 'crop' value: '{value}'. Crop percentages must be between -100 and 100.");
+                            // R60: relax upper bound to match Get-side perMille round-trip.
+                            if (vCrop < -1000 || vCrop > 1000 || hCrop < -1000 || hCrop > 1000)
+                                throw new ArgumentException($"Invalid 'crop' value: '{value}'. Crop percentages must be between -1000 and 1000.");
                             srcRect.Top = (int)(vCrop * 1000); srcRect.Bottom = (int)(vCrop * 1000);
                             srcRect.Left = (int)(hCrop * 1000); srcRect.Right = (int)(hCrop * 1000);
                         }
@@ -194,8 +200,9 @@ public partial class PowerPointHandler
                             if (!double.TryParse(StripPct(value), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var cropVal))
                                 throw new ArgumentException($"Invalid 'crop' value: '{value}'. Expected a percentage (e.g. 10 = 10% from each edge).");
                             // CONSISTENCY(srcRect-negative): outset cropping.
-                            if (cropVal < -100 || cropVal > 100)
-                                throw new ArgumentException($"Invalid 'crop' value: '{value}'. Crop percentage must be between -100 and 100.");
+                            // R60: relax upper bound to match Get-side perMille round-trip.
+                            if (cropVal < -1000 || cropVal > 1000)
+                                throw new ArgumentException($"Invalid 'crop' value: '{value}'. Crop percentage must be between -1000 and 1000.");
                             var cropPct = (int)(cropVal * 1000);
                             srcRect.Left = cropPct; srcRect.Top = cropPct; srcRect.Right = cropPct; srcRect.Bottom = cropPct;
                         }
@@ -207,10 +214,11 @@ public partial class PowerPointHandler
                     else
                     {
                         if (!double.TryParse(StripPct(value), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var cropSingle))
-                            throw new ArgumentException($"Invalid '{key}' value: '{value}'. Expected a percentage (-100 to 100).");
+                            throw new ArgumentException($"Invalid '{key}' value: '{value}'. Expected a percentage (-1000 to 1000).");
                         // CONSISTENCY(srcRect-negative): outset cropping.
-                        if (cropSingle < -100 || cropSingle > 100)
-                            throw new ArgumentException($"Invalid '{key}' value: '{value}'. Crop percentage must be between -100 and 100.");
+                        // R60: relax upper bound to match Get-side perMille round-trip.
+                        if (cropSingle < -1000 || cropSingle > 1000)
+                            throw new ArgumentException($"Invalid '{key}' value: '{value}'. Crop percentage must be between -1000 and 1000.");
                         var pct = (int)(cropSingle * 1000); // percent (0-100) → 1/1000ths
                         switch (key.ToLowerInvariant())
                         {

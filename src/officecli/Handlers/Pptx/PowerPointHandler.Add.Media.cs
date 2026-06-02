@@ -170,8 +170,11 @@ public partial class PowerPointHandler
                         // rejecting [-100, 100] on Add broke dump->replay
                         // for any PowerPoint-authored picture that used
                         // outset cropping. Match the Get-side range.
-                        if (v < -100 || v > 100)
-                            throw new ArgumentException($"Invalid 'crop' value: '{s.Trim()}'. Crop percentage must be between -100 and 100.");
+                        // R60: relax upper bound to [-1000, 1000] — Get-side
+                        // emits raw perMille/1000, so srcRect perMille values
+                        // up to ±1000000 (PowerPoint zoom) must round-trip.
+                        if (v < -1000 || v > 1000)
+                            throw new ArgumentException($"Invalid 'crop' value: '{s.Trim()}'. Crop percentage must be between -1000 and 1000.");
                         return v;
                     }
                     if (parts.Length == 4)
@@ -206,12 +209,13 @@ public partial class PowerPointHandler
                     var stripped = v.Trim();
                     if (stripped.EndsWith("%", StringComparison.Ordinal)) stripped = stripped[..^1].Trim();
                     if (!double.TryParse(stripped, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d))
-                        throw new ArgumentException($"Invalid '{k}' value: '{v}'. Expected a percentage (-100 to 100).");
+                        throw new ArgumentException($"Invalid '{k}' value: '{v}'. Expected a percentage (-1000 to 1000).");
                     // CONSISTENCY(srcRect-negative): outset cropping uses
                     // negative percentages — mirror the compound `crop=`
                     // path above and the Get-side range.
-                    if (d < -100 || d > 100)
-                        throw new ArgumentException($"Invalid '{k}' value: '{v}'. Crop percentage must be between -100 and 100.");
+                    // R60: match the compound `crop=` range — perMille round-trip.
+                    if (d < -1000 || d > 1000)
+                        throw new ArgumentException($"Invalid '{k}' value: '{v}'. Crop percentage must be between -1000 and 1000.");
                     return (int)(d * 1000);
                 }
                 cropL = SidePct("cropleft") ?? cropL;
