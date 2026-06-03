@@ -11,6 +11,8 @@ examples/
 │   ├── formulas.sh / formulas.docx
 │   ├── tables.sh / tables.docx
 │   ├── textbox.sh
+│   ├── run-showcase.{sh,md,docx}      # run/character property surface
+│   ├── paragraph-showcase.{sh,md,docx}# paragraph property surface
 │   ├── numbering-showcase.sh / numbering-showcase.docx
 │   └── revisions.{sh,md,docx}         # tracked-change (revision) API
 ├── excel/                             # 📊 Excel examples
@@ -61,6 +63,8 @@ Each example follows the same trio: `<name>.md` (walkthrough), `<name>.sh`/`.py`
 **Word (.docx):**
 ```bash
 cd word
+bash run-showcase.sh         # Run/character formatting: bold/underline/strike/caps/super-sub/fonts/effects
+bash paragraph-showcase.sh   # Paragraph formatting: align/indent/spacing/pagination/shading/markRPr
 bash formulas.sh             # LaTeX math formulas
 bash tables.sh               # Styled tables
 bash textbox.sh              # Formatted text boxes
@@ -115,6 +119,8 @@ python pictures/pictures-basic.py            # picture src/crop/rotation/links (
 ## 📚 Documentation by Type
 
 ### 📄 [Word Examples →](word/)
+- Run / character formatting — weight, underline variants, strike/dstrike, caps/smallCaps, super/subscript, color/size/highlight, per-script fonts, text effects, character spacing, language
+- Paragraph formatting — alignment, indentation, spacing, pagination flags, paragraph-level run formatting, shading, paragraph-mark (markRPr) formatting, outline level
 - Mathematical formulas (LaTeX)
 - Complex tables
 - Text boxes and styling
