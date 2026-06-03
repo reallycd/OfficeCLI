@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using OfficeCli.Core;
+using X14 = DocumentFormat.OpenXml.Office2010.Excel;
 namespace OfficeCli.Handlers;
 
 public partial class ExcelHandler
@@ -268,6 +269,10 @@ public partial class ExcelHandler
         var cfMap = sheetData != null ? BuildConditionalFormatMap(ws, stylesheet, sheetData, _doc.WorkbookPart) : new Dictionary<string, string>();
         var dataBarMap = sheetData != null ? BuildDataBarMap(ws, sheetData) : new Dictionary<string, string>();
         var iconSetMap = sheetData != null ? BuildIconSetMap(ws, sheetData) : new Dictionary<string, string>();
+        // R12a: sparklines live in cells that often have no CellValue. Build the
+        // host-cell → SVG map now; maxCol/maxRow are extended to cover those cells
+        // below, after they're computed from cell data.
+        var sparklineMap = BuildSparklineMap(ws);
 
         // Collect column widths
         var colWidths = GetColumnWidths(ws);
@@ -320,6 +325,16 @@ public partial class ExcelHandler
                 if (toRow > maxRow) maxRow = toRow;
                 if (toCol > maxCol) maxCol = toCol;
             }
+        }
+
+        // R12a: extend maxRow/maxCol to cover sparkline host cells (which often
+        // have no CellValue and would otherwise be cropped out of the grid).
+        foreach (var hostRef in sparklineMap.Keys)
+        {
+            var (hc, hr) = ParseCellReference(hostRef);
+            var hcIdx = ColumnNameToIndex(hc);
+            if (hcIdx > maxCol) maxCol = hcIdx;
+            if (hr > maxRow) maxRow = hr;
         }
 
         // Empty sheet (no cells and no charts)
@@ -516,7 +531,7 @@ public partial class ExcelHandler
         // cell rendering; open-source RenderTbody emits static <tr> elements.
         var ctx = new SheetRenderContext(sheetName, sheetIdx, cellMap, maxRow, maxCol,
             rowHeights, hiddenRows, hiddenCols, mergeMap, frozenRows, frozenCols,
-            frozenLeftOffsets, frozenTopOffsets, cfMap, dataBarMap, iconSetMap,
+            frozenLeftOffsets, frozenTopOffsets, cfMap, dataBarMap, iconSetMap, sparklineMap,
             stylesheet, evaluator, defaultColWidthPt, defaultRowHeightPt);
         RenderTbody(sb, ctx);
         sb.AppendLine("</table>");
@@ -592,6 +607,7 @@ public partial class ExcelHandler
         Dictionary<string, string> CfMap,
         Dictionary<string, string> DataBarMap,
         Dictionary<string, string> IconSetMap,
+        Dictionary<string, string> SparklineMap,
         Stylesheet? Stylesheet,
         Core.FormulaEvaluator? Evaluator,
         double DefaultColWidthPt,
@@ -675,6 +691,8 @@ public partial class ExcelHandler
                 var content = richHtml != null && !ctx.DataBarMap.ContainsKey(cellRef) && !ctx.IconSetMap.ContainsKey(cellRef)
                     ? richHtml
                     : BuildCellContent(cellRef, value, ctx.DataBarMap, ctx.IconSetMap);
+                content = WrapVerticalAlign(content, GetCellVerticalAlign(cell, ctx.Stylesheet), richHtml);
+                if (ctx.SparklineMap.TryGetValue(cellRef, out var spkSvg)) content = spkSvg + content;
                 var diagSvg = TryBuildCellDiagonalSvg(cell, ctx.Stylesheet) ?? "";
                 rowSb.Append($"<td data-path=\"/{HtmlEncode(ctx.SheetName)}/{cellRef}\"{GetFormulaAttr(cell)}{spanAttrs}{style}>{diagSvg}{content}</td>");
             }
@@ -687,6 +705,8 @@ public partial class ExcelHandler
                 var content = richHtml != null && !ctx.DataBarMap.ContainsKey(cellRef) && !ctx.IconSetMap.ContainsKey(cellRef)
                     ? richHtml
                     : BuildCellContent(cellRef, value, ctx.DataBarMap, ctx.IconSetMap);
+                content = WrapVerticalAlign(content, GetCellVerticalAlign(cell, ctx.Stylesheet), richHtml);
+                if (ctx.SparklineMap.TryGetValue(cellRef, out var spkSvg)) content = spkSvg + content;
                 var diagSvg = TryBuildCellDiagonalSvg(cell, ctx.Stylesheet) ?? "";
                 rowSb.Append($"<td data-path=\"/{HtmlEncode(ctx.SheetName)}/{cellRef}\"{GetFormulaAttr(cell)}{style}>{diagSvg}{content}</td>");
             }
@@ -992,12 +1012,17 @@ public partial class ExcelHandler
                 // Determine min/max from cfvo elements or from data
                 var cfvos = dataBar.Elements<ConditionalFormatValueObject>().ToList();
                 double minVal, maxVal;
+                var dataMin = cells.Min(c => c.value);
                 if (cfvos.Count >= 2 && cfvos[0].Type?.Value == ConditionalFormatValueObjectValues.Number
                     && double.TryParse(cfvos[0].Val?.Value, System.Globalization.NumberStyles.Any,
                         System.Globalization.CultureInfo.InvariantCulture, out var explicitMin))
                     minVal = explicitMin;
                 else
-                    minVal = 0; // Excel default: bars start from 0
+                    // R17a: Excel anchors bars at 0 ONLY when all values are
+                    // non-negative. With negatives present, the axis floor is the
+                    // actual data minimum so negative magnitudes get proportional
+                    // (left-extending) bars instead of clamping to 0% width.
+                    minVal = Math.Min(0, dataMin);
 
                 if (cfvos.Count >= 2 && cfvos[1].Type?.Value == ConditionalFormatValueObjectValues.Number
                     && double.TryParse(cfvos[1].Val?.Value, System.Globalization.NumberStyles.Any,
@@ -1013,13 +1038,35 @@ public partial class ExcelHandler
                 var maxLength = dataBar.MaxLength?.Value ?? 90U;
                 var showValue = dataBar.ShowValue?.Value ?? true;
 
+                // R17a: when the range straddles zero, draw a zero-axis and split
+                // bars left/right of it. zeroPct is the axis position (0–100%).
+                bool hasNegative = minVal < 0;
+                var zeroPct = hasNegative ? (0 - minVal) / (maxVal - minVal) * 100 : 0;
+
                 foreach (var (cellRef, value) in cells)
                 {
-                    var rawPct = (value - minVal) / (maxVal - minVal) * 100;
-                    // Scale to minLength..maxLength range
-                    var pct = Math.Max(0, Math.Min(100, minLength + rawPct / 100 * (maxLength - minLength)));
+                    string barDiv;
+                    if (hasNegative)
+                    {
+                        // Width proportional to |value| over the full span; positive
+                        // bars extend right from the zero-axis, negative bars left.
+                        var wPct = Math.Min(100, Math.Abs(value) / (maxVal - minVal) * 100);
+                        if (value >= 0)
+                            barDiv = $"<div style=\"position:absolute;left:{zeroPct:0.#}%;top:1px;bottom:1px;width:{wPct:0.#}%;background:linear-gradient(to right,#{barColor},#{barColor}40);border-radius:1px\"></div>";
+                        else
+                            barDiv = $"<div style=\"position:absolute;left:{Math.Max(0, zeroPct - wPct):0.#}%;top:1px;bottom:1px;width:{wPct:0.#}%;background:linear-gradient(to left,#{barColor},#{barColor}40);border-radius:1px\"></div>";
+                        // Zero-axis marker (thin line) — drawn once-style per cell is fine.
+                        barDiv += $"<div style=\"position:absolute;left:{zeroPct:0.#}%;top:0;bottom:0;border-left:1px dashed #c0504d\"></div>";
+                    }
+                    else
+                    {
+                        var rawPct = (value - minVal) / (maxVal - minVal) * 100;
+                        // Scale to minLength..maxLength range
+                        var pct = Math.Max(0, Math.Min(100, minLength + rawPct / 100 * (maxLength - minLength)));
+                        barDiv = $"<div style=\"position:absolute;left:0;top:1px;bottom:1px;width:{pct:0.#}%;background:linear-gradient(to right,#{barColor},#{barColor}40);border-radius:1px\"></div>";
+                    }
                     // Store bar HTML + showValue flag (prefixed with "0|" or "1|")
-                    result[cellRef] = $"{(showValue ? "1" : "0")}|<div style=\"position:absolute;left:0;top:1px;bottom:1px;width:{pct:0.#}%;background:linear-gradient(to right,#{barColor},#{barColor}40);border-radius:1px\"></div>";
+                    result[cellRef] = $"{(showValue ? "1" : "0")}|{barDiv}";
                 }
             }
         }
@@ -1107,6 +1154,87 @@ public partial class ExcelHandler
         return result;
     }
 
+    /// <summary>
+    /// R12a: build a cellRef → inline-SVG map for sparklines. Sparkline groups
+    /// live in the worksheet extension list (x14:sparklineGroups); each
+    /// x14:sparkline carries a Formula (data range) and a ReferenceSequence
+    /// (the host cell). We render a small SVG into that host cell — column =
+    /// proportional bars, line/stacked = polyline — so the cell is no longer
+    /// blank. Lightweight approximation of the native in-cell mini chart.
+    /// </summary>
+    private Dictionary<string, string> BuildSparklineMap(Worksheet ws)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var extList = ws.GetFirstChild<WorksheetExtensionList>();
+        if (extList == null) return result;
+        foreach (var group in extList.Descendants<X14.SparklineGroup>())
+        {
+            var type = group.Type?.Value;
+            var kind = type == X14.SparklineTypeValues.Column ? "column"
+                     : type == X14.SparklineTypeValues.Stacked ? "stacked"
+                     : "line";
+            foreach (var spk in group.Descendants<X14.Sparkline>())
+            {
+                var dataRange = spk.Formula?.Text;
+                var hostCell = spk.ReferenceSequence?.Text;
+                if (string.IsNullOrEmpty(dataRange) || string.IsNullOrEmpty(hostCell)) continue;
+                var values = ReadCellRangeAsDoubles(dataRange);
+                if (values == null || values.Length == 0) continue;
+                // host cell may be a range like "F1:F1" — take the first ref.
+                var host = hostCell.Contains(':') ? hostCell.Split(':')[0] : hostCell;
+                host = host.Contains('!') ? host.Split('!')[1] : host;
+                result[host] = BuildSparklineSvg(values, kind);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Render a sparkline's values as a small inline SVG (~80x20px).</summary>
+    private static string BuildSparklineSvg(double[] values, string kind)
+    {
+        const double w = 80, h = 18;
+        var min = values.Min();
+        var max = values.Max();
+        var range = max - min;
+        if (range == 0) range = 1;
+        // Baseline at zero when data straddles it, else at the value floor.
+        double zeroFloor = Math.Min(min, 0);
+        double zeroRange = Math.Max(max, 0) - zeroFloor;
+        if (zeroRange == 0) zeroRange = 1;
+        var sb = new StringBuilder();
+        sb.Append($"<svg class=\"sparkline\" width=\"{w:0}\" height=\"{h:0}\" viewBox=\"0 0 {w:0} {h:0}\" preserveAspectRatio=\"none\" style=\"vertical-align:middle\">");
+        if (kind == "column" || kind == "stacked")
+        {
+            int n = values.Length;
+            double bw = w / n;
+            for (int i = 0; i < n; i++)
+            {
+                var v = values[i];
+                // bar from the zero line; positive up, negative down.
+                var zeroY = h - (0 - zeroFloor) / zeroRange * h;
+                var valY = h - (v - zeroFloor) / zeroRange * h;
+                var top = Math.Min(zeroY, valY);
+                var bh = Math.Max(1, Math.Abs(valY - zeroY));
+                var color = v < 0 ? "#C0504D" : "#4472C4";
+                sb.Append($"<rect x=\"{i * bw + 0.5:0.#}\" y=\"{top:0.#}\" width=\"{Math.Max(1, bw - 1):0.#}\" height=\"{bh:0.#}\" fill=\"{color}\"/>");
+            }
+        }
+        else
+        {
+            int n = values.Length;
+            var pts = new List<string>();
+            for (int i = 0; i < n; i++)
+            {
+                var x = n > 1 ? (double)i / (n - 1) * w : w / 2;
+                var y = h - (values[i] - min) / range * h;
+                pts.Add($"{x:0.#},{y:0.#}");
+            }
+            sb.Append($"<polyline points=\"{string.Join(" ", pts)}\" fill=\"none\" stroke=\"#4472C4\" stroke-width=\"1\"/>");
+        }
+        sb.Append("</svg>");
+        return sb.ToString();
+    }
+
     private static string GetIconHtml(IconSetValues iconSetName, int bucket, int totalBuckets)
     {
         // Traffic lights: red=0, yellow=1, green=2
@@ -1124,6 +1252,23 @@ public partial class ExcelHandler
                 1 => "<span style=\"color:#FFC000;margin-right:4px;vertical-align:middle\">&#x25B6;</span>",
                 _ => "<span style=\"color:#00B050;margin-right:4px;vertical-align:middle\">&#x25B2;</span>",
             };
+        }
+        // R17b: directional arrow icon sets (4/5 arrows). Native renders
+        // graduated arrows ↓↘→↗↑; previously these fell through to the default
+        // colored circle. Glyphs: ↓ U+2193, ↘ U+2198, → U+2192, ↗ U+2197, ↑ U+2191.
+        if (iconSetName == IconSetValues.FiveArrows || iconSetName == IconSetValues.FiveArrowsGray)
+        {
+            var gray = iconSetName == IconSetValues.FiveArrowsGray;
+            var glyph = bucket switch { 0 => "&#x2193;", 1 => "&#x2198;", 2 => "&#x2192;", 3 => "&#x2197;", _ => "&#x2191;" };
+            var color = gray ? "#808080" : bucket switch { 0 => "#C00000", 1 => "#E08000", 2 => "#FFC000", 3 => "#92D050", _ => "#00B050" };
+            return $"<span style=\"color:{color};margin-right:4px;vertical-align:middle\">{glyph}</span>";
+        }
+        if (iconSetName == IconSetValues.FourArrows || iconSetName == IconSetValues.FourArrowsGray)
+        {
+            var gray = iconSetName == IconSetValues.FourArrowsGray;
+            var glyph = bucket switch { 0 => "&#x2193;", 1 => "&#x2198;", 2 => "&#x2197;", _ => "&#x2191;" };
+            var color = gray ? "#808080" : bucket switch { 0 => "#C00000", 1 => "#E08000", 2 => "#92D050", _ => "#00B050" };
+            return $"<span style=\"color:{color};margin-right:4px;vertical-align:middle\">{glyph}</span>";
         }
         // 4-icon traffic lights
         if (iconSetName == IconSetValues.FourTrafficLights)
@@ -1196,7 +1341,101 @@ public partial class ExcelHandler
             return false;
         }
 
+        if (ruleType == ConditionalFormatValues.Top10 && cellValue.HasValue)
+        {
+            // Top/bottom N (or N%) of the numeric values in the rule's range.
+            // Mirrors Excel: rank=N, percent=true means N% of cells, bottom=true
+            // ranks ascending. A cell matches if it falls within that slice.
+            var nums = CollectCfRangeNumbers(rule, sheetData);
+            if (nums.Count == 0) return false;
+            var rank = (int)(rule.Rank?.Value ?? 10);
+            var bottom = rule.Bottom?.Value == true;
+            var percent = rule.Percent?.Value == true;
+            var count = percent
+                ? (int)Math.Ceiling(nums.Count * (rank / 100.0))
+                : rank;
+            if (count < 1) count = 1;
+            if (count > nums.Count) count = nums.Count;
+            var ordered = bottom
+                ? nums.OrderBy(n => n).ToList()
+                : nums.OrderByDescending(n => n).ToList();
+            // Threshold = the value at the Nth position; include ties (Excel
+            // colors all cells at/beyond the cutoff value, like rank ties).
+            var threshold = ordered[count - 1];
+            return bottom ? cellValue <= threshold : cellValue >= threshold;
+        }
+
+        if (ruleType == ConditionalFormatValues.DuplicateValues || ruleType == ConditionalFormatValues.UniqueValues)
+        {
+            // Color cells whose value appears more than once (duplicateValues)
+            // or exactly once (uniqueValues) within the rule's range. Compare
+            // on the raw cell text so non-numeric values are handled too.
+            var thisText = cell?.CellValue?.Text;
+            if (string.IsNullOrEmpty(thisText)) return false;
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in CollectCfRangeTexts(rule, sheetData))
+                counts[t] = counts.TryGetValue(t, out var c) ? c + 1 : 1;
+            var occurrences = counts.TryGetValue(thisText, out var n) ? n : 0;
+            return ruleType == ConditionalFormatValues.DuplicateValues
+                ? occurrences > 1
+                : occurrences == 1;
+        }
+
         return false;
+    }
+
+    /// <summary>Collect the numeric values of every cell in a CF rule's sqref range.</summary>
+    private List<double> CollectCfRangeNumbers(ConditionalFormattingRule rule, SheetData sheetData)
+    {
+        var result = new List<double>();
+        foreach (var c in CollectCfRangeCells(rule, sheetData))
+        {
+            if (double.TryParse(c.CellValue?.Text, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var v))
+                result.Add(v);
+        }
+        return result;
+    }
+
+    /// <summary>Collect the raw text of every non-empty cell in a CF rule's sqref range.</summary>
+    private List<string> CollectCfRangeTexts(ConditionalFormattingRule rule, SheetData sheetData)
+    {
+        var result = new List<string>();
+        foreach (var c in CollectCfRangeCells(rule, sheetData))
+        {
+            var t = c.CellValue?.Text;
+            if (!string.IsNullOrEmpty(t)) result.Add(t);
+        }
+        return result;
+    }
+
+    /// <summary>Enumerate the cells that exist within a CF rule's sqref range(s).</summary>
+    private IEnumerable<Cell> CollectCfRangeCells(ConditionalFormattingRule rule, SheetData sheetData)
+    {
+        var cf = rule.Parent as ConditionalFormatting;
+        var sqrefs = cf?.SequenceOfReferences?.Items;
+        if (sqrefs == null) yield break;
+        foreach (var sqItem in sqrefs)
+        {
+            var sqref = sqItem?.Value;
+            if (string.IsNullOrEmpty(sqref)) continue;
+            var start = sqref.Contains(':') ? sqref.Split(':')[0] : sqref;
+            var end = sqref.Contains(':') ? sqref.Split(':')[1] : sqref;
+            var (startColName, startRow) = ParseCellReference(start);
+            var (endColName, endRow) = ParseCellReference(end);
+            int c1 = ColumnNameToIndex(startColName), c2 = ColumnNameToIndex(endColName);
+            int r1 = Math.Min(startRow, endRow), r2 = Math.Max(startRow, endRow);
+            int cMin = Math.Min(c1, c2), cMax = Math.Max(c1, c2);
+            foreach (var cell in sheetData.Descendants<Cell>())
+            {
+                var refv = cell.CellReference?.Value;
+                if (string.IsNullOrEmpty(refv)) continue;
+                var (colName, rowNum) = ParseCellReference(refv);
+                var colIdx = ColumnNameToIndex(colName);
+                if (rowNum >= r1 && rowNum <= r2 && colIdx >= cMin && colIdx <= cMax)
+                    yield return cell;
+            }
+        }
     }
 
     /// <summary>Adjust a CF formula's cell references from the anchor cell to the target cell.</summary>
@@ -1389,12 +1628,13 @@ public partial class ExcelHandler
                 styles.Add("text-decoration-style:double");
         }
 
-        // Superscript/Subscript via VerticalTextAlignment
-        var vertAlign = font.GetFirstChild<VerticalTextAlignment>();
-        if (vertAlign?.Val?.Value == VerticalAlignmentRunValues.Superscript)
-            styles.Add("vertical-align:super;font-size:smaller");
-        else if (vertAlign?.Val?.Value == VerticalAlignmentRunValues.Subscript)
-            styles.Add("vertical-align:sub;font-size:smaller");
+        // Superscript/Subscript: handled by wrapping cell content in <sup>/<sub>
+        // (see GetCellVerticalAlign + the <td> content path). vertical-align on a
+        // <td> only controls cell-content block alignment (top/middle/bottom) — it
+        // does NOT raise/lower the baseline of inline text, and the font-size:smaller
+        // it paired with was overwritten by the full font-size:Npt added below.
+        // R10a: emit nothing here; the <sup>/<sub> wrapper provides both the
+        // raised baseline and the size reduction.
 
         if (font.FontSize?.Val?.Value != null)
             styles.Add($"font-size:{font.FontSize.Val.Value:0.##}pt");
@@ -1404,6 +1644,39 @@ public partial class ExcelHandler
 
         var color = ResolveFontColor(font);
         if (color != null) styles.Add($"color:{color}");
+    }
+
+    /// <summary>
+    /// R10a: returns "super" / "sub" / null for a cell's font vertical alignment.
+    /// Used to wrap cell content in a <sup>/<sub> inline element — vertical-align
+    /// on the <td> itself has no baseline-shifting effect on cell content.
+    /// </summary>
+    private static string? GetCellVerticalAlign(Cell? cell, Stylesheet? stylesheet)
+    {
+        if (cell == null || stylesheet?.CellFormats == null || stylesheet.Fonts == null) return null;
+        var styleIndex = cell.StyleIndex?.Value ?? 0;
+        if (styleIndex >= (uint)stylesheet.CellFormats.Elements<CellFormat>().Count()) return null;
+        var xf = stylesheet.CellFormats.Elements<CellFormat>().ElementAt((int)styleIndex);
+        var fontId = xf.FontId?.Value ?? 0;
+        if (fontId >= (uint)stylesheet.Fonts.Elements<Font>().Count()) return null;
+        var font = stylesheet.Fonts.Elements<Font>().ElementAt((int)fontId);
+        var v = font.GetFirstChild<VerticalTextAlignment>()?.Val?.Value;
+        if (v == VerticalAlignmentRunValues.Superscript) return "super";
+        if (v == VerticalAlignmentRunValues.Subscript) return "sub";
+        return null;
+    }
+
+    /// <summary>
+    /// R10a: wrap cell content in a <sup>/<sub> element when the cell font is
+    /// super/subscript. Skipped for rich text (its runs carry their own
+    /// formatting) and when there's no content. <sup>/<sub> give both the
+    /// raised/lowered baseline and the ~0.83em size reduction natively.
+    /// </summary>
+    private static string WrapVerticalAlign(string content, string? vAlign, string? richHtml)
+    {
+        if (vAlign == null || richHtml != null || string.IsNullOrEmpty(content)) return content;
+        var tag = vAlign == "super" ? "sup" : "sub";
+        return $"<{tag}>{content}</{tag}>";
     }
 
     private void BuildFillCss(CellFormat xf, Stylesheet stylesheet, List<string> styles)

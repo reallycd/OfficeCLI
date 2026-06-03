@@ -90,6 +90,13 @@ public partial class PowerPointHandler
             }
             if (pProps?.LeftMargin?.HasValue == true)
                 paraStyles.Add($"padding-left:{Units.EmuToPt(pProps.LeftMargin.Value)}pt");
+            else if ((pProps?.Level?.Value ?? 0) > 0)
+                // R10b: no explicit marL but lvl>0 — approximate the default
+                // lstStyle cascade. PowerPoint's built-in body text styles use
+                // marL ≈ 0.5in (36pt) per indent level; reproduce that so leveled
+                // paragraphs aren't flush-left in the preview. Explicit marL (above)
+                // always wins; this only fills the inherited-default gap.
+                paraStyles.Add($"padding-left:{(pProps!.Level!.Value) * 36}pt");
 
             // RTL paragraph (Arabic / Hebrew). <a:pPr rtl="1"/> reverses
             // character order; emit CSS so the browser does the same. Without

@@ -376,6 +376,10 @@ public partial class PowerPointHandler
             "zigzag" => Drawing.PresetPatternValues.ZigZag,
             "wave" => Drawing.PresetPatternValues.Wave,
             "diagbrick" => Drawing.PresetPatternValues.DiagonalBrick,
+            // R9b: `diagStripe` is a common user-facing alias for a diagonal
+            // stripe; OOXML has no literal "diagStripe" token, so map it to the
+            // closest preset (light upward diagonal stripes).
+            "diagstripe" => Drawing.PresetPatternValues.LightUpwardDiagonal,
             "horzbrick" => Drawing.PresetPatternValues.HorizontalBrick,
             "weave" => Drawing.PresetPatternValues.Weave,
             "plaid" => Drawing.PresetPatternValues.Plaid,

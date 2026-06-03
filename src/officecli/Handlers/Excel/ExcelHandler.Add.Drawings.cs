@@ -858,8 +858,16 @@ public partial class ExcelHandler
 
         // CONSISTENCY(canonical-key): 'location'/'dataRange' are canonical;
         // 'cell'/'range'/'data' retained as legacy aliases.
+        // R12a: also accept the host cell from the parent path tail
+        // (e.g. `add /Sheet1/F1 sparkline --prop dataRange=A1:E1`), mirroring
+        // how cell/cf Add derive their target from the path. Explicit
+        // location=/cell= still wins.
+        var spkPathTail = spkSegments.Length > 1
+            && Regex.IsMatch(spkSegments[1], @"^[A-Z]+\d+$", RegexOptions.IgnoreCase)
+            ? spkSegments[1].ToUpperInvariant() : null;
         var spkCell = properties.GetValueOrDefault("location")
             ?? properties.GetValueOrDefault("cell")
+            ?? spkPathTail
             ?? throw new ArgumentException("Sparkline requires 'location' (or 'cell') property (e.g. F1)");
         var spkRange = properties.GetValueOrDefault("dataRange")
             ?? properties.GetValueOrDefault("datarange")

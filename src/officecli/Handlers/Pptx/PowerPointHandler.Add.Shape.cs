@@ -636,6 +636,17 @@ public partial class PowerPointHandler
                 // Pattern fill (mutually exclusive with fill/gradient — last one wins, following fill/gradient convention)
                 if (properties.TryGetValue("pattern", out var patternVal))
                 {
+                    // R9b: when pattern= is given alongside fill= / background=,
+                    // fold those into the pattFill fg/bg (preset:fg:bg form) so a
+                    // separate fill= SolidFill isn't silently overwritten and lost.
+                    // Explicit colors inside the pattern value (preset:fg:bg) win.
+                    if (!patternVal.Contains(':'))
+                    {
+                        var fgProp = properties.TryGetValue("fill", out var fgv) && !string.IsNullOrWhiteSpace(fgv) ? fgv.Trim() : null;
+                        var bgProp = properties.TryGetValue("background", out var bgv) && !string.IsNullOrWhiteSpace(bgv) ? bgv.Trim() : null;
+                        if (fgProp != null || bgProp != null)
+                            patternVal = $"{patternVal}:{fgProp ?? "000000"}:{bgProp ?? "FFFFFF"}";
+                    }
                     ApplyPatternFill(newShape.ShapeProperties!, patternVal);
                 }
 
