@@ -43,7 +43,71 @@ public partial class PowerPointHandler
                 return $"background:url('{dataUri}') center/cover no-repeat";
         }
 
+        // Pattern fill (a:pattFill) — approximate the preset pattern with a CSS
+        // repeating-linear-gradient using the fg color over the bg color. Native
+        // Office tiles the real preset bitmap; the gradient gives a recognisable
+        // striped/cross texture and, crucially, surfaces the fg color so the
+        // shape no longer renders as plain white. Mirrors the colorScale/dxf
+        // approach of "approximate in CSS, don't leave it blank".
+        var pattFill = spPr.GetFirstChild<Drawing.PatternFill>();
+        if (pattFill != null)
+            return PatternFillToCss(pattFill, themeColors);
+
         return "";
+    }
+
+    /// <summary>
+    /// Convert an a:pattFill to a CSS repeating-linear-gradient approximation.
+    /// fg = the pattern's foreground color (the lines), bg = background color.
+    /// The preset name picks the gradient angle (diagonal / horizontal /
+    /// vertical / grid); unrecognised presets fall back to a diagonal stripe.
+    /// </summary>
+    private static string PatternFillToCss(Drawing.PatternFill pattFill, Dictionary<string, string> themeColors)
+    {
+        var fg = ResolveWrappedColor(pattFill.GetFirstChild<Drawing.ForegroundColor>(), themeColors) ?? "#000000";
+        var bg = ResolveWrappedColor(pattFill.GetFirstChild<Drawing.BackgroundColor>(), themeColors) ?? "#FFFFFF";
+        var preset = pattFill.Preset?.HasValue == true ? pattFill.Preset.InnerText : "diagStripe";
+
+        // Map preset family → gradient angle(s). Diagonal patterns use 45deg,
+        // horizontal use 0deg, vertical 90deg, grid/cross layer both.
+        var p = (preset ?? "").ToLowerInvariant();
+        bool isGrid = p.Contains("grid") || p.Contains("cross") || p.Contains("checker") || p.Contains("weave");
+        bool isHorz = p.Contains("horz");
+        bool isVert = p.Contains("vert");
+        var angle = isHorz ? "0deg" : isVert ? "90deg" : "45deg";
+
+        // 4px band: 2px fg line over 2px bg gap.
+        var stripe = $"repeating-linear-gradient({angle},{fg} 0,{fg} 2px,{bg} 2px,{bg} 4px)";
+        if (isGrid)
+        {
+            // Layer a perpendicular stripe to form a grid; comma-separated
+            // backgrounds stack (first on top).
+            var cross = $"repeating-linear-gradient({(isHorz ? "90deg" : "135deg")},{fg} 0,{fg} 2px,transparent 2px,transparent 4px)";
+            return $"background:{cross},{stripe}";
+        }
+        return $"background:{stripe}";
+    }
+
+    /// <summary>
+    /// Resolve a color from a wrapper element (a:fgClr / a:bgClr) that contains
+    /// a srgbClr or schemeClr child — same resolution as a SolidFill body.
+    /// </summary>
+    private static string? ResolveWrappedColor(OpenXmlCompositeElement? wrapper, Dictionary<string, string> themeColors)
+    {
+        if (wrapper == null) return null;
+
+        var rgb = wrapper.GetFirstChild<Drawing.RgbColorModelHex>()?.Val?.Value;
+        if (rgb != null && rgb.Length >= 6 && rgb[..6].All(char.IsAsciiHexDigit))
+            return $"#{rgb[..6]}";
+
+        var schemeColor = wrapper.GetFirstChild<Drawing.SchemeColor>();
+        if (schemeColor?.Val?.HasValue == true)
+        {
+            var schemeName = schemeColor.Val!.InnerText;
+            if (schemeName != null && themeColors.TryGetValue(schemeName, out var themeHex))
+                return ApplyColorTransforms(themeHex, schemeColor);
+        }
+        return null;
     }
 
     // ==================== CSS Helper: Custom Geometry ====================
