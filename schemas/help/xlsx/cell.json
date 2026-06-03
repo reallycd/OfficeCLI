@@ -156,7 +156,7 @@
     },
     "quotePrefix": {
       "type": "bool",
-      "description": "leading apostrophe quote-prefix flag. Emitted only when set.",
+      "description": "leading apostrophe quote-prefix flag. Emitted only when set. Set it via a leading apostrophe on `value` (Excel's force-text idiom).",
       "add": false, "set": false, "get": true,
       "readback": "true | false",
       "enforcement": "report"
@@ -302,15 +302,13 @@
       "readback": "true|false (true ⇒ either cachedValue or computedValue is available)",
       "enforcement": "report"
     },
-    "alignment.indent":         { "type":"number", "add":false, "set":false, "get":true, "description":"cell alignment indent units (CT_CellAlignment @indent). Use the flat `indent` key on Add/Set.", "readback":"integer indent units", "enforcement":"report" },
-    "alignment.shrinkToFit":    { "type":"bool",   "add":false, "set":false, "get":true, "description":"cell alignment shrinkToFit flag.", "readback":"true|false", "enforcement":"report" },
-    "alignment.textRotation":   { "type":"number", "add":false, "set":false, "get":true, "description":"cell alignment text rotation in degrees (CT_CellAlignment @textRotation).", "readback":"integer degrees", "enforcement":"report" },
-    "font.subscript":           { "type":"bool",   "add":false, "set":false, "get":true, "description":"font vertical-alignment subscript flag (legacy alias of cell-level `subscript`).", "readback":"true|false", "enforcement":"report" },
-    "font.superscript":         { "type":"bool",   "add":false, "set":false, "get":true, "description":"font vertical-alignment superscript flag (legacy alias of cell-level `superscript`).", "readback":"true|false", "enforcement":"report" },
-    "border.diagonal":          { "type":"string", "add":false, "set":false, "get":true, "description":"diagonal border line style (CT_Border/diagonal @style — thin, medium, thick, dashed, etc.).", "readback":"line-style token", "enforcement":"report" },
-    "border.diagonal.color":    { "type":"color",  "add":false, "set":false, "get":true, "description":"diagonal border color.", "readback":"#RRGGBB uppercase", "enforcement":"report" },
-    "border.diagonalDown":      { "type":"bool",   "add":false, "set":false, "get":true, "description":"true when the cell shows a top-left → bottom-right diagonal border.", "readback":"true|false", "enforcement":"report" },
-    "border.diagonalUp":        { "type":"bool",   "add":false, "set":false, "get":true, "description":"true when the cell shows a bottom-left → top-right diagonal border.", "readback":"true|false", "enforcement":"report" },
+    "alignment.indent":         { "type":"number", "add":true, "set":true, "get":true, "description":"cell alignment indent units (CT_CellAlignment @indent). Alias: indent.", "readback":"integer indent units", "enforcement":"report" },
+    "alignment.shrinkToFit":    { "type":"bool",   "add":true, "set":true, "get":true, "description":"shrink text to fit the cell width (CT_CellAlignment @shrinkToFit). Alias: shrink.", "readback":"true|false", "enforcement":"report" },
+    "alignment.textRotation":   { "type":"number", "add":true, "set":true, "get":true, "description":"text rotation in degrees, 0-90 up / 91-180 down, or 255 for vertical stacking (CT_CellAlignment @textRotation). The `rotation` shorthand also works on Set.", "readback":"integer degrees", "enforcement":"report" },
+    "border.diagonal":          { "type":"string", "add":true, "set":true, "get":true, "description":"diagonal border line style (CT_Border/diagonal @style — thin, medium, thick, dashed, etc.). Pair with border.diagonalUp/Down to choose direction.", "readback":"line-style token", "enforcement":"report" },
+    "border.diagonal.color":    { "type":"color",  "add":true, "set":true, "get":true, "requires":["border.diagonal"], "description":"diagonal border color. Requires a border.diagonal line to attach to.", "readback":"#RRGGBB uppercase", "enforcement":"report" },
+    "border.diagonalDown":      { "type":"bool",   "add":true, "set":true, "get":true, "description":"draw a top-left → bottom-right diagonal border.", "readback":"true|false", "enforcement":"report" },
+    "border.diagonalUp":        { "type":"bool",   "add":true, "set":true, "get":true, "description":"draw a bottom-left → top-right diagonal border.", "readback":"true|false", "enforcement":"report" },
     "border":                   { "type":"string", "add":true,  "set":true,  "get":false, "description":"shorthand applying one line style to all four sides (top/bottom/left/right). Equivalent to border.all. Get reads back per-side under border.top/bottom/left/right.", "examples":["--prop border=thin", "--prop border=medium"], "readback":"n/a (read per-side border.top/bottom/left/right)", "enforcement":"report" },
     "border.all":               { "type":"string", "add":true,  "set":true,  "get":false, "description":"line style applied to all four sides (top/bottom/left/right). Values: thin, medium, thick, double, dashed, dotted, none.", "examples":["--prop border.all=thin", "--prop border.all=medium"], "readback":"n/a (read per-side border.top/bottom/left/right)", "enforcement":"report" },
     "border.top":               { "type":"string", "add":true,  "set":true,  "get":true,  "description":"top border line style (thin, medium, thick, double, dashed, dotted, none).", "examples":["--prop border.top=thin"], "readback":"line-style token", "enforcement":"report" },
@@ -322,7 +320,7 @@
     "mergeAnchor":              { "type":"bool",   "add":false, "set":false, "get":true, "description":"true when this cell is the top-left anchor of a merged range. Empty merged-region cells receive mergeAnchor=false; the anchor receives true.", "readback":"true|false", "enforcement":"report" },
     "empty":                    { "type":"bool",   "add":false, "set":false, "get":true, "description":"true when the cell has neither display text nor a formula. Useful for distinguishing styled-but-empty cells from data cells.", "readback":"true|false", "enforcement":"report" },
     "richtext":                 { "type":"bool",   "add":false, "set":false, "get":true, "description":"true when the cell stores rich-text runs (multi-format text). Surfaces alongside `runs` in Get output.", "readback":"true|false", "enforcement":"report" },
-    "subscript":                { "type":"bool",   "add":false, "set":false, "get":true, "description":"cell-level run subscript flag (when cell is rich text with a single run).", "readback":"true|false", "enforcement":"report" },
-    "superscript":              { "type":"bool",   "add":false, "set":false, "get":true, "description":"cell-level run superscript flag (when cell is rich text with a single run).", "readback":"true|false", "enforcement":"report" }
+    "subscript":                { "type":"bool",   "add":true, "set":true, "get":true, "aliases":["font.subscript"], "description":"subscript text (font vertical alignment). Legacy alias: font.subscript.", "readback":"true|false", "enforcement":"report" },
+    "superscript":              { "type":"bool",   "add":true, "set":true, "get":true, "aliases":["font.superscript"], "description":"superscript text (font vertical alignment). Legacy alias: font.superscript.", "readback":"true|false", "enforcement":"report" }
   }
 }
