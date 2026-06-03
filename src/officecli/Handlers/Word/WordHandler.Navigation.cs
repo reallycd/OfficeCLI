@@ -2333,7 +2333,7 @@ public partial class WordHandler
         // Column widths from grid
         var gridCols = table.GetFirstChild<TableGrid>()?.Elements<GridColumn>().ToList();
         if (gridCols != null && gridCols.Count > 0)
-            node.Format["colWidths"] = string.Join(",", gridCols.Select(g => g.Width?.Value ?? "0"));
+            node.Format["colWidths"] = string.Join(",", gridCols.Select(g => (g.Width?.Value ?? "0") + "dxa"));
 
         if (depth > 0)
         {

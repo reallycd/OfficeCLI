@@ -973,7 +973,7 @@ public partial class WordHandler
         foreach (var (key, value) in properties)
         {
             var k = key.ToLowerInvariant();
-            if (ApplyParagraphLevelProperty(pProps, key, value, unsupported))
+            if (ApplyParagraphLevelProperty(pProps, key, value, LastSetWarnings))
             {
                 // CONSISTENCY(rtl-cascade): direction toggle stamps the full
                 // bidi+markRPr+runs cascade. See WordHandler.I18n.cs.
@@ -1083,7 +1083,7 @@ public partial class WordHandler
                     }
                     break;
                 }
-                case "size" or "font" or "bold" or "italic" or "color" or "highlight" or "underline" or "strike"
+                case "size" or "fontsize" or "font" or "bold" or "italic" or "color" or "highlight" or "underline" or "strike"
                   or "underline.color" or "underlinecolor" or "underlineColor" or "font.underline.color"
                   or "font.latin" or "font.ascii" or "font.hansi" or "font.hAnsi"
                   or "font.ea" or "font.eastasia" or "font.eastasian"
@@ -1323,6 +1323,7 @@ public partial class WordHandler
                     break;
                 case "font":
                 case "size":
+                case "fontsize":
                 case "bold":
                 case "italic":
                 case "color":

@@ -14,6 +14,7 @@ public partial class WordHandler
     public List<string> Set(string path, Dictionary<string, string> properties)
     {
         Modified = true;
+        LastSetWarnings = new List<string>();
         var unsupported = new List<string>();
 
         // Bare `revision=` key was retired when the namespace split into
@@ -574,7 +575,7 @@ public partial class WordHandler
                 // canonical and alias forms, so they are listed here for the
                 // header/footer route to reach it (mirrors body-paragraph Set
                 // dispatch in Set.Element.cs).
-                case "size" or "font" or "bold" or "italic" or "color" or "highlight" or "underline" or "strike"
+                case "size" or "fontsize" or "font" or "bold" or "italic" or "color" or "highlight" or "underline" or "strike"
                   or "font.latin" or "font.ea" or "font.eastasia" or "font.eastasian"
                   or "font.cs" or "font.complexscript" or "font.complex"
                   or "bold.cs" or "italic.cs" or "size.cs"
@@ -1430,6 +1431,11 @@ public partial class WordHandler
                 throw new ArgumentException($"length must be non-negative, got {num}pt.");
             return (uint)Math.Round(num * 20);
         }
+        // BUG-R2b: accept the "dxa" suffix that Get now emits for colWidths/width
+        // so a dxa-qualified value round-trips back through Set. dxa is the OOXML
+        // twip unit, so it strips to a bare integer (no scaling).
+        if (value.EndsWith("dxa", StringComparison.OrdinalIgnoreCase))
+            return ParseHelpers.SafeParseUint(value[..^3], "twips");
         return ParseHelpers.SafeParseUint(value, "twips");
     }
 }

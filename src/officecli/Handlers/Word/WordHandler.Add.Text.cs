@@ -752,7 +752,9 @@ public partial class WordHandler
                 else if (IsExplicitFalseAddOverride(pSmallCaps))
                     rProps.SmallCaps = new SmallCaps { Val = OnOffValue.FromBoolean(false) };
             }
-            if (properties.TryGetValue("dstrike", out var pDstrike))
+            if (properties.TryGetValue("dstrike", out var pDstrike)
+                || properties.TryGetValue("doublestrike", out pDstrike)
+                || properties.TryGetValue("doubleStrike", out pDstrike))
             {
                 if (IsTruthy(pDstrike)) rProps.DoubleStrike = new DoubleStrike();
                 else if (IsExplicitFalseAddOverride(pDstrike))
@@ -1601,7 +1603,9 @@ public partial class WordHandler
             else if (IsExplicitFalseAddOverride(rSmallCaps))
                 newRProps.SmallCaps = new SmallCaps { Val = OnOffValue.FromBoolean(false) };
         }
-        if (properties.TryGetValue("dstrike", out var rDstrike))
+        if (properties.TryGetValue("dstrike", out var rDstrike)
+            || properties.TryGetValue("doublestrike", out rDstrike)
+            || properties.TryGetValue("doubleStrike", out rDstrike))
         {
             if (IsTruthy(rDstrike)) newRProps.DoubleStrike = new DoubleStrike();
             else if (IsExplicitFalseAddOverride(rDstrike))

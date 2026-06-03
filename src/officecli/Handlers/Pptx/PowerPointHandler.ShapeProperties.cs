@@ -1399,7 +1399,7 @@ public partial class PowerPointHandler
                     break;
                 }
 
-                case "x" or "y" or "width" or "height":
+                case "x" or "y" or "left" or "top" or "width" or "height":
                 {
                     var spPr = shape.ShapeProperties;
                     if (spPr == null) { unsupported.Add(key); break; }

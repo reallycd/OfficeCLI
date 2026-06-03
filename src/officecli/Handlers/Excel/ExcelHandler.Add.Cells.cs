@@ -305,6 +305,23 @@ public partial class ExcelHandler
                 rowIndexFromPath = uint.Parse(rowPathMatch.Groups[1].Value);
         }
 
+        // BUG-R2: an unrecognized parent path tail (e.g. r[2], foo[2], xyz[5])
+        // matched none of the three accepted forms above (bare cell-ref,
+        // cell[<ref>], row[N]), leaving both cellRefFromPath and rowIndexFromPath
+        // null. The auto-assign branch below then silently snapped to row 1,
+        // misplacing data without warning. Reject it instead. (Bare /Sheet1 with
+        // cellSegments.Length == 1 is unaffected — that's a legitimate
+        // auto-append target.) No r[N] alias is added: Get/Query don't support
+        // r[N], so accepting it on Add would break Add/Get symmetry.
+        if (cellSegments.Length > 1
+            && cellRefFromPath == null
+            && rowIndexFromPath == null)
+        {
+            throw new ArgumentException(
+                $"Unrecognized cell parent path segment '{cellSegments[1]}'. " +
+                $"Expected a cell reference (e.g. A2), cell[A2], or row[N].");
+        }
+
         string cellRef;
         // BUG-R36-B1: when --prop arrayformula= is supplied with --prop ref=A1:C3,
         // the range is the spill region, not a single cell address. Detect it and

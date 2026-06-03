@@ -125,12 +125,22 @@ public partial class WordHandler
             colWidthArr = new int[parts.Length];
             for (int ci = 0; ci < parts.Length; ci++)
             {
-                if (!int.TryParse(parts[ci].Trim(), out colWidthArr[ci]))
-                    throw new ArgumentException($"Invalid 'colwidths' value: '{parts[ci].Trim()}'. Each column width must be a positive integer (in twips). Example: colwidths=3000,2000,5000");
+                var part = parts[ci].Trim();
+                // BUG-R2b: accept the unit-qualified forms Get now emits
+                // (dxa suffix) as well as cm/in/pt, so a colWidths value read
+                // from Get round-trips back through Add. ParseTwips handles all
+                // four units and bare twips; mirror the Set colWidths path.
+                uint parsedTwips;
+                try { parsedTwips = ParseTwips(part); }
+                catch (ArgumentException)
+                {
+                    throw new ArgumentException($"Invalid 'colwidths' value: '{part}'. Each column width must be a positive integer (in twips). Example: colwidths=3000,2000,5000");
+                }
+                colWidthArr[ci] = (int)parsedTwips;
                 // BUG-R1-01: reject negative or zero up front (Set already
                 // does this; Add did not). Invalid OOXML otherwise.
                 if (colWidthArr[ci] <= 0)
-                    throw new ArgumentException($"Invalid 'colwidths' value: '{parts[ci].Trim()}'. Each column width must be a positive integer (in twips). Example: colwidths=3000,2000,5000");
+                    throw new ArgumentException($"Invalid 'colwidths' value: '{part}'. Each column width must be a positive integer (in twips). Example: colwidths=3000,2000,5000");
             }
         }
 

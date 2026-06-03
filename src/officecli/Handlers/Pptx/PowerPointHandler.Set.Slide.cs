@@ -420,6 +420,16 @@ public partial class PowerPointHandler
                         $"`set /slide[{slideIdx}]/shape[N]/text/p[M] --prop direction={value}` " +
                         "or set on the txBody bodyPr by setting `direction` on the shape itself.");
                 }
+                case "name":
+                {
+                    var csd = slide2.CommonSlideData;
+                    if (csd != null)
+                    {
+                        XmlTextValidator.ValidateOrThrow(value, "name");
+                        csd.Name = value;
+                    }
+                    break;
+                }
                 case "layout":
                 {
                     // Change slide layout. Route through the single resolver so

@@ -222,7 +222,7 @@ public partial class PowerPointHandler
         {
             switch (key.ToLowerInvariant())
             {
-                case "x" or "y" or "width" or "height":
+                case "x" or "y" or "left" or "top" or "width" or "height":
                 {
                     var xfrm = gf.Transform ?? (gf.Transform = new Transform());
                     TryApplyPositionSize(key.ToLowerInvariant(), value,

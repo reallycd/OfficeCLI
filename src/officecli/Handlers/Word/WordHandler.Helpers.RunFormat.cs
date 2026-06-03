@@ -516,6 +516,7 @@ public partial class WordHandler
         switch (key.ToLowerInvariant())
         {
             case "size":
+            case "fontsize":
             case "font.size":
                 var existingFs = props.GetFirstChild<FontSize>();
                 if (existingFs != null) existingFs.Val = ((int)Math.Round(ParseFontSize(value) * 2, MidpointRounding.AwayFromZero)).ToString();

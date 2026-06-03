@@ -481,13 +481,13 @@ public partial class PowerPointHandler
                         }
                     }
                     break;
-                case "x" or "y" or "width" or "height":
+                case "x" or "y" or "left" or "top" or "width" or "height":
                 {
                     var grpSpPr = grp.GroupShapeProperties ?? (grp.GroupShapeProperties = new GroupShapeProperties());
                     var xfrm = grpSpPr.TransformGroup ?? (grpSpPr.TransformGroup = new Drawing.TransformGroup());
                     var off = xfrm.Offset ?? (xfrm.Offset = new Drawing.Offset());
                     var ext = xfrm.Extents ?? (xfrm.Extents = new Drawing.Extents());
-                    var keyLower = key.ToLowerInvariant();
+                    var keyLower = key.ToLowerInvariant() switch { "left" => "x", "top" => "y", var k => k };
                     // CONSISTENCY(group-scale-baseline): group scaling needs <a:chOff>/<a:chExt>
                     // as a child-coordinate baseline. Before we mutate ext/off, snapshot the
                     // current ext/off into chExt/chOff if they aren't already present — that
@@ -570,7 +570,7 @@ public partial class PowerPointHandler
                         nvCxnPr.Name = value;
                     }
                     break;
-                case "x" or "y" or "width" or "height":
+                case "x" or "y" or "left" or "top" or "width" or "height":
                 {
                     var spPr = cxn.ShapeProperties ?? (cxn.ShapeProperties = new ShapeProperties());
                     var xfrm = spPr.Transform2D ?? (spPr.Transform2D = new Drawing.Transform2D());

@@ -69,7 +69,7 @@ public partial class PowerPointHandler
         {
             foreach (var (key, value) in properties)
             {
-                if (key.ToLowerInvariant() is "x" or "y" or "width" or "height" or "name")
+                if (key.ToLowerInvariant() is "x" or "y" or "left" or "top" or "width" or "height" or "name")
                 {
                     if (!gfProps.ContainsKey(key)) gfProps[key] = value;
                 }
@@ -85,7 +85,7 @@ public partial class PowerPointHandler
         {
             switch (key.ToLowerInvariant())
             {
-                case "x" or "y" or "width" or "height":
+                case "x" or "y" or "left" or "top" or "width" or "height":
                 {
                     var xfrm = chartGf.Transform ?? (chartGf.Transform = new Transform());
                     TryApplyPositionSize(key.ToLowerInvariant(), value,

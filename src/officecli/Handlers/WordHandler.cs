@@ -43,6 +43,14 @@ public partial class WordHandler : IDocumentHandler
     public List<string> LastAddWarnings { get; internal set; } = new();
 
     /// <summary>
+    /// Advisory warnings from the most recent Set() call (e.g. unknown
+    /// style id referenced as-is). Surfaced to the CLI layer as stderr
+    /// WARNING lines, non-fatal — kept out of the unsupported-prop list so
+    /// the write still counts as applied. Reset at the start of each Set.
+    /// </summary>
+    public List<string> LastSetWarnings { get; internal set; } = new();
+
+    /// <summary>
     /// Set true by Add/Set/Remove/RawSet, consumed by Save/Dispose to decide
     /// whether to stamp <c>docProps/custom.xml</c> with an OfficeCLI audit
     /// trail. Pure Get/Query sessions leave this false and never touch the

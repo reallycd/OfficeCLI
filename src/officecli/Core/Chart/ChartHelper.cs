@@ -328,7 +328,20 @@ internal static partial class ChartHelper
             var hasBubbleSize = properties.TryGetValue($"series{i}.bubbleSize", out var bsStr);
             var hasBubbleSizeRef = properties.ContainsKey($"series{i}.bubbleSizeRef");
 
-            if (!hasName && !hasValues && !hasCats && !hasBubbleSize && !hasBubbleSizeRef) continue;
+            // CONSISTENCY(chart-series-rangeref): legacy `series{N}=Sheet1!B2:B3`
+            // range-ref form mirrors `series{N}.values=<range>`. ParseSeriesData
+            // emits an empty literal placeholder for it (line 289); pick the range
+            // up here as a ValuesRef so the series gets a numRef, not a blank val.
+            string? legacyRangeRef = null;
+            if (!hasValues
+                && properties.TryGetValue($"series{i}", out var legacyStr)
+                && !string.IsNullOrEmpty(legacyStr)
+                && IsRangeReference(legacyStr))
+            {
+                legacyRangeRef = legacyStr;
+            }
+
+            if (!hasName && !hasValues && !hasCats && !hasBubbleSize && !hasBubbleSizeRef && legacyRangeRef == null) continue;
 
             var info = new SeriesInfo { Name = nameStr ?? $"Series {i}" };
 
@@ -338,6 +351,10 @@ internal static partial class ChartHelper
                     info.ValuesRef = NormalizeRangeReference(valuesStr);
                 else
                     info.Values = ParseSeriesValues(valuesStr, info.Name);
+            }
+            else if (legacyRangeRef != null)
+            {
+                info.ValuesRef = NormalizeRangeReference(legacyRangeRef);
             }
 
             if (!string.IsNullOrEmpty(catsStr))

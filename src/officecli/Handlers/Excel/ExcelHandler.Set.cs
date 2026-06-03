@@ -2818,7 +2818,7 @@ public partial class ExcelHandler
         {
             switch (key.ToLowerInvariant())
             {
-                case "height":
+                case "height" or "rowheight":
                     row.Height = ParseRowHeightPoints(value);
                     row.CustomHeight = true;
                     break;

@@ -1608,6 +1608,11 @@ public class ResidentServer : IDisposable
                 Suggestion = "Increase shape height/width, reduce font size, or shorten text"
             });
         }
+        if (_handler is WordHandler setWhWarn)
+        {
+            foreach (var w in setWhWarn.LastSetWarnings)
+                warnings.Add(new OfficeCli.Core.CliWarning { Message = w, Code = "advisory" });
+        }
 
         if (req.Json)
         {
@@ -1623,6 +1628,11 @@ public class ResidentServer : IDisposable
                 Console.Error.WriteLine($"WARNING: find pattern matched 0 occurrences at {path}");
             if (overflow != null)
                 Console.Error.WriteLine($"  WARNING: {overflow}");
+            if (_handler is WordHandler setWhWarnPlain)
+            {
+                foreach (var w in setWhWarnPlain.LastSetWarnings)
+                    Console.Error.WriteLine($"  WARNING: {w}");
+            }
         }
 
         if (unsupported.Count > 0)
@@ -1637,9 +1647,20 @@ public class ResidentServer : IDisposable
             }
             else
             {
-                Console.Error.WriteLine($"UNSUPPORTED props (use raw-set instead): {string.Join(", ", unsupported)}");
+                Console.Error.WriteLine(FormatUnsupportedLine(unsupported));
             }
         }
+    }
+
+    // When the handler already attached a parenthetical hint naming the valid
+    // alternative props (e.g. "fill (valid slide props: background, ...)"), the
+    // generic "use raw-set instead" prefix misdirects the user away from the
+    // real fix. Drop the prefix in that case and let the handler hint stand.
+    private static string FormatUnsupportedLine(List<string> unsupported)
+    {
+        bool hasNamedAlternative = unsupported.Any(u => u.Contains("(valid ", StringComparison.Ordinal));
+        var prefix = hasNamedAlternative ? "UNSUPPORTED props" : "UNSUPPORTED props (use raw-set instead)";
+        return $"{prefix}: {string.Join(", ", unsupported)}";
     }
 
     private void ExecuteAdd(ResidentRequest req)
@@ -1687,7 +1708,7 @@ public class ResidentServer : IDisposable
                 }
                 else
                 {
-                    Console.Error.WriteLine($"UNSUPPORTED props (use raw-set instead): {string.Join(", ", allUnsupported)}");
+                    Console.Error.WriteLine(FormatUnsupportedLine(allUnsupported));
                 }
             }
         }

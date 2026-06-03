@@ -41,7 +41,7 @@ public partial class PowerPointHandler
                     var nvPicPr = pic.NonVisualPictureProperties?.NonVisualDrawingProperties;
                     if (nvPicPr != null) nvPicPr.Description = value;
                     break;
-                case "x" or "y" or "width" or "height":
+                case "x" or "y" or "left" or "top" or "width" or "height":
                 {
                     var spPr = pic.ShapeProperties ?? (pic.ShapeProperties = new ShapeProperties());
                     var xfrm = spPr.Transform2D ?? (spPr.Transform2D = new Drawing.Transform2D());
@@ -507,7 +507,7 @@ public partial class PowerPointHandler
                 case "transitiondur":
                     zmPr?.SetAttribute(new OpenXmlAttribute("", "transitionDur", null!, value));
                     break;
-                case "x" or "y" or "width" or "height":
+                case "x" or "y" or "left" or "top" or "width" or "height":
                 {
                     var emu = ParseEmu(value);
                     // Update graphicFrame xfrm
@@ -630,7 +630,7 @@ public partial class PowerPointHandler
         {
             switch (key.ToLowerInvariant())
             {
-                case "x" or "y" or "width" or "height":
+                case "x" or "y" or "left" or "top" or "width" or "height":
                 {
                     var emu = ParseEmu(value);
                     // Update xfrm (graphicFrame level or spPr level)
@@ -828,7 +828,7 @@ public partial class PowerPointHandler
                     oleEl.ShowAsIcon = oleDisp != "content";
                     break;
                 }
-                case "x" or "y" or "width" or "height":
+                case "x" or "y" or "left" or "top" or "width" or "height":
                 {
                     var xfrm = oleFrame.Transform ?? (oleFrame.Transform = new Transform());
                     var off = xfrm.Offset ?? (xfrm.Offset = new Drawing.Offset { X = 0, Y = 0 });
@@ -990,7 +990,7 @@ public partial class PowerPointHandler
                     }
                     break;
                 }
-                case "x" or "y" or "width" or "height":
+                case "x" or "y" or "left" or "top" or "width" or "height":
                 {
                     var spPr = pic.ShapeProperties ?? (pic.ShapeProperties = new ShapeProperties());
                     var xfrm = spPr.Transform2D ?? (spPr.Transform2D = new Drawing.Transform2D());

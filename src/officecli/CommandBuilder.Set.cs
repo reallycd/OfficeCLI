@@ -358,6 +358,11 @@ static partial class CommandBuilder
                         Suggestion = "Increase shape height/width, reduce font size, or shorten text"
                     });
                 }
+                if (handler is OfficeCli.Handlers.WordHandler setWhWarn)
+                {
+                    foreach (var w in setWhWarn.LastSetWarnings)
+                        allWarnings.Add(new OfficeCli.Core.CliWarning { Message = w, Code = "advisory" });
+                }
                 var outputMsg = setSpatialLine != null ? $"{message}\n  {setSpatialLine}" : message;
                 bool allFailed = applied.Count == 0 && (stillUnsupported.Count > 0 || unsupported.Count > 0);
                 Console.WriteLine(allFailed
@@ -379,6 +384,11 @@ static partial class CommandBuilder
                     Console.Error.WriteLine($"  WARNING: {setOverflowPlain}");
                 if (stillUnsupported.Count > 0)
                     Console.Error.WriteLine(FormatUnsupported(stillUnsupported, suggestionScope));
+                if (handler is OfficeCli.Handlers.WordHandler setWhWarnPlain)
+                {
+                    foreach (var w in setWhWarnPlain.LastSetWarnings)
+                        Console.Error.WriteLine($"  WARNING: {w}");
+                }
             }
             NotifyWatch(handler, file.FullName, path);
 

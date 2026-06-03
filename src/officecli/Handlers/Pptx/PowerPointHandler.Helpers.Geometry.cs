@@ -222,6 +222,10 @@ public partial class PowerPointHandler
     /// </summary>
     private static bool TryApplyPositionSize(string key, string value, Drawing.Offset offset, Drawing.Extents extents)
     {
+        // CONSISTENCY(geometry-aliases): left/top mirror x/y, matching Add
+        // (Add.Shape.cs accepts left→x, top→y). The 10 PPTX Set geometry
+        // switches gate on these aliases too; this canonicalizes the sink.
+        key = key switch { "left" => "x", "top" => "y", _ => key };
         var emu = ParseEmu(value);
         // Unified bounds check for every EMU-valued geometry field.
         // ECMA-376 a:off uses ST_Coordinate (signed long) and a:ext uses
