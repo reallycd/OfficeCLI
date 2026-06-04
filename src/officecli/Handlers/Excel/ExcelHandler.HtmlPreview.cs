@@ -1523,6 +1523,14 @@ public partial class ExcelHandler
         var (anchorColName, anchorRow) = ParseCellReference(anchorRef);
         var anchorCol = ColumnNameToIndex(anchorColName);
 
+        // Argless ROW()/COLUMN() in a CF formula refer to the current cell.
+        // The evaluator dereferences a bare single-cell ref to its value before
+        // ROW()/COLUMN() can read the ref's origin, so substitute the resolved
+        // row/column index directly (this also sidesteps the ref-delta shift
+        // below, since a bare integer carries no A1-style reference).
+        formula = Regex.Replace(formula, @"\bROW\s*\(\s*\)", targetRow.ToString(), RegexOptions.IgnoreCase);
+        formula = Regex.Replace(formula, @"\bCOLUMN\s*\(\s*\)", targetCol.ToString(), RegexOptions.IgnoreCase);
+
         var rowDelta = targetRow - anchorRow;
         var colDelta = targetCol - anchorCol;
         if (rowDelta == 0 && colDelta == 0) return formula;

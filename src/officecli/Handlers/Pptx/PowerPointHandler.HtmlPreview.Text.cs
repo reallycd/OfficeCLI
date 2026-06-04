@@ -459,9 +459,16 @@ public partial class PowerPointHandler
             if (!hasExplicitUnderline) styles.Add("text-decoration:underline");
         }
 
+        // Tab chars (literal U+0009 inside <a:t>, the form the Add path writes)
+        // would collapse to a single space in HTML. Replace each with an
+        // inline-block spacer so tab-separated columns keep visible spacing,
+        // matching how PowerPoint advances to the next tab stop.
+        string encoded = HtmlEncode(text).Replace("\t",
+            "<span class=\"tab-spacer\" style=\"display:inline-block;width:0.5in\"></span>");
+
         string inner = styles.Count > 0
-            ? $"<span style=\"{string.Join(";", styles)}\">{HtmlEncode(text)}</span>"
-            : HtmlEncode(text);
+            ? $"<span style=\"{string.Join(";", styles)}\">{encoded}</span>"
+            : encoded;
 
         if (!string.IsNullOrEmpty(hyperlinkUrl))
         {
