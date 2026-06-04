@@ -27,6 +27,26 @@ public partial class WordHandler
 
     // ==================== Paragraph Content ====================
 
+    /// <summary>
+    /// True when the paragraph's tab stops include a leader (dot/hyphen/…)
+    /// AND the paragraph contains a &lt;w:tab&gt;. Such paragraphs need a flex
+    /// container (has-leader-tab) so the .dot-leader span's flex:1 can grow
+    /// — the &lt;w:tab&gt; path otherwise renders a plain non-flex &lt;p&gt;.
+    /// </summary>
+    private bool ParagraphHasLeaderTab(Paragraph para)
+    {
+        if (!para.Descendants<TabChar>().Any()) return false;
+        var tabs = para.ParagraphProperties?.Tabs?.Elements<TabStop>();
+        if (tabs == null || !tabs.Any())
+        {
+            var tsId = para.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
+            if (tsId != null) tabs = ResolveTabStopsFromStyle(tsId);
+        }
+        return tabs?.Any(t =>
+            t.Leader?.InnerText is "dot" or "hyphen" or "underscore"
+            or "middleDot" or "dash" or "heavy") == true;
+    }
+
     private void RenderParagraphHtml(StringBuilder sb, Paragraph para)
     {
         // Use <div> instead of <p> when paragraph contains block-level elements (text boxes, charts, shapes)
@@ -44,6 +64,8 @@ public partial class WordHandler
         // affecting paragraphs that don't need it.
         if (para.Descendants<PositionalTab>().Any())
             classes.Add("has-ptab");
+        if (ParagraphHasLeaderTab(para))
+            classes.Add("has-leader-tab");
         if (classes.Count > 0)
             sb.Append($" class=\"{string.Join(" ", classes)}\"");
         var pStyle = GetParagraphInlineCss(para);
@@ -353,9 +375,21 @@ public partial class WordHandler
                 // Dot/hyphen/underscore/middleDot all fill the gap between
                 // the current inline position and the right edge of the
                 // content box via a flex-grow spacer.
-                var rightLeaderTab = tabs?.FirstOrDefault(t =>
-                    t.Val?.InnerText == "right"
-                    && t.Leader?.InnerText is "dot" or "hyphen" or "underscore" or "middleDot" or "dash" or "heavy");
+                // BUG(multi-tab-leader): this must fire only when the CURRENT
+                // tab stop (at CurrentParagraphTabIndex) is itself the
+                // right+leader stop — not merely because the paragraph
+                // contains one somewhere. Otherwise a leading center tab
+                // (tabIdx 0) in a "center, right:dot" paragraph is wrongly
+                // turned into a dot-leader and the center positioning is lost.
+                var leaderOrderedStops = tabs?
+                    .Where(t => t.Val?.InnerText != "clear" && t.Position?.HasValue == true)
+                    .OrderBy(t => t.Position!.Value).ToList();
+                int curTabIdx = _ctx.CurrentParagraphTabIndex;
+                var curStop = (leaderOrderedStops != null && curTabIdx < leaderOrderedStops.Count)
+                    ? leaderOrderedStops[curTabIdx] : null;
+                var rightLeaderTab = (curStop?.Val?.InnerText == "right"
+                    && curStop.Leader?.InnerText is "dot" or "hyphen" or "underscore" or "middleDot" or "dash" or "heavy")
+                    ? curStop : null;
                 if (rightLeaderTab != null)
                 {
                     if (needsSpan) { sb.Append("</span>"); needsSpan = false; }
@@ -367,6 +401,13 @@ public partial class WordHandler
                         _ => "dot-leader",
                     };
                     sb.Append($"<span class=\"{leaderClass}\"></span>");
+                    // Advance segment tracking so a following tab (rare for a
+                    // right-leader, but keeps multi-tab bookkeeping correct)
+                    // measures from here, and reopen the run style span if any.
+                    _ctx.CurrentParagraphTabSegmentStart = sb.Length;
+                    _ctx.CurrentParagraphTabIndex++;
+                    if (!string.IsNullOrEmpty(style) && !_ctx.LineBreakEnabled)
+                    { sb.Append($"<span style=\"{style}\">"); needsSpan = true; }
                 }
                 else
                 {

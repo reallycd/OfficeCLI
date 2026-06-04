@@ -2588,6 +2588,10 @@ public partial class WordHandler
            ptabs becomes a flex container so .ptab-spacer (and the leader
            variants above) can flex-grow to push siblings apart. */
         p.has-ptab, div.has-ptab {{ display: flex; align-items: baseline; flex-wrap: wrap; }}
+        /* TOC-style <w:tab> paragraphs (center/right tab + dot leader): need a
+           flex container so the .dot-leader span (flex:1) stretches and the
+           trailing page-number segment lands at the right edge. */
+        p.has-leader-tab, div.has-leader-tab {{ display: flex; align-items: baseline; }}
         .ptab-spacer {{ flex: 1; min-width: 1em; }}
         ul, ol {{ padding-left: 2em; margin: 0; }}
         ul {{ list-style-type: disc; }}

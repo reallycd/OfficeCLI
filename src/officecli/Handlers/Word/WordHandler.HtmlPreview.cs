@@ -317,21 +317,10 @@ public partial class WordHandler
         // original behavior.
         var firstSection = CollectSections(body).FirstOrDefault()
             ?? _doc.MainDocumentPart?.Document?.Body?.GetFirstChild<SectionProperties>();
-        var sectCols = firstSection?.GetFirstChild<Columns>();
-        var colCount = sectCols?.ColumnCount?.Value ?? 1;
-        var colSep = sectCols?.Separator?.Value == true;
-        var colSpacing = sectCols?.Space?.Value;
         // CSS columns need a bounded height to balance — min-height alone
         // leaves the body unbounded so all content stacks in column 1 and
         // overflows the page. Use the doc-level pgLayout body height.
         var colBodyHeightPt = pgLayout.HeightPt - pgLayout.MarginTopPt - pgLayout.MarginBottomPt;
-        var colBodyStyle = colCount > 1
-            ? $" style=\"column-count:{colCount}"
-                + $";height:{colBodyHeightPt.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}pt"
-                + (colSep ? ";column-rule:1px solid #000" : "")
-                + (int.TryParse(colSpacing, out var csp) && csp > 0 ? $";column-gap:{csp / 20.0:0.##}pt" : "")
-                + "\""
-            : "";
 
         // Per-section page layout (#7a00): each page carries one or more
         // <!--SECT:N--> markers inserted by RenderBodyHtml. The last marker
@@ -435,6 +424,14 @@ public partial class WordHandler
             sb.Append(perPageHeaderTemplate
                 .Replace("<!--PAGE_NUM-->", hdrPageNumStr)
                 .Replace("<!--NUM_PAGES-->", pageList.Count.ToString()));
+            // BUG(multi-section-cols): column style must come from the section
+            // active on THIS page, not section 1. Earlier this used a single
+            // pre-loop colBodyStyle from firstSection, so every page inherited
+            // section 1's column count.
+            var colSectionForPage = (activeSectionIdx >= 0 && activeSectionIdx < sections.Count)
+                ? sections[activeSectionIdx]
+                : firstSection;
+            var colBodyStyle = BuildColBodyStyle(colSectionForPage, colBodyHeightPt);
             sb.Append($"<div class=\"page-body\"{colBodyStyle}>");
             sb.Append(pageList[i]);
             // Place footnotes on the page that contains the footnote reference
@@ -1091,6 +1088,26 @@ public partial class WordHandler
     {
         try { return (double)(read() ?? (int)fallback); }
         catch { return fallback; }
+    }
+
+    /// <summary>
+    /// Per-section column style for the page-body div. Sections with no
+    /// &lt;w:cols&gt; (or 1 column) → empty (single column). Computed per page
+    /// from the active section so later sections don't inherit section 1's
+    /// column count.
+    /// </summary>
+    private static string BuildColBodyStyle(SectionProperties? section, double colBodyHeightPt)
+    {
+        var sectCols = section?.GetFirstChild<Columns>();
+        var colCount = sectCols?.ColumnCount?.Value ?? 1;
+        if (colCount <= 1) return "";
+        var colSep = sectCols?.Separator?.Value == true;
+        var colSpacing = sectCols?.Space?.Value;
+        return $" style=\"column-count:{colCount}"
+            + $";height:{colBodyHeightPt.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}pt"
+            + (colSep ? ";column-rule:1px solid #000" : "")
+            + (int.TryParse(colSpacing, out var csp) && csp > 0 ? $";column-gap:{csp / 20.0:0.##}pt" : "")
+            + "\"";
     }
 
     private static PageLayout GetPageLayoutFor(SectionProperties? sectPr)
@@ -2173,6 +2190,8 @@ public partial class WordHandler
                     // the class added in Round 2).
                     if (para.Descendants<PositionalTab>().Any())
                         classNames.Add("has-ptab");
+                    if (ParagraphHasLeaderTab(para))
+                        classNames.Add("has-leader-tab");
                     if (classNames.Count > 0)
                         sb.Append($" class=\"{string.Join(" ", classNames)}\"");
                     var pStyle = GetParagraphInlineCss(para);
