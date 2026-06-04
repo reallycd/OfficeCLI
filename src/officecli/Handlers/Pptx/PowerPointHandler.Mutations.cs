@@ -841,6 +841,12 @@ public partial class PowerPointHandler
             shapeBeforeAnchor = anchor;
         }
 
+        // Self-move guard: moving a shape after/before itself is a no-op.
+        // Removing first detaches srcElement, then InsertAfterSelf/InsertBeforeSelf
+        // throws "parent is null" and the shape is lost (data loss).
+        if (ReferenceEquals(shapeAfterAnchor, srcElement) || ReferenceEquals(shapeBeforeAnchor, srcElement))
+            return ComputeElementPath(effectiveParentPath, srcElement, tgtShapeTree);
+
         srcElement.Remove();
 
         if (shapeAfterAnchor != null)

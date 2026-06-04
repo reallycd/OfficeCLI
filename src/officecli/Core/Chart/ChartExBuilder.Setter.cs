@@ -411,6 +411,37 @@ internal static partial class ChartExBuilder
                 return true;
             }
 
+            // CONSISTENCY(chart-datalabels-toggle): same prop names as regular
+            // cChart (ChartHelper.Setter.cs:2208). cx charts express label
+            // components via CX.DataLabelVisibilities attributes (Value /
+            // CategoryName). Silent no-op if a series has no dataLabels block
+            // (use `datalabels=true` first), same as the datalabels.numfmt case.
+            case "datalabels.showvalue" or "datalabels.showval"
+                or "showvalue" or "showval":
+            {
+                var show = ParseHelpers.IsTruthy(value);
+                foreach (var series in allSeries)
+                {
+                    var vis = series.GetFirstChild<CX.DataLabels>()
+                        ?.GetFirstChild<CX.DataLabelVisibilities>();
+                    if (vis != null) vis.Value = show;
+                }
+                return true;
+            }
+
+            case "datalabels.showcatname" or "datalabels.showcategoryname" or "datalabels.showcategory"
+                or "showcatname" or "showcategoryname" or "showcategory":
+            {
+                var show = ParseHelpers.IsTruthy(value);
+                foreach (var series in allSeries)
+                {
+                    var vis = series.GetFirstChild<CX.DataLabels>()
+                        ?.GetFirstChild<CX.DataLabelVisibilities>();
+                    if (vis != null) vis.CategoryName = show;
+                }
+                return true;
+            }
+
             // ==================== Series fill / multi-series colors ====================
 
             case "fill":

@@ -229,6 +229,8 @@ public partial class PowerPointHandler
                 + grp.Elements<GroupShape>().Count()
         };
         grpNode.Format["name"] = grpName;
+        var grpId = GetCNvPrId(grp);
+        if (grpId.HasValue) grpNode.Format["id"] = grpId.Value;
         var grpCreationId = ReadCNvPrCreationId(grp);
         if (grpCreationId != null) grpNode.Format["extLst.creationId"] = grpCreationId;
         var grpXfrm = grp.GroupShapeProperties?.TransformGroup;

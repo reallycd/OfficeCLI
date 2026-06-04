@@ -1039,14 +1039,18 @@ public partial class ExcelHandler
         // synthesize new dxfs here — users who want inline style
         // values should register a dxf first via `add dxf` (or the
         // underlying APIs) and then reference it.
+        // Read each candidate columns.N.dxfId via TryGetValue so the
+        // TrackingPropertyDictionary marks consumed keys accessed — a plain
+        // `foreach (var (rawKey, rawVal) in properties)` goes through the
+        // Dictionary<,> enumerator and bypasses access tracking
+        // (CLAUDE.md handler-as-truth). N is 1-based; both `column.` and
+        // `columns.` prefixes are accepted, mirroring the old regex.
         var tblColList = tableColumns.Elements<TableColumn>().ToList();
-        foreach (var (rawKey, rawVal) in properties)
+        for (int n = 1; n <= tblColList.Count; n++)
         {
-            var m = Regex.Match(rawKey, @"^columns?\.(\d+)\.dxfId$",
-                RegexOptions.IgnoreCase);
-            if (!m.Success) continue;
-            var n = int.Parse(m.Groups[1].Value);
-            if (n < 1 || n > tblColList.Count) continue;
+            if (!properties.TryGetValue($"columns.{n}.dxfId", out var rawVal)
+                && !properties.TryGetValue($"column.{n}.dxfId", out rawVal))
+                continue;
             if (!uint.TryParse(rawVal, out var dxfId))
                 throw new ArgumentException(
                     $"columns.{n}.dxfId requires a numeric dxf id, got: '{rawVal}'");
@@ -1175,13 +1179,16 @@ public partial class ExcelHandler
             // where N is 1-based. This sets the column's
             // totalsRowFunction to "custom" + writes <calculatedColumnFormula>,
             // and replaces the SUBTOTAL cell formula with the user's.
-            foreach (var (rawKey, rawVal) in properties)
+            // Read each candidate columns.N.totalsFormula via TryGetValue so the
+            // TrackingPropertyDictionary marks consumed keys accessed — a plain
+            // `foreach (var (rawKey, rawVal) in properties)` bypasses access
+            // tracking (CLAUDE.md handler-as-truth). N is 1-based; accept both
+            // `column.` and `columns.` prefixes, mirroring the old regex.
+            for (int n = 1; n <= tblCols.Count; n++)
             {
-                var m = Regex.Match(rawKey, @"^columns?\.(\d+)\.totalsFormula$",
-                    RegexOptions.IgnoreCase);
-                if (!m.Success) continue;
-                var n = int.Parse(m.Groups[1].Value);
-                if (n < 1 || n > tblCols.Count) continue;
+                if (!properties.TryGetValue($"columns.{n}.totalsFormula", out var rawVal)
+                    && !properties.TryGetValue($"column.{n}.totalsFormula", out rawVal))
+                    continue;
                 var ci = n - 1;
                 var colLetter = IndexToColumnName(startColIdx + ci);
                 var cellRefStr = $"{colLetter}{totalRowIdx}";

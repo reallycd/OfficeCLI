@@ -1241,7 +1241,11 @@ public partial class WordHandler
             {
                 case "pos":
                 case "position":
-                    tab.Position = (int)SpacingConverter.ParseWordSpacing(value);
+                    // Tab positions may be negative (OOXML allows w:pos < 0).
+                    // Match the Add path (AddTabStop) which uses signed parsing;
+                    // SpacingConverter.ParseWordSpacing enforces a non-negative
+                    // guard that is wrong for tab positions (Add/Set asymmetry).
+                    tab.Position = ParseSignedTwips(value);
                     break;
                 case "val":
                 case "type":

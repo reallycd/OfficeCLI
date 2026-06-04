@@ -204,6 +204,12 @@ public partial class ExcelHandler
                 throw new ArgumentException("One of --index, --after, or --before is required when moving a sheet");
             }
 
+            // Self-move guard: moving a sheet after/before itself is a no-op.
+            // Removing first detaches sheetEl, then InsertAfterSelf/InsertBeforeSelf
+            // throws "parent is null" and the sheet is lost (data loss).
+            if (ReferenceEquals(afterAnchor, sheetEl) || ReferenceEquals(beforeAnchor, sheetEl))
+                return $"/{sheetName}";
+
             sheetEl.Remove();
 
             if (afterAnchor != null)

@@ -872,6 +872,7 @@ public partial class WordHandler
         {
             "bullet" => $"{indent}• ",
             "decimal" => $"{indent}1. ",
+            "decimalzero" => $"{indent}01. ",
             "lowerletter" => $"{indent}a. ",
             "upperletter" => $"{indent}A. ",
             "lowerroman" => $"{indent}i. ",

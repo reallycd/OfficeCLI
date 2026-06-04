@@ -319,7 +319,7 @@ internal static partial class PivotTableHelper
                     if (pivotDef.PivotFields != null && pivotDef.RowFields != null)
                     {
                         var rowFields = pivotDef.RowFields.Elements<Field>().ToList();
-                        if (rowFields.Count >= 2)
+                        if (rowFields.Count >= 1)
                         {
                             var firstIdx = (int)(rowFields[0].Index?.Value ?? 0);
                             var pf = pivotDef.PivotFields.Elements<PivotField>()

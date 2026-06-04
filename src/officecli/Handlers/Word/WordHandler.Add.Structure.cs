@@ -1196,15 +1196,29 @@ public partial class WordHandler
         var startOverrides = new SortedDictionary<int, int>();
         if (properties.TryGetValue("start", out var startStr) && !string.IsNullOrEmpty(startStr))
             startOverrides[0] = ParseHelpers.SafeParseInt(startStr, "start");
-        foreach (var kvp in properties)
+        // Read each candidate startOverride.N (levels 0..8) via TryGetValue so
+        // the TrackingPropertyDictionary marks consumed keys accessed — a plain
+        // `foreach (var kvp in properties)` goes through the Dictionary<,>
+        // enumerator and bypasses access tracking (CLAUDE.md handler-as-truth).
+        for (int lvl = 0; lvl <= 8; lvl++)
         {
-            const string prefix = "startOverride.";
-            if (!kvp.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
-            var lvlStr = kvp.Key.Substring(prefix.Length);
-            var lvl = ParseHelpers.SafeParseInt(lvlStr, kvp.Key);
-            if (lvl < 0 || lvl > 8)
-                throw new ArgumentException($"{kvp.Key} level must be 0..8 (got {lvl}).");
-            startOverrides[lvl] = ParseHelpers.SafeParseInt(kvp.Value, kvp.Key);
+            var key = $"startOverride.{lvl}";
+            if (!properties.TryGetValue(key, out var ovrVal)) continue;
+            startOverrides[lvl] = ParseHelpers.SafeParseInt(ovrVal, key);
+        }
+        // Reject out-of-range startOverride.N (N<0 or N>8). Word levels are
+        // 0..8 only. Scan property keys for any startOverride.<num> outside
+        // that band and throw — but route the detection through TryGetValue on
+        // the offending key so the TrackingPropertyDictionary still marks it
+        // accessed (handler-as-truth: never bypass via Keys/foreach).
+        foreach (var k in properties.Keys.ToList())
+        {
+            if (!k.StartsWith("startOverride.", StringComparison.Ordinal)) continue;
+            if (!int.TryParse(k.AsSpan("startOverride.".Length), out var n)) continue;
+            if (n >= 0 && n <= 8) continue;
+            // Fire access tracking on the over-range key before failing.
+            properties.TryGetValue(k, out _);
+            throw new ArgumentException($"startOverride level must be in range 0..8, got {n}");
         }
 
         // Default-restart: Word's "two num instances on the same abstractNum"

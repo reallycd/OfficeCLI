@@ -9,6 +9,14 @@ namespace OfficeCli.Handlers;
 
 public partial class ExcelHandler
 {
+    // True only when the user explicitly set workbook.lockStructure (the
+    // `workbook.lockstructure` case below). A bare workbook.password Set
+    // auto-implies lockStructure=true for UI parity, but that implied lock is
+    // NOT explicit, so clearing the password undoes it. An explicitly requested
+    // lock survives a password clear. Default false: anything we did not see an
+    // explicit request for is treated as auto-implied and removed on clear.
+    private bool _workbookLockStructureExplicit;
+
     /// <summary>
     /// Try to handle workbook-level settings. Returns true if handled.
     /// </summary>
@@ -225,9 +233,16 @@ public partial class ExcelHandler
             {
                 var prot = EnsureWorkbookProtection();
                 if (IsTruthy(value))
+                {
                     prot.LockStructure = true;
+                    // Explicit user request — must survive a later password clear.
+                    _workbookLockStructureExplicit = true;
+                }
                 else
+                {
                     prot.LockStructure = null;
+                    _workbookLockStructureExplicit = false;
+                }
                 CleanupEmptyWorkbookProtection();
                 SaveWorkbook();
                 return true;
@@ -249,6 +264,15 @@ public partial class ExcelHandler
                 if (string.IsNullOrEmpty(value) || value.Equals("none", StringComparison.OrdinalIgnoreCase))
                 {
                     prot.WorkbookPassword = null;
+                    // Undo the lockStructure that setting the password auto-implied, so a
+                    // cleared-password workbook has no leftover lock. Only an explicitly
+                    // requested lockStructure (the `workbook.lockstructure` case) survives.
+                    // We key off "was it explicitly requested" rather than "did we imply
+                    // it" so the clear is robust even when the implied lock came from a
+                    // path that did not run the auto-imply branch (e.g. lockWindows was
+                    // already present, or the element was loaded pre-locked).
+                    if (!_workbookLockStructureExplicit)
+                        prot.LockStructure = null;
                 }
                 else
                 {
@@ -269,6 +293,8 @@ public partial class ExcelHandler
                     prot.WorkbookPassword = HexBinaryValue.FromString(hash.ToString("X4"));
                     // Implies lockStructure unless caller overrides — mirrors Excel UI
                     // (the password field is only meaningful with at least one lock).
+                    // This lock is auto-implied (not explicit), so a later password
+                    // clear removes it — see the clear branch above.
                     if (prot.LockStructure?.Value != true && prot.LockWindows?.Value != true)
                         prot.LockStructure = true;
                 }

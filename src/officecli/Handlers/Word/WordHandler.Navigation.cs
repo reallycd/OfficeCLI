@@ -1942,12 +1942,21 @@ public partial class WordHandler
                 node.Text = "";
             }
         }
-        if (node.Type == "run" && string.IsNullOrEmpty(node.Text))
+        // CONSISTENCY(run-text-break): gate on "no Text element" (not
+        // "node.Text empty"), same as the tab upgrade above. GetRunText
+        // surfaces a soft <w:br/> (textWrapping) as \n in node.Text, so a
+        // pure <w:r><w:br/></w:r> break run is no longer Text-empty and the
+        // old IsNullOrEmpty gate skipped the upgrade — leaving it as a run
+        // with text="\n" that the emitter mis-rendered. A mixed run
+        // <w:t>foo</w:t><w:br/> still has a <w:t> child, so it stays a run
+        // (text="foo\n") and the inline break is preserved as \n.
+        if (node.Type == "run" && !run.Elements<Text>().Any())
         {
             var breakEl = run.GetFirstChild<Break>();
             if (breakEl != null)
             {
                 node.Type = "break";
+                node.Text = "";
                 // Normalize "textWrapping" → "line" on emit. OOXML treats
                 // a typeless <w:br/> as textWrapping (the default), but
                 // AddBreak's user-facing vocab uses "line"; without
@@ -2100,6 +2109,8 @@ public partial class WordHandler
                 node.Format["underline.color"] = ParseHelpers.FormatHexColor(rp.Underline.Color.Value);
             if (rp.Strike != null) node.Format["strike"] = IsToggleOn(rp.Strike);
             if (rp.Highlight?.Val != null) node.Format["highlight"] = rp.Highlight.Val.InnerText;
+            if (rp.GetFirstChild<RunStyle>()?.Val?.Value != null)
+                node.Format["rStyle"] = rp.GetFirstChild<RunStyle>().Val.Value;
         }
         return node;
     }

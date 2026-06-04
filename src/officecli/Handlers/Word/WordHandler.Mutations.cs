@@ -1242,6 +1242,14 @@ public partial class WordHandler
             throw new ArgumentException(
                 "Cannot move a table into a paragraph. Use `--after <paragraph-path>` to place it after.");
 
+        // Self-move guard: if the resolved anchor IS the source element, moving
+        // it after/before itself is a no-op. Removing first would detach the
+        // anchor and InsertAfterSelf/InsertBeforeSelf would throw "parent is
+        // null" — and the element would be lost (data loss). Return the source
+        // path unchanged instead.
+        if (ReferenceEquals(afterAnchor, element) || ReferenceEquals(beforeAnchor, element))
+            return sourcePath;
+
         element.Remove();
 
         // Insert at the resolved position

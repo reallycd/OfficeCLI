@@ -162,13 +162,23 @@ public partial class PowerPointHandler
                 }
                 table.Append(tableGrid);
 
-                // Parse optional fill colors for header/body rows
+                // Parse optional fill colors for header/body rows.
+                // CONSISTENCY(add-set-parity): keep the raw user value and apply it
+                // via SetTableCellProperties below (same builder as AddTableCell /
+                // Set), so scheme color names (accent2, dark1, …) and gradients work
+                // — not just hex. Forcing SanitizeColorForOoxml here would strip
+                // scheme colors and drop the fill entirely.
                 string? headerFillColor = null;
                 if (properties.TryGetValue("headerFill", out var hfVal) || properties.TryGetValue("headerfill", out hfVal))
-                    headerFillColor = ParseHelpers.SanitizeColorForOoxml(hfVal).Rgb;
+                    headerFillColor = hfVal;
                 string? bodyFillColor = null;
                 if (properties.TryGetValue("bodyFill", out var bfVal) || properties.TryGetValue("bodyfill", out bfVal))
-                    bodyFillColor = ParseHelpers.SanitizeColorForOoxml(bfVal).Rgb;
+                    bodyFillColor = bfVal;
+                // Table-wide fill applies to every cell (header + body) unless a more
+                // specific headerFill/bodyFill overrides it for that row band.
+                string? tableFillColor = null;
+                if (properties.TryGetValue("fill", out var tfVal) || properties.TryGetValue("background", out tfVal))
+                    tableFillColor = tfVal;
 
                 for (int r = 0; r < rows; r++)
                 {
@@ -191,12 +201,14 @@ public partial class PowerPointHandler
                             new Drawing.ListStyle(),
                             cellPara
                         ));
-                        var tcPr = new Drawing.TableCellProperties();
-                        // Apply row-level fill: headerFill for row 0, bodyFill for others
-                        var rowFill = (r == 0 ? headerFillColor : bodyFillColor);
+                        cell.Append(new Drawing.TableCellProperties());
+                        // Apply fill: headerFill for row 0, bodyFill for body rows,
+                        // falling back to the table-wide fill. Delegate to
+                        // SetTableCellProperties so scheme colors / gradients build
+                        // correctly (same path as AddTableCell and Set).
+                        var rowFill = (r == 0 ? headerFillColor : bodyFillColor) ?? tableFillColor;
                         if (rowFill != null)
-                            tcPr.AppendChild(new Drawing.SolidFill(new Drawing.RgbColorModelHex { Val = rowFill }));
-                        cell.Append(tcPr);
+                            SetTableCellProperties(cell, new Dictionary<string, string> { { "fill", rowFill } });
                         tableRow.Append(cell);
                     }
                     table.Append(tableRow);

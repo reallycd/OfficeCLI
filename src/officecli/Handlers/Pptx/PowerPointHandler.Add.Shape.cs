@@ -608,8 +608,14 @@ public partial class PowerPointHandler
                     }
                 }
 
-                // Shape fill (after xfrm and prstGeom to maintain schema order)
-                if (properties.TryGetValue("fill", out var fillVal))
+                // Shape fill (after xfrm and prstGeom to maintain schema order).
+                // 'background' is an alias for 'fill' (symmetric with the Set
+                // branch in ShapeProperties.cs case "background"), unless a
+                // pattern= is present — in that case it is folded into the
+                // pattFill bg below, matching Set's pattern precedence.
+                if (properties.TryGetValue("fill", out var fillVal)
+                    || (!properties.ContainsKey("pattern")
+                        && properties.TryGetValue("background", out fillVal)))
                 {
                     ApplyShapeFill(newShape.ShapeProperties!, fillVal);
                 }

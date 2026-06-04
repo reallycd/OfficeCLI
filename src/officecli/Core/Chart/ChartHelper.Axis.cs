@@ -126,11 +126,16 @@ internal static partial class ChartHelper
         var numFmt = axis.GetFirstChild<C.NumberingFormat>()?.FormatCode?.Value;
         if (numFmt != null && numFmt != "General") node.Format["format"] = numFmt;
 
-        // Gridline presence
-        node.Format["majorGridlines"] = (axis.GetFirstChild<C.MajorGridlines>() != null)
-            .ToString().ToLowerInvariant();
-        node.Format["minorGridlines"] = (axis.GetFirstChild<C.MinorGridlines>() != null)
-            .ToString().ToLowerInvariant();
+        // Gridline presence + detail. Mirror the chart-level Reader: presence is a
+        // boolean, but the gridline's solidFill color / outline width / dash are
+        // surfaced via ReadGridlineDetail so a `majorgridlines=COLOR:WIDTH` Set is
+        // visible on Get (gridlineColor / gridlineWidth / gridlineDash).
+        var majorGridlines = axis.GetFirstChild<C.MajorGridlines>();
+        node.Format["majorGridlines"] = (majorGridlines != null).ToString().ToLowerInvariant();
+        if (majorGridlines != null) ReadGridlineDetail(majorGridlines, node, "gridline");
+        var minorGridlines = axis.GetFirstChild<C.MinorGridlines>();
+        node.Format["minorGridlines"] = (minorGridlines != null).ToString().ToLowerInvariant();
+        if (minorGridlines != null) ReadGridlineDetail(minorGridlines, node, "minorGridline");
 
         // Axis orientation (value/category — schema applies to both via scaling)
         var scalingForOrient = axis.GetFirstChild<C.Scaling>();
@@ -307,10 +312,38 @@ internal static partial class ChartHelper
                     break;
 
                 case "labelrotation":
-                    // Existing setter already understands xaxis.labelrotation / yaxis.labelrotation.
-                    translated[normalizedRole is "category" or "series"
-                        ? "xaxis.labelrotation"
-                        : "yaxis.labelrotation"] = value;
+                    // CONSISTENCY(chart/axis-role-write): the legacy
+                    // xaxis.labelrotation / yaxis.labelrotation keys target the
+                    // CategoryAxis(es) / primary ValueAxis respectively, ignoring
+                    // role. For value2 (secondary value axis) the legacy
+                    // yaxis.labelrotation stamps EVERY ValueAxis, corrupting the
+                    // primary; for series it would route to xaxis.labelrotation and
+                    // mutate the CategoryAxis instead of the SeriesAxis. Apply
+                    // directly on the resolved target axis to mirror BuildAxisNode's
+                    // per-axis labelRotation read.
+                    if (normalizedRole is "value2" or "series"
+                        && targetAxis is OpenXmlCompositeElement axRot)
+                    {
+                        if (double.TryParse(value, System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var rotDeg))
+                        {
+                            var rotAttrVal = ((int)(rotDeg * 60000))
+                                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+                            ApplyAxisLabelRotation(axRot, rotAttrVal);
+                            directlyHandled.Add(key);
+                        }
+                        else
+                        {
+                            translated[key] = value; // let SetChartProperties flag the bad value
+                        }
+                    }
+                    else
+                    {
+                        // Existing setter already understands xaxis.labelrotation / yaxis.labelrotation.
+                        translated[normalizedRole is "category"
+                            ? "xaxis.labelrotation"
+                            : "yaxis.labelrotation"] = value;
+                    }
                     break;
 
                 case "visible":

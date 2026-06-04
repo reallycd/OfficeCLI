@@ -1256,10 +1256,18 @@ internal static partial class ChartHelper
                         // dump→replay introduces phantom rotX=0/rotY=0 children).
                         if (v3dParts.Length >= 1 && !string.IsNullOrWhiteSpace(v3dParts[0])
                             && int.TryParse(v3dParts[0], out var rx))
+                        {
+                            if (rx < -90 || rx > 90)
+                                throw new ArgumentException($"view3d rotateX must be between -90 and 90 (got {rx}).");
                             view3d.AppendChild(new C.RotateX { Val = (sbyte)rx });
+                        }
                         if (v3dParts.Length >= 2 && !string.IsNullOrWhiteSpace(v3dParts[1])
                             && int.TryParse(v3dParts[1], out var ry))
+                        {
+                            if (ry < 0 || ry > 359)
+                                throw new ArgumentException($"view3d rotateY must be between 0 and 359 (got {ry}).");
                             view3d.AppendChild(new C.RotateY { Val = (ushort)ry });
+                        }
                         if (v3dParts.Length >= 3 && !string.IsNullOrWhiteSpace(v3dParts[2])
                             && int.TryParse(v3dParts[2], out var persp))
                             view3d.AppendChild(new C.Perspective { Val = (byte)persp });
@@ -2388,7 +2396,10 @@ internal static partial class ChartHelper
                     var doughnut = plotArea2?.GetFirstChild<C.DoughnutChart>();
                     if (doughnut == null) { unsupported.Add(key); break; }
                     doughnut.RemoveAllChildren<C.HoleSize>();
-                    doughnut.AppendChild(new C.HoleSize { Val = (byte)ParseHelpers.SafeParseInt(value, "holeSize") });
+                    var holeSizeInt = ParseHelpers.SafeParseInt(value, "holeSize");
+                    if (holeSizeInt < 0) holeSizeInt = 0;
+                    else if (holeSizeInt > 90) holeSizeInt = 90;
+                    doughnut.AppendChild(new C.HoleSize { Val = (byte)holeSizeInt });
                     break;
                 }
 

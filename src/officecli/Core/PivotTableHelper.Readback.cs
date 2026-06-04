@@ -150,7 +150,7 @@ internal static partial class PivotTableHelper
         // grandTotalCaption readback
         {
             var caption = pivotDef.GrandTotalCaption?.Value;
-            if (!string.IsNullOrEmpty(caption) && caption != "Grand Total")
+            if (!string.IsNullOrEmpty(caption))
                 node.Format["grandTotalCaption"] = caption;
         }
 

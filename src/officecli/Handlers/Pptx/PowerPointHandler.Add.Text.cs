@@ -665,11 +665,14 @@ public partial class PowerPointHandler
                     || properties.TryGetValue("font.size", out rSize)
                     || properties.TryGetValue("fontsize", out rSize))
                     rProps.FontSize = (int)Math.Round(ParseFontSize(rSize) * 100);
-                if (properties.TryGetValue("bold", out var rBold))
+                if (properties.TryGetValue("bold", out var rBold)
+                    || properties.TryGetValue("font.bold", out rBold))
                     rProps.Bold = IsTruthy(rBold);
-                if (properties.TryGetValue("italic", out var rItalic))
+                if (properties.TryGetValue("italic", out var rItalic)
+                    || properties.TryGetValue("font.italic", out rItalic))
                     rProps.Italic = IsTruthy(rItalic);
-                if (properties.TryGetValue("underline", out var rUnderline))
+                if (properties.TryGetValue("underline", out var rUnderline)
+                    || properties.TryGetValue("font.underline", out rUnderline))
                     rProps.Underline = rUnderline.ToLowerInvariant() switch
                     {
                         "true" or "single" or "sng" => Drawing.TextUnderlineValues.Single,
@@ -786,9 +789,11 @@ public partial class PowerPointHandler
                     };
                 }
                 // Schema order: solidFill before latin/ea
-                if (properties.TryGetValue("color", out var rColor))
+                if (properties.TryGetValue("color", out var rColor)
+                    || properties.TryGetValue("font.color", out rColor))
                     rProps.AppendChild(BuildSolidFill(rColor));
-                if (properties.TryGetValue("font", out var rFont))
+                if (properties.TryGetValue("font", out var rFont)
+                    || properties.TryGetValue("font.name", out rFont))
                 {
                     rProps.Append(new Drawing.LatinFont { Typeface = rFont });
                     rProps.Append(new Drawing.EastAsianFont { Typeface = rFont });
