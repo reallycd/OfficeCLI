@@ -591,6 +591,7 @@ The [Wiki](https://github.com/iOfficeAI/OfficeCLI/wiki) has detailed guides for 
 
 - **By format:** [Word](https://github.com/iOfficeAI/OfficeCLI/wiki/word-reference) | [Excel](https://github.com/iOfficeAI/OfficeCLI/wiki/excel-reference) | [PowerPoint](https://github.com/iOfficeAI/OfficeCLI/wiki/powerpoint-reference)
 - **Workflows:** [End-to-end examples](https://github.com/iOfficeAI/OfficeCLI/wiki/workflows) -- Word reports, Excel dashboards, PowerPoint decks, batch modifications, resident mode
+- **Runnable examples:** [examples/](examples/) -- copy-paste scripts (.sh/.py) for Word, Excel, and PowerPoint, with output files included
 - **Troubleshooting:** [Common errors and solutions](https://github.com/iOfficeAI/OfficeCLI/wiki/troubleshooting)
 - **AI agent guide:** [Decision tree for navigating the wiki](https://github.com/iOfficeAI/OfficeCLI/wiki/agent-guide)
 
