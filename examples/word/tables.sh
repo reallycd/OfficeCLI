@@ -266,6 +266,12 @@ officecli set "$DOCX" '/body/tbl[6]/tr[1]/tc[2]' --prop text="column order mirro
 officecli set "$DOCX" '/body/tbl[6]/tr[2]/tc[1]' --prop text="row 2 col 1"
 officecli set "$DOCX" '/body/tbl[6]/tr[2]/tc[2]' --prop text="row 2 col 2"
 
+# data — inline shorthand: rows separated by ';', cells by ',' (builds the whole
+# grid in one prop instead of rows+cols+per-cell set commands)
+officecli add "$DOCX" /body --type table \
+    --prop "data=Region,Q1,Q2;North,120,150;South,90,110" \
+    --prop "border.all=single;4;808080"
+
 officecli validate "$DOCX"
 officecli close "$DOCX"
 echo "  Done: Word document: $DOCX"
@@ -391,7 +397,7 @@ officecli open "$PPTX"
 
 # Slide 1: Title Page
 echo "  -> Slide 1: Title Page"
-officecli add "$PPTX" /presentation/slides --type slide
+officecli add "$PPTX" / --type slide
 officecli raw-set "$PPTX" '/slide[1]' --xpath "/p:sld" --action replace --xml '<p:sld>
   <p:cSld>
     <p:bg><p:bgPr><a:solidFill><a:srgbClr val="1F3864"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>
@@ -414,7 +420,7 @@ officecli raw-set "$PPTX" '/slide[1]' --xpath "/p:sld" --action replace --xml '<
 
 # Slide 2: Data Table
 echo "  -> Slide 2: Data Table"
-officecli add "$PPTX" /presentation/slides --type slide
+officecli add "$PPTX" / --type slide
 officecli raw-set "$PPTX" '/slide[2]' --xpath "/p:sld" --action replace --xml '<p:sld>
   <p:cSld>
     <p:spTree>
@@ -453,7 +459,7 @@ officecli raw-set "$PPTX" '/slide[2]' --xpath "/p:sld" --action replace --xml '<
 
 # Slide 3: Pie Chart Analysis
 echo "  -> Slide 3: Pie Chart Analysis"
-officecli add "$PPTX" /presentation/slides --type slide
+officecli add "$PPTX" / --type slide
 officecli add "$PPTX" '/slide[3]' --type shape --prop text="Annual Sales Share by Department" --prop size=28 --prop bold=true --prop x=500000 --prop y=200000 --prop width=11192000 --prop height=600000
 officecli add "$PPTX" '/slide[3]' --type shape --prop text="Engineering 683,000 (24.4%)" --prop x=1000000 --prop y=1200000 --prop width=10000000 --prop height=500000
 officecli add "$PPTX" '/slide[3]' --type shape --prop text="Marketing 510,000 (18.2%)" --prop x=1000000 --prop y=1900000 --prop width=10000000 --prop height=500000

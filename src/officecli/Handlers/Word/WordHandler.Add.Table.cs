@@ -278,7 +278,10 @@ public partial class WordHandler
                         $"firstRow, lastRow, firstCol, lastCol, bandRow, bandCol, " +
                         $"noHBand, noVBand. Or use the bare hex form tblLook=04A0.");
             }
-            if (tkl is "rows" or "cols" or "columns" or "colwidths" or "gridcols" or "skiptblw" || tkl.StartsWith("border")) continue;
+            // `data` (inline cell content), like rows/cols/colwidths, is fully
+            // consumed earlier (TryGetValue("data") above) — skip it here so the
+            // tblPr switch default doesn't falsely flag it as unsupported_property.
+            if (tkl is "rows" or "cols" or "columns" or "colwidths" or "gridcols" or "skiptblw" or "data" || tkl.StartsWith("border")) continue;
             // ACCOUNTING(handler-as-truth): see AddStyle. ContainsKey only
             // when the switch will consume this key — otherwise typos would
             // leak past UnusedKeys detection.
