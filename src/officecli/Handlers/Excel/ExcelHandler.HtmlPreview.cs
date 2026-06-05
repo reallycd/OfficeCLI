@@ -437,7 +437,12 @@ public partial class ExcelHandler
             var rowIdx = (int)(row.RowIndex?.Value ?? 0);
             if (row.CustomHeight?.Value == true && row.Height?.Value != null)
                 rowHeights[rowIdx] = row.Height.Value;
-            if (row.Hidden?.Value == true)
+            // A row with height 0 is a hidden row in real Excel (mirrors the
+            // hidden-column treatment, which drops width<=0 columns). Emit it
+            // display:none rather than as a ~16px gap. The original row numbers
+            // are preserved (subsequent rows keep their numbers; no renumber).
+            if (row.Hidden?.Value == true
+                || (row.Height?.Value != null && row.Height.Value == 0))
                 hiddenRows.Add(rowIdx);
         }
 
@@ -795,7 +800,14 @@ public partial class ExcelHandler
                     if (spillWidth > 0)
                     {
                         spillClass = " class=\"spill\"";
-                        content = $"<span class=\"spill-text\" style=\"max-width:{spillWidth:0.##}pt\">{content}</span>";
+                        // text-decoration set on the <td> does not paint under the
+                        // text that bleeds past the td via overflow:visible, so copy
+                        // the cell's text-decoration* declarations onto the span that
+                        // actually renders the spilled glyphs (underline / double /
+                        // strikethrough). Matches real Excel, which underlines the
+                        // whole spilled string.
+                        var spanDecor = ExtractTextDecorationCss(style);
+                        content = $"<span class=\"spill-text\" style=\"max-width:{spillWidth:0.##}pt{spanDecor}\">{content}</span>";
                     }
                 }
                 if (ctx.AutoFilterCells.Contains(cellRef)) content += AutoFilterIndicatorHtml;
@@ -803,6 +815,28 @@ public partial class ExcelHandler
             }
         }
         return rowSb.ToString();
+    }
+
+    // Pull the text-decoration / text-decoration-style declarations out of a
+    // cell's ` style="..."` attribute string so they can be re-applied to the
+    // inner .spill-text span (the element that actually paints the overflowing
+    // glyphs). Returns a ";"-prefixed CSS fragment, or "" when none present.
+    private static string ExtractTextDecorationCss(string tdStyleAttr)
+    {
+        if (string.IsNullOrEmpty(tdStyleAttr)) return "";
+        var sb = new System.Text.StringBuilder();
+        foreach (var decl in tdStyleAttr.Split(';'))
+        {
+            var d = decl.Trim();
+            // strip the leading ` style="` from the first declaration
+            var eq = d.IndexOf("style=\"", StringComparison.Ordinal);
+            if (eq >= 0) d = d.Substring(eq + 7).Trim();
+            d = d.TrimEnd('"').Trim();
+            if (d.StartsWith("text-decoration:", StringComparison.Ordinal)
+                || d.StartsWith("text-decoration-style:", StringComparison.Ordinal))
+                sb.Append(';').Append(d);
+        }
+        return sb.ToString();
     }
 
     // ==================== Text spill (Excel overflow into empty neighbours) ====================
