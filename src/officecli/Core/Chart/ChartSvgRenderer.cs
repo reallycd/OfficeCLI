@@ -85,14 +85,25 @@ internal partial class ChartSvgRenderer
         if (percentStacked) stacked = true;
 
         double maxVal;
+        // Stacked mixed-sign support: positive segments stack from 0 upward and
+        // negative segments stack from 0 downward (separate accumulation per
+        // category). The value-axis domain must therefore span the largest
+        // positive-stack-sum and the smallest (most negative) negative-stack-sum.
+        double stackedNegMin = 0;
         if (percentStacked) maxVal = 100;
         else if (stacked)
         {
             maxVal = 0;
             for (int c = 0; c < catCount; c++)
             {
-                var sum = series.Sum(s => c < s.values.Length ? s.values[c] : 0);
-                if (sum > maxVal) maxVal = sum;
+                double posSum = 0, negSum = 0;
+                foreach (var s in series)
+                {
+                    var v = c < s.values.Length ? s.values[c] : 0;
+                    if (v >= 0) posSum += v; else negSum += v;
+                }
+                if (posSum > maxVal) maxVal = posSum;
+                if (negSum < stackedNegMin) stackedNegMin = negSum;
             }
         }
         else maxVal = allValues.Max();
@@ -103,9 +114,10 @@ internal partial class ChartSvgRenderer
         // baseline can be drawn. dataMin is 0 for all-positive data (axis stays
         // anchored at the bottom/left exactly as before). Not applied to
         // percent-stacked (fixed 0..100) or waterfall (cumulative running total).
+        // For stacked charts dataMin = the most-negative per-category stack sum.
         double dataMin = (!percentStacked && !stacked && !isWaterfall)
             ? Math.Min(0, allValues.Min())
-            : 0;
+            : (stacked && !percentStacked && !isWaterfall ? stackedNegMin : 0);
 
         double niceMax, niceMin = 0, tickStep;
         int nTicks;
@@ -175,7 +187,10 @@ internal partial class ChartSvgRenderer
             for (int c = 0; c < catCount; c++)
             {
                 var dataIdx = catCount - 1 - c;
-                double stackX = 0;
+                // Separate positive/negative cursors so mixed-sign segments stack
+                // outward from zero (positives right, negatives left) through the
+                // span/zeroFrac mapping, never producing a negative-width rect.
+                double posCursor = 0, negCursor = 0;
                 var catSum = percentStacked ? series.Sum(s => dataIdx < s.values.Length ? s.values[dataIdx] : 0) : 1;
                 for (int s = 0; s < serCount; s++)
                 {
@@ -183,17 +198,27 @@ internal partial class ChartSvgRenderer
                     var val = percentStacked && catSum > 0 ? (rawVal / catSum) * 100 : rawVal;
                     if (stacked)
                     {
-                        var barW = (val / niceMax) * plotPw;
-                        var bx = plotOx + (stackX / niceMax) * plotPw;
+                        var segW = Math.Abs(val) / span * plotPw;
+                        double bx;
+                        if (val >= 0)
+                        {
+                            bx = plotOx + ((posCursor - niceMin) / span) * plotPw;
+                            posCursor += val;
+                        }
+                        else
+                        {
+                            bx = plotOx + ((negCursor + val - niceMin) / span) * plotPw;
+                            negCursor += val;
+                        }
                         var by = oy + c * groupH + gap;
-                        sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
+                        if (segW > 0.5)
+                            sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{segW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
                         // Label at segment center — skip if segment narrower than ~2 chars to avoid overflow
-                        if (showDataLabels && barW > DataLabelFontPx * 1.6)
+                        if (showDataLabels && segW > DataLabelFontPx * 1.6)
                         {
                             var vlabel = rawVal % 1 == 0 ? $"{(int)rawVal}" : $"{rawVal:0.#}";
-                            sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2:0.#}\" y=\"{by + barH / 2:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\" dominant-baseline=\"middle\">{vlabel}</text>");
+                            sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + segW / 2:0.#}\" y=\"{by + barH / 2:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\" dominant-baseline=\"middle\">{vlabel}</text>");
                         }
-                        stackX += val;
                     }
                     else
                     {
@@ -320,7 +345,13 @@ internal partial class ChartSvgRenderer
 
             for (int c = 0; c < catCount; c++)
             {
-                double stackY = 0;
+                // Waterfall keeps a single signed running total; regular stacked
+                // tracks positive and negative cursors separately so mixed-sign
+                // segments stack outward from the zero baseline (positives up,
+                // negatives down) and never produce an inverted/clipped rect.
+                double stackY = 0;       // waterfall cumulative
+                double posCursor = 0;    // stacked: accumulated positive value
+                double negCursor = 0;    // stacked: accumulated negative value (<= 0)
                 var catSum = percentStacked ? series.Sum(s => c < s.values.Length ? s.values[c] : 0) : 1;
                 for (int s = 0; s < serCount; s++)
                 {
@@ -329,28 +360,56 @@ internal partial class ChartSvgRenderer
                     var barH = (val / niceMax) * ph;
                     if (stacked)
                     {
-                        // (stacked/waterfall: niceMin==0, span==niceMax — unchanged)
                         var bx = ox + c * groupW + gap;
-                        var by = oy + ph - (stackY / niceMax) * ph - barH;
-                        // For waterfall: skip rendering Base series (s=0), only render Increase/Decrease
-                        if (!isWaterfall || s > 0)
+                        if (isWaterfall)
                         {
-                            if (barH > 0.5)
-                                sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
-                            if (showDataLabels && barH > DataLabelFontPx + 2)
+                            // (waterfall: niceMin==0, span==niceMax — unchanged)
+                            var by = oy + ph - (stackY / niceMax) * ph - barH;
+                            if (s > 0)
+                            {
+                                if (barH > 0.5)
+                                    sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
+                                if (showDataLabels && barH > DataLabelFontPx + 2)
+                                {
+                                    var vlabel = FormatAxisValue(rawVal, valNumFmt);
+                                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2:0.#}\" y=\"{by + barH / 2:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\" dominant-baseline=\"middle\">{vlabel}</text>");
+                                }
+                            }
+                            // Waterfall connector line from previous bar's top to this bar's top
+                            if (s == 0 && c > 0 && !double.IsNaN(wfPrevTopY))
+                            {
+                                var connY = oy + ph - (stackY / niceMax) * ph;
+                                var prevBx = ox + (c - 1) * groupW + gap + barW;
+                                sb.AppendLine($"        <line x1=\"{prevBx:0.#}\" y1=\"{wfPrevTopY:0.#}\" x2=\"{bx:0.#}\" y2=\"{connY:0.#}\" stroke=\"{GridColor}\" stroke-width=\"1\" stroke-dasharray=\"3,2\"/>");
+                            }
+                            stackY += val;
+                        }
+                        else
+                        {
+                            // Map value-axis coordinates through span/zeroFrac so the
+                            // domain can include negatives. Positive segment grows up
+                            // from the current positive cursor; negative grows down from
+                            // the current negative cursor. Height = |val| (never negative).
+                            var segH = Math.Abs(val) / span * ph;
+                            double by;
+                            if (val >= 0)
+                            {
+                                by = oy + ph - ((posCursor + val - niceMin) / span) * ph;
+                                posCursor += val;
+                            }
+                            else
+                            {
+                                by = oy + ph - ((negCursor - niceMin) / span) * ph;
+                                negCursor += val;
+                            }
+                            if (segH > 0.5)
+                                sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{segH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
+                            if (showDataLabels && segH > DataLabelFontPx + 2)
                             {
                                 var vlabel = FormatAxisValue(rawVal, valNumFmt);
-                                sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2:0.#}\" y=\"{by + barH / 2:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\" dominant-baseline=\"middle\">{vlabel}</text>");
+                                sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2:0.#}\" y=\"{by + segH / 2:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\" dominant-baseline=\"middle\">{vlabel}</text>");
                             }
                         }
-                        // Waterfall connector line from previous bar's top to this bar's top
-                        if (isWaterfall && s == 0 && c > 0 && !double.IsNaN(wfPrevTopY))
-                        {
-                            var connY = oy + ph - (stackY / niceMax) * ph;
-                            var prevBx = ox + (c - 1) * groupW + gap + barW;
-                            sb.AppendLine($"        <line x1=\"{prevBx:0.#}\" y1=\"{wfPrevTopY:0.#}\" x2=\"{bx:0.#}\" y2=\"{connY:0.#}\" stroke=\"{GridColor}\" stroke-width=\"1\" stroke-dasharray=\"3,2\"/>");
-                        }
-                        stackY += val;
                     }
                     else
                     {
