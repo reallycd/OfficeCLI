@@ -21,6 +21,8 @@ internal partial class FormulaEvaluator
         {
             // ===== Math & Aggregation =====
             "SUM" => CheckRangeErrors(args) ?? FR(nums().Sum()),
+            "SUBTOTAL" => EvalSubtotal(args),
+            "AGGREGATE" => EvalAggregate(args),
             "SUMPRODUCT" => EvalSumProduct(args),
             "AVERAGE" => CheckRangeErrors(args) ?? (nums() is { Length: > 0 } a ? FR(a.Average()) : null),
             "COUNT" => FR(nums().Length),
@@ -197,6 +199,38 @@ internal partial class FormulaEvaluator
 
             _ => null
         };
+    }
+
+    // SUBTOTAL(function_num, ref1, ...): function_num 1-11 (and 101-111 = ignore-hidden, treated
+    // identically for preview) map onto the matching aggregate function. Re-dispatches into the
+    // existing aggregate implementations.
+    private FormulaResult? EvalSubtotal(List<object> args)
+    {
+        if (args.Count < 2 || args[0] is not FormulaResult fn) return null;
+        var code = (int)fn.AsNumber() % 100; // 101-111 -> 1-11 (ignore-hidden simplification)
+        var name = code switch
+        {
+            1 => "AVERAGE", 2 => "COUNT", 3 => "COUNTA", 4 => "MAX", 5 => "MIN",
+            6 => "PRODUCT", 7 => "STDEV", 8 => "STDEVP", 9 => "SUM", 10 => "VAR", 11 => "VARP",
+            _ => null
+        };
+        return name == null ? null : EvalFunction(name, args.Skip(1).ToList());
+    }
+
+    // AGGREGATE(function_num, options, ref1, ...): function_num 1-19; common ones mapped, the
+    // options arg is ignored for preview.
+    private FormulaResult? EvalAggregate(List<object> args)
+    {
+        if (args.Count < 3 || args[0] is not FormulaResult fn) return null;
+        var code = (int)fn.AsNumber();
+        var name = code switch
+        {
+            1 => "AVERAGE", 2 => "COUNT", 3 => "COUNTA", 4 => "MAX", 5 => "MIN",
+            6 => "PRODUCT", 7 => "STDEV", 8 => "STDEVP", 9 => "SUM", 10 => "VAR", 11 => "VARP",
+            12 => "MEDIAN", 14 => "LARGE", 15 => "SMALL",
+            _ => null
+        };
+        return name == null ? null : EvalFunction(name, args.Skip(2).ToList());
     }
 
     // ==================== Logical ====================

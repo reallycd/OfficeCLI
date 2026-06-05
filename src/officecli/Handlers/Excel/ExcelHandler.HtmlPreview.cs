@@ -189,6 +189,10 @@ public partial class ExcelHandler
             var shapes = CollectSheetShapes(worksheetPart);
             if (shapes.Count > 0)
                 charts.AddRange(shapes);
+            // Embedded pictures (xdr:pic) — same overlay positioning pipeline.
+            var pictures = CollectSheetPictures(worksheetPart);
+            if (pictures.Count > 0)
+                charts.AddRange(pictures);
             RenderSheetTable(sb, sheetName, renderPart, stylesheet, charts, sheetIdx, showGridLines);
             sb.AppendLine("</div>");
         }
