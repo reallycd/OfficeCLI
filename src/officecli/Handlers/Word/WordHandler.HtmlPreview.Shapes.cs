@@ -173,8 +173,12 @@ public partial class WordHandler
                         sb.Append($"<div style=\"position:absolute;top:0;left:0;width:100%;height:100%;z-index:-1;{fillCss}\"></div>");
                     return;
                 }
-                // Standalone shape — render as inline block, not absolute positioned
-                RenderStandaloneShapeHtml(sb, shape, shapeWidth, shapeHeight, floatImages);
+                // Anchored (floating) shape/textbox with wrapSquare/wrapTight
+                // must float so following text wraps beside it — mirror the
+                // anchored-image float logic. Inline shapes and
+                // wrapNone/behind/in-front keep inline-block positioning.
+                var floatCss = ComputeAnchorWrapFloatCss(drawing, shapeWidth);
+                RenderStandaloneShapeHtml(sb, shape, shapeWidth, shapeHeight, floatImages, floatCss);
                 return;
             }
         }
@@ -563,10 +567,65 @@ public partial class WordHandler
     }
 
     private void RenderStandaloneShapeHtml(StringBuilder sb, OpenXmlElement shape, long widthEmu, long heightEmu,
-        List<Drawing>? floatImages)
+        List<Drawing>? floatImages, string? floatCss = null)
     {
         // Standalone shapes use inline positioning with pixel dimensions
-        RenderShapeHtml(sb, shape, 0, 0, widthEmu, heightEmu, widthEmu, heightEmu, floatImages, standalone: true);
+        RenderShapeHtml(sb, shape, 0, 0, widthEmu, heightEmu, widthEmu, heightEmu, floatImages, standalone: true, floatCss: floatCss);
+    }
+
+    /// <summary>
+    /// For an anchored (wp:anchor) drawing with a wrapSquare/wrapTight wrap
+    /// type, compute the float CSS (float:left / float:right + margin) so the
+    /// following text wraps beside it — mirroring the anchored-image float
+    /// logic in RenderImageHtml. Returns null for inline drawings and for
+    /// wrapNone / behind-text / in-front-of-text (those keep inline/absolute
+    /// positioning). Float side follows the anchor's horizontal position.
+    /// </summary>
+    private string? ComputeAnchorWrapFloatCss(Drawing drawing, long widthEmu)
+    {
+        var anchor = drawing.Descendants<DW.Anchor>().FirstOrDefault();
+        if (anchor == null) return null;
+
+        // Only square/tight wrap floats text beside the shape. wrapNone /
+        // wrapThrough(behind)/in-front-of-text legitimately overlap.
+        if (!anchor.Elements().Any(e => e.LocalName == "wrapSquare" || e.LocalName == "wrapTight"))
+            return null;
+
+        var hPos = anchor.GetFirstChild<DW.HorizontalPosition>();
+        var hAlign = hPos?.Descendants().FirstOrDefault(e => e.LocalName == "align")?.InnerText;
+        var hPosFrom = hPos?.RelativeFrom?.Value;
+
+        var isRight = hAlign == "right"
+            || hPosFrom == DW.HorizontalRelativePositionValues.RightMargin;
+        // Mirror the image path: when there's an explicit posOffset, float to
+        // the side the shape's horizontal center lands within the text column.
+        if (!isRight && hAlign != "left" && hAlign != "center" && hPos != null)
+        {
+            var offsetEl = hPos.Descendants().FirstOrDefault(e => e.LocalName == "posOffset");
+            if (offsetEl != null && long.TryParse(offsetEl.InnerText, out var offsetEmu))
+            {
+                var pg = GetPageLayout();
+                var marginLeftEmu = pg.MarginLeftPt * EmuConverter.EmuPerPoint;
+                var colWidthEmu = (pg.WidthPt - pg.MarginLeftPt - pg.MarginRightPt) * EmuConverter.EmuPerPoint;
+                double leftInColEmu = hPosFrom == DW.HorizontalRelativePositionValues.Page
+                    ? offsetEmu - marginLeftEmu
+                    : offsetEmu;
+                var centerEmu = leftInColEmu + widthEmu / 2.0;
+                isRight = centerEmu > colWidthEmu / 2.0;
+            }
+        }
+
+        var distT = (long)(anchor.DistanceFromTop?.Value ?? 0) / EmuConverter.EmuPerPointF;
+        var distB = (long)(anchor.DistanceFromBottom?.Value ?? 0) / EmuConverter.EmuPerPointF;
+        var distL = (long)(anchor.DistanceFromLeft?.Value ?? 0) / EmuConverter.EmuPerPointF;
+        var distR = (long)(anchor.DistanceFromRight?.Value ?? 0) / EmuConverter.EmuPerPointF;
+        // Floor the "inside" margin so text always has breathing room.
+        if (isRight) { if (distL < 6) distL = 6; }
+        else { if (distR < 6) distR = 6; }
+
+        return isRight
+            ? $"float:right;margin:{distT:0.#}pt {distR:0.#}pt {distB:0.#}pt {distL:0.#}pt"
+            : $"float:left;margin:{distT:0.#}pt {distR:0.#}pt {distB:0.#}pt {distL:0.#}pt";
     }
 
     /// <summary>
@@ -574,7 +633,7 @@ public partial class WordHandler
     /// </summary>
     private void RenderShapeHtml(StringBuilder sb, OpenXmlElement shape, long offX, long offY,
         long extCx, long extCy, long coordSpaceCx, long coordSpaceCy,
-        List<Drawing>? floatImages = null, bool standalone = false)
+        List<Drawing>? floatImages = null, bool standalone = false, string? floatCss = null)
     {
         // Common shape properties
         var spPr = shape.Elements().FirstOrDefault(e => e.LocalName == "spPr");
@@ -589,7 +648,12 @@ public partial class WordHandler
         {
             var widthPx = extCx / EmuConverter.EmuPerPx;
             var heightPx = extCy / EmuConverter.EmuPerPx;
-            style = $"display:inline-block;width:{widthPx}px;min-height:{heightPx}px;vertical-align:top";
+            // Anchored wrapSquare/wrapTight shape → float so following text
+            // wraps beside it; otherwise inline-block (inline / wrapNone /
+            // behind / in-front-of-text).
+            style = floatCss != null
+                ? $"{floatCss};width:{widthPx}px;min-height:{heightPx}px;box-sizing:border-box"
+                : $"display:inline-block;width:{widthPx}px;min-height:{heightPx}px;vertical-align:top";
 
             // Rotation on standalone shapes too (was only applied inside groups)
             var sXfrm = spPr?.Elements().FirstOrDefault(e => e.LocalName == "xfrm");
