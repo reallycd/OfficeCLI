@@ -250,20 +250,35 @@ public partial class WordHandler
                 {
                     var isRight = hAlign == "right"
                         || hPosFrom == DW.HorizontalRelativePositionValues.RightMargin;
-                    // Also check posOffset — if offset > half page width, float right
-                    if (!isRight && hPos != null)
+                    // Also check posOffset — float side follows where the image's
+                    // horizontal CENTER lands within the text column. The offset is
+                    // interpreted relative to hRelative: margin/column offsets start
+                    // at the left text edge (column origin), page offsets start at the
+                    // physical page left. Comparing the center against the column
+                    // midpoint (not the full-page midpoint) is what makes a
+                    // right-half image float:right with text wrapping on its left,
+                    // matching Word.
+                    if (!isRight && hAlign != "left" && hAlign != "center" && hPos != null)
                     {
                         var offsetEl = hPos.Descendants().FirstOrDefault(e => e.LocalName == "posOffset");
                         if (offsetEl != null && long.TryParse(offsetEl.InnerText, out var offsetEmu))
                         {
-                            // halfPageEmu must be HALF the page width: a posOffset
-                            // past the page center floats the image right. The
-                            // original omitted the /2 and compared against the FULL
-                            // page width, so right-positioned images (offset > center
-                            // but < full width) were mis-floated left.
-                            var halfPageEmu = (long)(GetPageLayout().WidthPt * EmuConverter.EmuPerPoint / 2); // pt to EMU, half page
-                            isRight = offsetEmu > halfPageEmu;
+                            var pg = GetPageLayout();
+                            var marginLeftEmu = pg.MarginLeftPt * EmuConverter.EmuPerPoint;
+                            var colWidthEmu = (pg.WidthPt - pg.MarginLeftPt - pg.MarginRightPt) * EmuConverter.EmuPerPoint;
+                            // Convert the offset to a left-edge coordinate measured
+                            // from the column origin.
+                            double leftInColEmu = hPosFrom == DW.HorizontalRelativePositionValues.Page
+                                ? offsetEmu - marginLeftEmu
+                                : offsetEmu; // margin/column/character → already column-relative
+                            var imgCenterEmu = leftInColEmu + imgCxEmu / 2.0;
+                            isRight = imgCenterEmu > colWidthEmu / 2.0;
                         }
+                    }
+                    else if (hAlign == "center")
+                    {
+                        // centered alignment — keep the existing float:left default
+                        // (block-centering is handled by wrapTopAndBottom branch).
                     }
                     // #7b: use the anchor's distT/distB/distL/distR for the
                     // float margin instead of a hardcoded 8px. The emu→pt
@@ -282,14 +297,32 @@ public partial class WordHandler
                     {
                         if (distR < 6) distR = 6;
                     }
-                    floatCss = isRight
-                        ? $"float:right;margin:{distT:0.#}pt {distR:0.#}pt {distB:0.#}pt {distL:0.#}pt"
-                        : $"float:left;margin:{distT:0.#}pt {distR:0.#}pt {distB:0.#}pt {distL:0.#}pt";
 
                     // Anchored at top of margin — emit marker for relocation to page start
                     var vPos = anchor.GetFirstChild<DW.VerticalPosition>();
                     var vAlign = vPos?.Descendants().FirstOrDefault(e => e.LocalName == "align")?.InnerText;
                     var vFrom = vPos?.RelativeFrom?.Value;
+
+                    // Approximate vPosition: an explicit vertical offset relative to
+                    // the margin or page pushes the image down. Fold it into the top
+                    // float margin (best-effort, not pixel-perfect) — previously the
+                    // vertical offset was ignored and the image hugged the top of the
+                    // wrapping paragraph.
+                    if (vAlign == null && vPos != null &&
+                        (vFrom == DW.VerticalRelativePositionValues.Margin
+                         || vFrom == DW.VerticalRelativePositionValues.Page
+                         || vFrom == DW.VerticalRelativePositionValues.Paragraph
+                         || vFrom == DW.VerticalRelativePositionValues.Line))
+                    {
+                        var vOffEl = vPos.Descendants().FirstOrDefault(e => e.LocalName == "posOffset");
+                        if (vOffEl != null && long.TryParse(vOffEl.InnerText, out var vOffEmu) && vOffEmu > 0)
+                            distT += vOffEmu / EmuConverter.EmuPerPointF;
+                    }
+
+                    floatCss = isRight
+                        ? $"float:right;margin:{distT:0.#}pt {distR:0.#}pt {distB:0.#}pt {distL:0.#}pt"
+                        : $"float:left;margin:{distT:0.#}pt {distR:0.#}pt {distB:0.#}pt {distL:0.#}pt";
+
                     if (vAlign == "top" && vFrom == DW.VerticalRelativePositionValues.Margin)
                     {
                         var fc = isRight ? "float:right;margin:0 0 8px 8px" : "float:left;margin:0 8px 8px 0";
