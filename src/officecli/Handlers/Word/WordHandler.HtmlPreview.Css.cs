@@ -254,6 +254,17 @@ public partial class WordHandler
 
     // ==================== Inline CSS ====================
 
+    // True for the document's first body block-level paragraph (top of page 1).
+    // Word suppresses spaceBefore at the top of a page; we render it flush.
+    // Excludes paragraphs nested in tables/headers/footers (Parent != Body) and
+    // any paragraph preceded by a sibling paragraph or table.
+    private bool IsFirstBodyParagraph(Paragraph para)
+    {
+        if (para.Parent is not Body body) return false;
+        return body.Elements()
+            .FirstOrDefault(e => e is Paragraph || e is Table) == para;
+    }
+
     private string GetParagraphInlineCss(Paragraph para, bool isListItem = false)
     {
         var parts = new List<string>();
@@ -488,6 +499,14 @@ public partial class WordHandler
                        ?? prevStyleSpacing?.AfterLines?.Value);
                 prevSpaceAfterPt = ResolveSpacingPt(prevAfter, prevAfterLines) ?? 0;
             }
+
+            // Word suppresses spaceBefore at the TOP of a page: the document's
+            // first body paragraph renders flush at the top margin (verified
+            // against real Word). Mirrors the PowerPoint first-paragraph fix.
+            // Scope to the body's first block-level paragraph only — paragraphs
+            // inside tables/headers/footers keep their spaceBefore.
+            if (!suppressBefore && IsFirstBodyParagraph(para))
+                suppressBefore = true;
 
             if (suppressBefore)
             {
