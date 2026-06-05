@@ -243,10 +243,24 @@ public partial class PowerPointHandler
 
             var hasMath = paraXml.Contains("oMath");
             var runs = para.Elements<Drawing.Run>().ToList();
-            if (runs.Count == 0 && !hasMath)
+            // A paragraph is visually empty when it has no runs OR all its runs
+            // carry empty <a:t> (RenderRun emits nothing for empty text). Real
+            // PowerPoint still reserves a full line of vertical space for such a
+            // paragraph, sized to its effective font size (the run's/endParaRPr's
+            // sz, default 18pt). Without a placeholder, an empty-text run div
+            // collapses to zero height and the blank line disappears. Emit a
+            // sized &nbsp; so the line occupies its proper height.
+            bool hasVisibleText = runs.Any(r => !string.IsNullOrEmpty(r.Text?.Text));
+            if (!hasVisibleText && !hasMath)
             {
-                // Empty paragraph (line break)
-                sb.Append("&nbsp;");
+                // Empty paragraph (blank line) — size the &nbsp; to the effective
+                // font size so it isn't zero-height. Precedence: first run rPr sz
+                // > endParaRPr sz > inherited placeholder default > 18pt.
+                var emptySzHundredths = runs.FirstOrDefault()?.RunProperties?.FontSize?.Value
+                    ?? para.GetFirstChild<Drawing.EndParagraphRunProperties>()?.FontSize?.Value
+                    ?? defaultFontSizeHundredths
+                    ?? 1800;
+                sb.Append($"<span style=\"font-size:{emptySzHundredths / 100.0 * fontScale:0.##}pt\">&nbsp;</span>");
             }
             else
             {

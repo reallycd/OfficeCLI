@@ -182,6 +182,18 @@ public partial class PowerPointHandler
                     // else: inherit from table style / slideMaster (no hardcoded default)
                     if (rp.Bold?.Value == true)
                         cellStyles.Add("font-weight:bold");
+                    // Italic / underline / strike — mirror RenderRun so cell text
+                    // formatting matches shape text. Previously only bold was read,
+                    // silently dropping <a:rPr i="1"/u="…"/strike="…"> on table cells.
+                    if (rp.Italic?.Value == true)
+                        cellStyles.Add("font-style:italic");
+                    var decorations = new List<string>();
+                    if (rp.Underline?.HasValue == true && rp.Underline.Value != Drawing.TextUnderlineValues.None)
+                        decorations.Add("underline");
+                    if (rp.Strike?.HasValue == true && rp.Strike.Value != Drawing.TextStrikeValues.NoStrike)
+                        decorations.Add("line-through");
+                    if (decorations.Count > 0)
+                        cellStyles.Add($"text-decoration:{string.Join(" ", decorations)}");
                     var fontVal = rp.GetFirstChild<Drawing.LatinFont>()?.Typeface?.Value
                         ?? rp.GetFirstChild<Drawing.EastAsianFont>()?.Typeface?.Value;
                     if (fontVal != null && !fontVal.StartsWith("+", StringComparison.Ordinal))
