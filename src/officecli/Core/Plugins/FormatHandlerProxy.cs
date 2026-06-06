@@ -9,13 +9,13 @@ namespace OfficeCli.Core.Plugins;
 /// <summary>
 /// <see cref="IDocumentHandler"/> implementation that delegates every call to a
 /// running format-handler plugin via <see cref="FormatHandlerSession"/>. Per
-/// docs/plugin-protocol.md §2.3, this is what wraps the plugin so existing
+/// plugins/plugin-protocol.md §2.3, this is what wraps the plugin so existing
 /// get/view/query pipelines work transparently on foreign formats.
 ///
 /// Scope: read-path (ViewAs*, Get, Query, Validate) and mutation
 /// (Set/Add/Remove/Move/CopyFrom/Raw/RawSet/AddPart/TryExtractBinary)
 /// are all proxied. Plugins that don't implement a given verb should
-/// reply with error code <c>unsupported_command</c> per docs/plugin-protocol.md §5.3.
+/// reply with error code <c>unsupported_command</c> per plugins/plugin-protocol.md §5.3.
 /// </summary>
 internal sealed class FormatHandlerProxy : IDocumentHandler
 {

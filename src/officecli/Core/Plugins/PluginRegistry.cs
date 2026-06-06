@@ -13,7 +13,7 @@ public sealed record ResolvedPlugin(string ExecutablePath, PluginManifest Manife
 
 /// <summary>
 /// Locates plugin executables and reads their manifests. Implements the
-/// 4-path discovery rules in docs/plugin-protocol.md §3.
+/// 4-path discovery rules in plugins/plugin-protocol.md §3.
 ///
 /// Lookup is cached for the process lifetime. Negative results are cached too,
 /// so a missing plugin is not re-probed on every operation.

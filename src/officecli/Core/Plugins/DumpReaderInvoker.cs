@@ -7,7 +7,7 @@ using OfficeCli.Handlers;
 namespace OfficeCli.Core.Plugins;
 
 /// <summary>
-/// Runs a dump-reader plugin per docs/plugin-protocol.md §5.1. The plugin
+/// Runs a dump-reader plugin per plugins/plugin-protocol.md §5.1. The plugin
 /// reads a foreign source file (e.g. .doc) and **streams** BatchItem objects
 /// as JSONL (one JSON object per line) on stdout. Main opens a fresh native
 /// scratch file (extension from the plugin's manifest <c>target</c> field —
@@ -38,7 +38,7 @@ public static class DumpReaderInvoker
             ?? throw new CliException($"No dump-reader plugin found for {sourceExt}.")
             {
                 Code = "dump_reader_not_found",
-                Suggestion = "Install a dump-reader plugin (`officecli plugins list` to see installed; docs/plugin-protocol.md for paths).",
+                Suggestion = "Install a dump-reader plugin (`officecli plugins list` to see installed; plugins/plugin-protocol.md for paths).",
             };
 
         var targetExt = plugin.Manifest.ResolveTargetExtension();

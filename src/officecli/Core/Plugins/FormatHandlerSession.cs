@@ -10,7 +10,7 @@ namespace OfficeCli.Core.Plugins;
 
 /// <summary>
 /// Owns a running format-handler plugin process and the stdin/stdout
-/// channel used to talk to it. Per docs/plugin-protocol.md §2.3 / §5.3 / §6.1.
+/// channel used to talk to it. Per plugins/plugin-protocol.md §2.3 / §5.3 / §6.1.
 ///
 /// Lifecycle (matches the §6.7 state machine):
 ///   spawning → ready (after open-handshake) → busy (per Send) → broken

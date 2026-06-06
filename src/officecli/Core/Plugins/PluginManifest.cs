@@ -7,7 +7,7 @@ using OfficeCli.Core;
 namespace OfficeCli.Core.Plugins;
 
 /// <summary>
-/// The three plugin responsibilities defined in docs/plugin-protocol.md.
+/// The three plugin responsibilities defined in plugins/plugin-protocol.md.
 /// String values are the wire form used in plugin manifests.
 /// </summary>
 public enum PluginKind
@@ -46,7 +46,7 @@ public static class PluginKindExtensions
 
 /// <summary>
 /// Manifest emitted by a plugin in response to `<plugin> --info`. Mirrors
-/// the schema defined in docs/plugin-protocol.md §4.
+/// the schema defined in plugins/plugin-protocol.md §4.
 /// </summary>
 public sealed class PluginManifest
 {
@@ -250,7 +250,7 @@ public sealed class PluginVocabulary
 }
 
 /// <summary>
-/// Result of the open handshake (docs/plugin-protocol.md §5.3). Returned by
+/// Result of the open handshake (plugins/plugin-protocol.md §5.3). Returned by
 /// the plugin on session start; main caches it for the session's lifetime to
 /// short-circuit unsupported commands and to resolve runtime vocabulary that
 /// may differ from the manifest.

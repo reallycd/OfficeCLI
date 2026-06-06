@@ -71,7 +71,7 @@ static partial class CommandBuilder
                 Console.WriteLine("No plugins installed.");
                 Console.WriteLine("");
                 Console.WriteLine("Plugins extend officecli to support additional formats (.doc, .hwpx, .pdf export, ...).");
-                Console.WriteLine("See: docs/plugin-protocol.md for installation paths.");
+                Console.WriteLine("See: plugins/plugin-protocol.md for installation paths.");
                 return 0;
             }
 

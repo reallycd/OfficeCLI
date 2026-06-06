@@ -83,7 +83,7 @@ public static class DocumentHandlerFactory
     /// found, return a handler that delegates to it. Returns null when no
     /// plugin is installed — callers fall back to the unsupported-type error.
     ///
-    /// dump-reader: per docs/plugin-protocol.md §2.1, the plugin emits a batch
+    /// dump-reader: per plugins/plugin-protocol.md §2.1, the plugin emits a batch
     /// of officecli commands describing the foreign source; main replays them
     /// into a fresh native file whose extension comes from the plugin's
     /// manifest <c>target</c> (docx/xlsx/pptx). The result is cached as a
@@ -183,7 +183,7 @@ public static class DocumentHandlerFactory
         new CliException(
             $"Unsupported file type: {ext}. Supported: .docx, .xlsx, .pptx. " +
             $"Other formats may be opened via plugins — run `officecli plugins list` to see installed plugins, " +
-            $"or see docs/plugin-protocol.md for installation paths.")
+            $"or see plugins/plugin-protocol.md for installation paths.")
         {
             Code = "unsupported_type",
             ValidValues = [".docx", ".xlsx", ".pptx"]
