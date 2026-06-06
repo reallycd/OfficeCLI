@@ -4,7 +4,7 @@
 namespace OfficeCli.Core.Plugins;
 
 /// <summary>
-/// Shared logic for invoking exporter plugins (docs/plugin-protocol.md §5.2):
+/// Shared logic for invoking exporter plugins (plugins/plugin-protocol.md §5.2):
 /// resolution, subprocess invocation, exit-code mapping. Used by
 /// `view &lt;file&gt; pdf` and any future caller that needs to convert a native
 /// document to a foreign target via an installed exporter plugin.
@@ -34,7 +34,7 @@ public static class ExporterInvoker
             ?? throw new CliException($"No exporter plugin found for {sourceExt} → {targetExt}.")
             {
                 Code = "exporter_not_found",
-                Suggestion = "Install an exporter plugin: `officecli plugins list` to see what's available, or see docs/plugin-protocol.md.",
+                Suggestion = "Install an exporter plugin: `officecli plugins list` to see what's available, or see plugins/plugin-protocol.md.",
             };
 
         bool residentClosed = false;

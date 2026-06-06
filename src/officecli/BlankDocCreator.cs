@@ -36,7 +36,7 @@ public static class BlankDocCreator
     /// Delegate creation of an unknown extension to a registered format-handler
     /// plugin, if one exists for that extension and exposes a `create &lt;path&gt;`
     /// CLI subcommand. Returns <c>true</c> if a plugin was found and produced
-    /// the file successfully. Generic per docs/plugin-protocol.md — keeps
+    /// the file successfully. Generic per plugins/plugin-protocol.md — keeps
     /// BlankDocCreator format-agnostic; any plugin that implements the
     /// `create` subcommand on its executable participates.
     /// </summary>
