@@ -468,20 +468,6 @@
       ],
       "readback": "comma-separated flags: value,percent,category,series"
     },
-    "dataRange": {
-      "type": "string",
-      "aliases": [
-        "datarange",
-        "range"
-      ],
-      "add": true,
-      "set": false,
-      "get": false,
-      "description": "external workbook range source for series; Add-time only.",
-      "examples": [
-        "--prop dataRange=Sheet1!A1:D5"
-      ]
-    },
     "dataTable": {
       "type": "bool",
       "aliases": [
