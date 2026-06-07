@@ -148,7 +148,8 @@ public static partial class WordBatchEmitter
             ParaIdToTargetIdx: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
             DeferredBookmarks: new List<BatchItem>(),
             TextboxCounters: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
-            Warnings: warnings);
+            Warnings: warnings,
+            RawDrawingDocPrCursor: new NoteCursor());
 
         if (node.Type == "table")
             EmitTable(word, path, 1, items, ctx);
@@ -355,7 +356,15 @@ public static partial class WordBatchEmitter
         // identifies content it cannot round-trip through the existing
         // handler vocabulary (OLE runs without a carrier for the embedded
         // payload, etc). Mirrors pptx's <see cref="PptxBatchEmitter.SlideEmitContext.Unsupported"/>.
-        List<DocxUnsupportedWarning> Warnings);
+        List<DocxUnsupportedWarning> Warnings,
+        // Monotonic cursor for re-numbering the <wp:docPr> id of raw-set-
+        // preserved drawings (non-textbox shapes). Typed `add textbox/picture/
+        // chart` rows get ids from NextDocPropId (max-existing+1) on replay,
+        // but a raw-set injects its source id verbatim and would collide with
+        // a renumbered textbox (e.g. both land on id=2). Each preserved shape
+        // is reassigned an id in a high band with large gaps so no add-side
+        // max+1 allocation can ever reach it. See RewriteDrawingDocPrIds.
+        NoteCursor RawDrawingDocPrCursor);
 
     private static void EmitBody(WordHandler word, List<BatchItem> items,
                                  List<DocxUnsupportedWarning> warnings,
@@ -404,7 +413,8 @@ public static partial class WordBatchEmitter
             ParaIdToTargetIdx: paraIdToTargetIdx,
             DeferredBookmarks: new List<BatchItem>(),
             TextboxCounters: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
-            Warnings: warnings);
+            Warnings: warnings,
+            RawDrawingDocPrCursor: new NoteCursor());
 
         int pIndex = 0, tblIndex = 0;
         foreach (var child in bodyNode.Children)
