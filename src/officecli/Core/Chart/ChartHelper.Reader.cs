@@ -1082,6 +1082,20 @@ internal static partial class ChartHelper
                 // here via series{N}.labelFont*=, and without per-series
                 // readback dump→replay loses the spec.
                 var serDLbls = serEl?.GetFirstChild<C.DataLabels>();
+                // Per-series data-label SHOW flags (<c:showVal>, <c:showCatName>,
+                // <c:showSerName>, <c:showPercent>). Without these the labels a
+                // series displays (e.g. the value above each bar) were dropped on
+                // dump→replay — only the labelFont styling below round-tripped.
+                if (serDLbls != null)
+                {
+                    var dlFlags = new List<string>();
+                    if (serDLbls.GetFirstChild<C.ShowValue>()?.Val?.Value == true) dlFlags.Add("value");
+                    if (serDLbls.GetFirstChild<C.ShowCategoryName>()?.Val?.Value == true) dlFlags.Add("category");
+                    if (serDLbls.GetFirstChild<C.ShowSeriesName>()?.Val?.Value == true) dlFlags.Add("series");
+                    if (serDLbls.GetFirstChild<C.ShowPercent>()?.Val?.Value == true) dlFlags.Add("percent");
+                    if (dlFlags.Count > 0)
+                        seriesNode.Format["dataLabels"] = string.Join(",", dlFlags);
+                }
                 var serDlDefRp = serDLbls?.GetFirstChild<C.TextProperties>()
                     ?.GetFirstChild<Drawing.Paragraph>()
                     ?.GetFirstChild<Drawing.ParagraphProperties>()

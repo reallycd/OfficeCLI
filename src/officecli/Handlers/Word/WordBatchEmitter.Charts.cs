@@ -29,6 +29,7 @@ public static partial class WordBatchEmitter
         var seriesParts = new List<string>();
         int seriesIdx = 0;
         bool emittedPerSeriesFill = false;
+        var dataLabelFlags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var s in spec.Series)
         {
             if (s.Type != "series") continue;
@@ -60,12 +61,16 @@ public static partial class WordBatchEmitter
                 var g = gObj.ToString() ?? "";
                 if (g.Length > 0) { props[$"series{seriesIdx}.gradient"] = g; emittedPerSeriesFill = true; }
             }
-            // NOTE: per-series data-label show flags (Format["dataLabels"]) are
-            // NOT emitted yet — AddChart has no per-series data-label setter, and
-            // routing them to the chart-level datalabels.show* keys tripped a
-            // schema-order bug in that handler (<c:showVal> emitted as an
-            // unexpected child of an existing <c:dLbls>). Deferred: data-label
-            // round-trip needs the chart-level dLbls builder fixed first.
+            // Per-series data-label show flags (value/category/series/percent).
+            // AddChart has no per-series data-label setter, so accumulate the
+            // union across series and emit the chart-level datalabels.show* keys
+            // below. (Common case: a single-series chart showing values, or all
+            // series sharing the same labels.)
+            if (s.Format.TryGetValue("dataLabels", out var dObj) && dObj != null)
+            {
+                foreach (var flag in (dObj.ToString() ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    dataLabelFlags.Add(flag);
+            }
         }
         if (seriesParts.Count > 0)
         {
@@ -80,6 +85,16 @@ public static partial class WordBatchEmitter
         {
             props.Remove("gradient");
             props.Remove("color");
+        }
+        // Map the collected series data-label flags onto the chart-level keys
+        // AddChart applies (no per-series data-label setter exists). The
+        // chart-level dLbls builder now inserts the show flags in schema order.
+        if (dataLabelFlags.Count > 0)
+        {
+            if (dataLabelFlags.Contains("value")) props["datalabels.showvalue"] = "true";
+            if (dataLabelFlags.Contains("category")) props["datalabels.showcatname"] = "true";
+            if (dataLabelFlags.Contains("series")) props["datalabels.showsername"] = "true";
+            if (dataLabelFlags.Contains("percent")) props["datalabels.showpercent"] = "true";
         }
         return props;
     }

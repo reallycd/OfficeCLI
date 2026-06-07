@@ -2227,10 +2227,7 @@ internal static partial class ChartHelper
                     if (!EnsureDataLabelsForShowToggle(chart, key, unsupported, out var dls)) break;
                     var show = ParseHelpers.IsTruthy(value);
                     foreach (var dl in dls)
-                    {
-                        dl.RemoveAllChildren<C.ShowValue>();
-                        dl.AppendChild(new C.ShowValue { Val = show });
-                    }
+                        SetDLblsShowFlag(dl, new C.ShowValue { Val = show });
                     break;
                 }
 
@@ -2240,10 +2237,7 @@ internal static partial class ChartHelper
                     if (!EnsureDataLabelsForShowToggle(chart, key, unsupported, out var dls)) break;
                     var show = ParseHelpers.IsTruthy(value);
                     foreach (var dl in dls)
-                    {
-                        dl.RemoveAllChildren<C.ShowPercent>();
-                        dl.AppendChild(new C.ShowPercent { Val = show });
-                    }
+                        SetDLblsShowFlag(dl, new C.ShowPercent { Val = show });
                     break;
                 }
 
@@ -2253,10 +2247,7 @@ internal static partial class ChartHelper
                     if (!EnsureDataLabelsForShowToggle(chart, key, unsupported, out var dls)) break;
                     var show = ParseHelpers.IsTruthy(value);
                     foreach (var dl in dls)
-                    {
-                        dl.RemoveAllChildren<C.ShowCategoryName>();
-                        dl.AppendChild(new C.ShowCategoryName { Val = show });
-                    }
+                        SetDLblsShowFlag(dl, new C.ShowCategoryName { Val = show });
                     break;
                 }
 
@@ -2266,10 +2257,7 @@ internal static partial class ChartHelper
                     if (!EnsureDataLabelsForShowToggle(chart, key, unsupported, out var dls)) break;
                     var show = ParseHelpers.IsTruthy(value);
                     foreach (var dl in dls)
-                    {
-                        dl.RemoveAllChildren<C.ShowSeriesName>();
-                        dl.AppendChild(new C.ShowSeriesName { Val = show });
-                    }
+                        SetDLblsShowFlag(dl, new C.ShowSeriesName { Val = show });
                     break;
                 }
 
@@ -2278,10 +2266,7 @@ internal static partial class ChartHelper
                     if (!EnsureDataLabelsForShowToggle(chart, key, unsupported, out var dls)) break;
                     var show = ParseHelpers.IsTruthy(value);
                     foreach (var dl in dls)
-                    {
-                        dl.RemoveAllChildren<C.ShowLegendKey>();
-                        dl.AppendChild(new C.ShowLegendKey { Val = show });
-                    }
+                        SetDLblsShowFlag(dl, new C.ShowLegendKey { Val = show });
                     break;
                 }
 
@@ -4034,6 +4019,47 @@ internal static partial class ChartHelper
             dataLabels.Add(dl);
         }
         return dataLabels.Count > 0;
+    }
+
+    // CT_DLbls fixes a strict child order. The per-flag setters
+    // (datalabels.showvalue / showcatname / …) used RemoveAllChildren<T>() +
+    // AppendChild(T), which drops the element at the END — so toggling showVal
+    // on a dLbls that already carried showCatName/showSerName/showPercent
+    // produced <showCatName/><showSerName/><showPercent/><showVal/>, and the
+    // validator rejected the out-of-order showVal ("unexpected child element
+    // showVal"). Replace those with this helper, which removes the existing
+    // element of the same type and re-inserts it at its canonical position.
+    private static readonly Dictionary<Type, int> DLblsChildOrder = new()
+    {
+        [typeof(C.Delete)] = 0,
+        [typeof(C.NumberingFormat)] = 1,
+        [typeof(C.ChartShapeProperties)] = 2,
+        [typeof(C.TextProperties)] = 3,
+        [typeof(C.DataLabelPosition)] = 4,
+        [typeof(C.ShowLegendKey)] = 5,
+        [typeof(C.ShowValue)] = 6,
+        [typeof(C.ShowCategoryName)] = 7,
+        [typeof(C.ShowSeriesName)] = 8,
+        [typeof(C.ShowPercent)] = 9,
+        [typeof(C.ShowBubbleSize)] = 10,
+        [typeof(C.Separator)] = 11,
+        [typeof(C.ShowLeaderLines)] = 12,
+        [typeof(C.LeaderLines)] = 13,
+    };
+
+    private static int DLblsOrd(DocumentFormat.OpenXml.OpenXmlElement e)
+        => DLblsChildOrder.TryGetValue(e.GetType(), out var o) ? o : 99;
+
+    private static void SetDLblsShowFlag(C.DataLabels dl, DocumentFormat.OpenXml.OpenXmlElement child)
+    {
+        // Drop any existing element of the same type, then insert before the
+        // first child whose canonical rank is higher (i.e. must come after).
+        foreach (var existing in dl.ChildElements.Where(c => c.GetType() == child.GetType()).ToList())
+            existing.Remove();
+        var rank = DLblsOrd(child);
+        var anchor = dl.ChildElements.FirstOrDefault(c => DLblsOrd(c) > rank);
+        if (anchor != null) dl.InsertBefore(child, anchor);
+        else dl.AppendChild(child);
     }
 
     // Apply a chart-level `labelPos=...` request to a combo chart by writing
