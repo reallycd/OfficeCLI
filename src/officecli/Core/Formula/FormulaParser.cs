@@ -51,7 +51,15 @@ internal static class FormulaParser
             var tokens = Tokenize(latex);
             var pos = 0;
             var nodes = ParseGroup(tokens, ref pos, false);
-            return WrapInOfficeMath(nodes);
+            var root = WrapInOfficeMath(nodes);
+            // Defense in depth: several builders wrap grouped content in an
+            // <m:oMath> (via WrapInOfficeMath) to make a single scriptable node.
+            // If such a wrapper lands inside an <m:e>/<m:num>/<m:den>/… without
+            // being unwrapped, the result is a nested <m:oMath>, which is invalid
+            // OMML — Word refuses to open the file ("file may be corrupt") even
+            // though the SDK validator tolerates it. Flatten any non-root oMath.
+            FlattenNestedOfficeMath(root);
+            return root;
         }
         catch (Exception ex)
         {
@@ -1152,7 +1160,12 @@ internal static class FormulaParser
                     dPr.AppendChild(new M.EndChar { Val = closeChar });
 
                 var delimiter = new M.Delimiter(dPr);
-                var arg = new M.Base(content.Select(e => e.CloneNode(true)).ToArray());
+                // Flatten any OfficeMath wrappers (a braced subgroup at line ~1117
+                // is wrapped via WrapInOfficeMath so a script can attach to it). A
+                // <m:e> must hold math runs directly — a nested <m:oMath> inside
+                // <m:e> is invalid OMML and makes Word refuse to open the file.
+                // ExtractChildren unwraps OfficeMath; non-wrapped nodes pass through.
+                var arg = new M.Base(content.SelectMany(ExtractChildren).ToArray());
                 delimiter.AppendChild(arg);
                 return delimiter;
             }
@@ -1718,6 +1731,30 @@ internal static class FormulaParser
         if (element is M.OfficeMath math)
             return math.ChildElements.Select(e => e.CloneNode(true)).ToArray();
         return new[] { element.CloneNode(true) };
+    }
+
+    /// <summary>
+    /// Replace every non-root <c>&lt;m:oMath&gt;</c> with its children in place.
+    /// A nested oMath (one inside another math element) is invalid OMML and makes
+    /// Word refuse to open the document, even though the SDK validator accepts it.
+    /// Processing innermost-first keeps reparenting well-defined.
+    /// </summary>
+    private static void FlattenNestedOfficeMath(OpenXmlElement root)
+    {
+        // Descendants excludes root, so every hit here is by definition nested.
+        // Reverse document order → deepest/last handled first.
+        var nested = root.Descendants<M.OfficeMath>().Reverse().ToList();
+        foreach (var om in nested)
+        {
+            var parent = om.Parent;
+            if (parent == null) continue;
+            foreach (var child in om.ChildElements.ToList())
+            {
+                child.Remove();
+                parent.InsertBefore(child, om);
+            }
+            om.Remove();
+        }
     }
 
     private static string NamedColorToHex(string color)
