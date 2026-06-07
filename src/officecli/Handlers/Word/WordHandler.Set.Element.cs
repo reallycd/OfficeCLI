@@ -1209,7 +1209,18 @@ public partial class WordHandler
                         if (paraRPr.ChildElements.Count == 0)
                             paraRPr.Remove();
                     }
-                    if (!GenericXmlQuery.TryCreateTypedChild(pProps, key, value))
+                    // Try as a paragraph-level single-val element first; if pPr
+                    // rejects it (schema-aware), it may be a RUN-level element
+                    // (<w:w> char scale, <w:em> emphasis, …) that landed on a
+                    // paragraph Set because the dump collapsed a single-run
+                    // paragraph (ShouldCollapseSingleRun). Apply it to the runs
+                    // via the same schema-validated run fallback a direct run Set
+                    // uses, so such props round-trip without per-property
+                    // curation. Genuinely unknown keys fail both → unsupported.
+                    if (!GenericXmlQuery.TryCreateTypedChild(pProps, key, value)
+                        && !TryApplyBareKeyToParagraphRuns(para, pProps, key, value,
+                                markRPrPreExisted,
+                                properties.ContainsKey("text") || properties.ContainsKey("formula")))
                     {
                         var hint = key.ToLowerInvariant() is "sectionbreak" or "section_break" or "sectiontype"
                             ? $"{key} (section breaks are added via 'add --type section --prop type=nextPage/evenPage/oddPage/continuous', not as a paragraph property)"
@@ -1227,6 +1238,51 @@ public partial class WordHandler
             affectedPara.TextId = GenerateParaId();
         _doc.MainDocumentPart?.Document?.Save();
         return unsupported;
+    }
+
+    /// <summary>
+    /// Apply a bare single-val element key (no dot) to a paragraph's runs and ¶
+    /// mark when it is a RUN-level element that pPr rejected. The schema-aware
+    /// <see cref="GenericXmlQuery.TryCreateTypedChild"/> validates each target,
+    /// so a genuine paragraph-only or unknown key lands nowhere and the caller
+    /// reports it unsupported. Mirrors the run/markRPr targeting of the curated
+    /// run-key branch so the dump's single-run collapse round-trips run props
+    /// (e.g. &lt;w:w&gt; character scale, &lt;w:em&gt; emphasis) without a
+    /// per-property case. Returns true if the element landed on ≥1 target.
+    /// </summary>
+    private bool TryApplyBareKeyToParagraphRuns(
+        Paragraph para, ParagraphProperties pProps, string key, string value,
+        bool markRPrPreExisted, bool willCreateRun)
+    {
+        // Dotted keys are handled by the TypedAttributeFallback path above.
+        if (key.Contains('.')) return false;
+
+        var runs = para.Descendants<Run>().ToList();
+        if (runs.Count == 0 && willCreateRun)
+        {
+            var seedRun = new Run(new RunProperties());
+            para.AppendChild(seedRun);
+            runs.Add(seedRun);
+        }
+
+        bool applied = false;
+        foreach (var run in runs)
+            if (GenericXmlQuery.TryCreateTypedChild(EnsureRunProperties(run), key, value))
+                applied = true;
+
+        // Mirror the curated branch: write to the ¶ mark when there are no runs
+        // or the source already carried a markRPr.
+        if (runs.Count == 0 || markRPrPreExisted)
+        {
+            var markRPr = pProps.ParagraphMarkRunProperties
+                ?? pProps.AppendChild(new ParagraphMarkRunProperties());
+            if (GenericXmlQuery.TryCreateTypedChild(markRPr, key, value))
+                applied = true;
+            else if (markRPr.ChildElements.Count == 0)
+                markRPr.Remove();
+        }
+
+        return applied;
     }
 
     // Modify a single TabStop (paragraph tab stop). Supports pos (twips or any
