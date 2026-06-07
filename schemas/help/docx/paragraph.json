@@ -1193,6 +1193,24 @@
       "get": true,
       "readback": "font name",
       "enforcement": "report"
+    },
+    "markRPr.font.hint": {
+      "type": "string",
+      "description": "paragraph-mark run font slot hint (w:pPr/w:rPr/w:rFonts @hint) — eastAsia / cs / default; selects the font slot for ambiguous characters on the paragraph mark.",
+      "add": false,
+      "set": true,
+      "get": true,
+      "readback": "eastAsia / cs / default",
+      "enforcement": "report"
+    },
+    "markRPr.charSpacing": {
+      "type": "length",
+      "description": "paragraph-mark run character spacing (w:pPr/w:rPr/w:spacing @val, twips internally).",
+      "add": false,
+      "set": true,
+      "get": true,
+      "readback": "unit-qualified pt (e.g. 1pt)",
+      "enforcement": "report"
     }
   }
 }

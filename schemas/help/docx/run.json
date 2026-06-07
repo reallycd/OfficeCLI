@@ -246,6 +246,17 @@
       ],
       "enforcement": "report"
     },
+    "font.hint": {
+      "type": "string",
+      "description": "Font slot hint (rFonts/hint) — tells Word which slot (eastAsia / cs / default) to use for ambiguous characters (CJK digits, punctuation) so they render with the intended font. Values: eastAsia, cs, default.",
+      "add": true,
+      "set": true,
+      "get": true,
+      "examples": [
+        "--prop font.hint=eastAsia"
+      ],
+      "enforcement": "report"
+    },
     "font.asciiTheme": {
       "type": "string",
       "description": "Theme font binding for the ascii slot (rFonts/asciiTheme). Values: minorHAnsi, majorHAnsi, minorEastAsia, majorEastAsia, minorBidi, majorBidi.",
