@@ -444,7 +444,7 @@ public static partial class WordBatchEmitter
                     // Section emit is a follow-up.
                     break;
                 case "sdt":
-                    EmitSdt(word, child.Path, items);
+                    EmitSdt(word, child.Path, items, ctx);
                     break;
                 case "bookmark":
                     // Standalone body-level <w:bookmarkStart> (e.g. an anchor

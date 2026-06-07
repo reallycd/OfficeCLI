@@ -540,12 +540,51 @@ public static partial class WordBatchEmitter
         }
     }
 
-    // Emit a body-level SDT (Content Control) as a typed `add /body --type sdt`
-    // row. Get exposes type, alias, tag, items (dropdown/combobox), editable,
-    // and the visible text — all of which AddSdt round-trips. Without this,
-    // SDTs were silently dropped from dump output (BUG-X2-06 / X2-3).
-    private static void EmitSdt(WordHandler word, string sourcePath, List<BatchItem> items)
+    // Emit a body-level SDT (Content Control). Simple SDTs (a single text run,
+    // dropdown/combobox/date pickers) round-trip as a typed `add /body --type
+    // sdt` carrying type/alias/tag/items/format + the visible text — all of
+    // which AddSdt rebuilds. Without this, SDTs were silently dropped from dump
+    // output (BUG-X2-06 / X2-3).
+    //
+    // Rich BLOCK SDTs are different: a Table of Contents, or any content control
+    // wrapping multiple paragraphs / hyperlinks / fields / a table, carries
+    // block structure the text-only path cannot express — it concatenates every
+    // inner paragraph into one `text` run, collapsing a multi-line TOC into a
+    // single line. Round-trip the whole <w:sdt> verbatim via raw-set instead,
+    // inserted before the body's trailing sectPr so it lands at the same spot
+    // the sequential `add /body` items build up to (AppendToParent inserts body
+    // children before that sectPr). Same rationale as the theme/settings/
+    // numbering raw emits: structured XML edited as a block, not per-property.
+    private static void EmitSdt(WordHandler word, string sourcePath, List<BatchItem> items, BodyEmitContext ctx)
     {
+        var rawXml = word.RawElementXml(sourcePath);
+        if (!string.IsNullOrEmpty(rawXml) && IsRichBlockSdt(rawXml!))
+        {
+            // External relationship references (hyperlink r:id, image r:embed/
+            // r:link) would dangle in the blank target — raw injection does not
+            // recreate the matching rels. Fall back to the text emit and surface
+            // the loss rather than producing a file with broken references.
+            if (HasExternalRelRef(rawXml!))
+            {
+                ctx.Warnings.Add(new DocxUnsupportedWarning(
+                    Element: "sdt.richContent",
+                    Path: sourcePath,
+                    Reason: "content control with rich block content AND external relationship references (hyperlinks/images) flattened to text on dump"));
+            }
+            else
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = "/document",
+                    Xpath = "//w:body/w:sectPr",
+                    Action = "insertbefore",
+                    Xml = rawXml
+                });
+                return;
+            }
+        }
+
         DocumentNode sdt;
         try { sdt = word.Get(sourcePath); }
         catch { return; }
@@ -573,6 +612,34 @@ public static partial class WordBatchEmitter
             Props = props
         });
     }
+
+    // A block SDT is "rich" when its content carries structure the text-only
+    // typed emit cannot reproduce: more than one paragraph, or any hyperlink /
+    // complex field / table / drawing. Such SDTs round-trip verbatim via
+    // raw-set; everything else (single text run, form-control pickers) stays on
+    // the introspectable typed `add sdt` path.
+    private static bool IsRichBlockSdt(string sdtXml)
+    {
+        // <w:p> / <w:p attr...> — but not <w:pPr>, <w:pict>, <w:proofErr> (the
+        // char after "w:p" must be a space or '>').
+        if (System.Text.RegularExpressions.Regex.Matches(sdtXml, "<w:p[ >]").Count > 1)
+            return true;
+        return sdtXml.Contains("<w:hyperlink", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:fldChar", StringComparison.Ordinal)
+            || sdtXml.Contains("w:instrText", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:fldSimple", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:tbl", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:drawing", StringComparison.Ordinal);
+    }
+
+    // Raw injection of an <w:sdt> into the blank target preserves the element
+    // verbatim but cannot recreate the package relationships its r:id/r:embed/
+    // r:link attributes point at — those would dangle. Detect them so the
+    // caller can fall back to the (lossy but valid) text emit.
+    private static bool HasExternalRelRef(string xml)
+        => xml.Contains("r:id=", StringComparison.Ordinal)
+        || xml.Contains("r:embed=", StringComparison.Ordinal)
+        || xml.Contains("r:link=", StringComparison.Ordinal);
 
     private static void EmitSection(WordHandler word, List<BatchItem> items)
     {

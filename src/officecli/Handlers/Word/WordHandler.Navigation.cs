@@ -706,6 +706,26 @@ public partial class WordHandler
         return (paras, tables);
     }
 
+    /// <summary>
+    /// Return the raw OuterXml of the element at <paramref name="path"/>, or
+    /// null if the path does not resolve. Unlike <see cref="Raw"/> (which only
+    /// addresses whole package parts), this navigates the document DOM. Used by
+    /// the dump emitter to round-trip rich block containers — a Table-of-Contents
+    /// SDT, say — verbatim instead of flattening them to text.
+    /// </summary>
+    internal string? RawElementXml(string path)
+    {
+        try
+        {
+            var segments = ParsePath(path);
+            return NavigateToElement(segments)?.OuterXml;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private OpenXmlElement? NavigateToElement(List<PathSegment> segments)
         => NavigateToElement(segments, out _, out _);
 
