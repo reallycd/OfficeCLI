@@ -359,6 +359,21 @@ public static class BlankDocCreator
             stylesPart.Styles.Save();
         }
 
+        // Declare + Ignore the w14 (Office 2010 wordml) extension namespace on
+        // the styles root. A dumped docDefaults can carry <w14:ligatures> (and
+        // similar w14 run properties) raw-set verbatim from the source; without
+        // mc:Ignorable covering w14 the strict validator rejects them ("invalid
+        // child element w14:ligatures") even though Word itself tolerates them.
+        // Mirrors the document-root mc:Ignorable handling above.
+        stylesPart.Styles.AddNamespaceDeclaration("w14", "http://schemas.microsoft.com/office/word/2010/wordml");
+        stylesPart.Styles.MCAttributes ??= new DocumentFormat.OpenXml.MarkupCompatibilityAttributes();
+        var stylesIgnorable = new HashSet<string>(
+            (stylesPart.Styles.MCAttributes.Ignorable?.Value ?? "")
+                .Split(' ', System.StringSplitOptions.RemoveEmptyEntries));
+        if (stylesIgnorable.Add("w14"))
+            stylesPart.Styles.MCAttributes.Ignorable = string.Join(" ", stylesIgnorable);
+        stylesPart.Styles.Save();
+
         // theme1.xml — Office's minor=Calibri / major=Calibri Light. Without
         // a theme part, anything that looks up `themeFonts` (heading/body
         // theme references in styles.xml) gets nothing — emit a minimal
