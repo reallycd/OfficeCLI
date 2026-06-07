@@ -153,13 +153,19 @@ public static partial class WordBatchEmitter
         try { xml = word.Raw("/theme"); }
         catch { xml = ""; }
         xml = CanonicalizeRawXml(xml);
-        if (string.IsNullOrEmpty(xml) || !xml.StartsWith("<"))
-            // name="Office Theme" matches what Open XML SDK's Theme class
-            // auto-stamps on save. Without it, dump-2's read-back picks up
-            // the SDK-added attribute and emits a name-bearing placeholder,
-            // breaking the fixed point on the very first byte after the
-            // namespace declaration.
-            xml = "<a:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"Office Theme\" />";
+        // A bare <a:theme/> (or <a:theme name="Office Theme"/>) is schema-INVALID:
+        // <a:theme> requires a child <a:themeElements> (clrScheme + fontScheme +
+        // fmtScheme). Replaying that placeholder over the blank target's valid
+        // theme1.xml produced a file real Word refuses to open ("file may be
+        // corrupt"); the source docx that triggered this carried a 0-byte
+        // theme1.xml, which Word tolerates but the SDK read back as an empty
+        // theme. Emit the SAME complete theme a blank doc stamps instead: the
+        // result is Word-openable AND keeps the dump→replay→dump item count
+        // stable (replay writes a real theme, dump-2 reads it back and emits
+        // one theme item, same as dump-1) — the original reason this site
+        // always emits something rather than skipping theme-less sources.
+        if (string.IsNullOrEmpty(xml) || !xml.StartsWith("<") || !xml.Contains("themeElements"))
+            xml = BlankDocCreator.BuildDefaultTheme(null, null).OuterXml;
 
         items.Add(new BatchItem
         {

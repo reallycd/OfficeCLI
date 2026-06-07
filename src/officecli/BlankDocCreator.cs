@@ -367,7 +367,28 @@ public static class BlankDocCreator
         if (!minimal)
         {
         var themePart = mainPart.AddNewPart<DocumentFormat.OpenXml.Packaging.ThemePart>();
-        themePart.Theme = new DocumentFormat.OpenXml.Drawing.Theme(
+        themePart.Theme = BuildDefaultTheme(locEa, locCs);
+        themePart.Theme.Save();
+        }
+
+        var numberingPart = mainPart.AddNewPart<DocumentFormat.OpenXml.Packaging.NumberingDefinitionsPart>();
+        numberingPart.Numbering = new DocumentFormat.OpenXml.Wordprocessing.Numbering();
+        numberingPart.Numbering.Save();
+        mainPart.Document.Save();
+
+        OfficeCliMetadata.StampOnCreate(doc);
+    }
+
+    /// <summary>
+    /// Builds the standard Office Word theme (clrScheme + fontScheme + fmtScheme)
+    /// that a blank document stamps into theme1.xml. Shared with
+    /// <c>WordBatchEmitter.EmitThemeRaw</c> so a dump of a theme-less source
+    /// emits a schema-complete theme placeholder (one Word can open) rather
+    /// than a bare &lt;a:theme/&gt; stub. Pass the locale-resolved East-Asian /
+    /// complex-script typefaces (or null for the locale-neutral default).
+    /// </summary>
+    internal static DocumentFormat.OpenXml.Drawing.Theme BuildDefaultTheme(string? locEa, string? locCs)
+        => new DocumentFormat.OpenXml.Drawing.Theme(
             new DocumentFormat.OpenXml.Drawing.ThemeElements(
                 new DocumentFormat.OpenXml.Drawing.ColorScheme(
                     new DocumentFormat.OpenXml.Drawing.Dark1Color(new DocumentFormat.OpenXml.Drawing.SystemColor { Val = DocumentFormat.OpenXml.Drawing.SystemColorValues.WindowText, LastColor = "000000" }),
@@ -419,16 +440,6 @@ public static class BlankDocCreator
                 ) { Name = "Office" }
             )
         ) { Name = "Office Theme" };
-        themePart.Theme.Save();
-        }
-
-        var numberingPart = mainPart.AddNewPart<DocumentFormat.OpenXml.Packaging.NumberingDefinitionsPart>();
-        numberingPart.Numbering = new DocumentFormat.OpenXml.Wordprocessing.Numbering();
-        numberingPart.Numbering.Save();
-        mainPart.Document.Save();
-
-        OfficeCliMetadata.StampOnCreate(doc);
-    }
 
     private static void CreatePowerPoint(string path)
     {
