@@ -640,6 +640,11 @@ public partial class WordHandler
             styleNode.Format["id"] = style.StyleId?.Value ?? "";
             styleNode.Format["name"] = style.StyleName?.Val?.Value ?? "";
             if (style.Type?.Value != null) styleNode.Format["type"] = style.Type.InnerText;
+            // w:default="1" marks the document's default style for its type.
+            // Without round-tripping it, a source whose default paragraph style
+            // is a renamed id (e.g. styleId="Standard") loses the designation,
+            // and body paragraphs fall back to a different default on replay.
+            if (style.Default?.Value == true) styleNode.Format["default"] = "true";
             if (style.BasedOn?.Val?.Value != null)
             {
                 styleNode.Format["basedOn"] = style.BasedOn.Val.Value;
@@ -1605,6 +1610,7 @@ public partial class WordHandler
                     styleNode.Format["id"] = styleId;
                     styleNode.Format["name"] = styleName;
                     if (style.Type?.Value != null) styleNode.Format["type"] = style.Type.InnerText;
+                    if (style.Default?.Value == true) styleNode.Format["default"] = "true";
                     if (style.BasedOn?.Val?.Value != null)
             {
                 styleNode.Format["basedOn"] = style.BasedOn.Val.Value;

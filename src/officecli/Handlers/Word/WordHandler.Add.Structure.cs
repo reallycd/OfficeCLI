@@ -648,6 +648,13 @@ public partial class WordHandler
         };
         if (!isBuiltIn)
             newStyle.CustomStyle = true;
+        // w:default="1" — designate this as the document's default style for its
+        // type (paragraph/character/table/numbering). Lets the dump round-trip a
+        // source whose default style uses a renamed id (e.g. styleId="Standard"
+        // with name "Normal"); without it, replayed body paragraphs inherit a
+        // different default and render at the wrong size/alignment.
+        if (properties.TryGetValue("default", out var sDefault) && IsTruthy(sDefault))
+            newStyle.Default = true;
         newStyle.AppendChild(new StyleName { Val = styleName });
 
         if ((properties.TryGetValue("basedon", out var basedOn) || properties.TryGetValue("basedOn", out basedOn)) && !string.IsNullOrEmpty(basedOn))
@@ -922,6 +929,9 @@ public partial class WordHandler
             // loop would route `hidden` to ApplyRunFormatting (vanish alias)
             // and double-stamp it on rPr.
             "autoRedefine", "autoredefine", "hidden",
+            // w:default="1" — consumed in the explicit dispatch above (sets
+            // Style.Default). List here so the per-key sweep doesn't flag it.
+            "default",
             "align", "alignment", "spacebefore", "spaceBefore",
             "spaceafter", "spaceAfter", "linespacing", "lineSpacing",
             "spacebeforelines", "spaceBeforeLines", "spaceafterlines", "spaceAfterLines",
