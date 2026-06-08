@@ -18,7 +18,7 @@ public partial class WordHandler
     public string? Remove(string path, Dictionary<string, string>? properties = null)
     {
         Modified = true;
-        InvalidateBodyParaCache(); // structural change → append-monotonic cache may be stale
+        using var _bodyCacheGuard = new BodyCacheGuard(this); // invalidate caches on return (AFTER the mutation)
 
         // Phase 4: remove + trackChange.* → produce w:del wrapper(s) instead
         // of physically deleting. Run and Paragraph are supported; other
@@ -1148,7 +1148,7 @@ public partial class WordHandler
 
     public string Move(string sourcePath, string? targetParentPath, InsertPosition? position, Dictionary<string, string>? properties = null)
     {
-        InvalidateBodyParaCache(); // structural change → append-monotonic cache may be stale
+        using var _bodyCacheGuard = new BodyCacheGuard(this); // invalidate caches on return (AFTER the mutation)
         // Detect track-change branch: any trackChange.author/date/id signals
         // the high-level "auto-pair moveFrom/moveTo" form. Bare `trackChange=`
         // is NOT consumed here — only the sub-keys; the low-level synthesis
@@ -1475,7 +1475,7 @@ public partial class WordHandler
 
     public (string NewPath1, string NewPath2) Swap(string path1, string path2)
     {
-        InvalidateBodyParaCache(); // structural change → append-monotonic cache may be stale
+        using var _bodyCacheGuard = new BodyCacheGuard(this); // invalidate caches on return (AFTER the mutation)
         var parts1 = ParsePath(path1);
         var elem1 = NavigateToElement(parts1)
             ?? throw new ArgumentException($"Element not found: {path1}");
@@ -1503,7 +1503,7 @@ public partial class WordHandler
 
     public string CopyFrom(string sourcePath, string targetParentPath, InsertPosition? position)
     {
-        InvalidateBodyParaCache(); // structural change → append-monotonic cache may be stale
+        using var _bodyCacheGuard = new BodyCacheGuard(this); // invalidate caches on return (AFTER the mutation)
         // Virtual table column clone — same-table only.
         var colCopyMatch = Regex.Match(sourcePath, @"^/body/tbl\[(\d+)\]/col\[(\d+)\]$");
         if (colCopyMatch.Success)

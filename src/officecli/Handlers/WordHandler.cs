@@ -307,6 +307,7 @@ public partial class WordHandler : IDocumentHandler
     public void RawSet(string partPath, string xpath, string action, string? xml)
     {
         Modified = true;
+        ClearBodyChildIndex(); // raw-set may rewrite the body / its paragraph set
         if (partPath == null) throw new ArgumentNullException(nameof(partPath));
         var mainPart = _doc.MainDocumentPart
             ?? throw new InvalidOperationException("No main document part");

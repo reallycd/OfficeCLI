@@ -21,7 +21,19 @@ public partial class WordHandler
     private OpenXmlElement? _lastBodyParagraph;
     private int _bodyParaCount = -1;
 
-    private void InvalidateBodyParaCache() { _lastBodyParagraph = null; _bodyParaCount = -1; }
+    private void InvalidateBodyParaCache() { _lastBodyParagraph = null; _bodyParaCount = -1; ClearBodyChildIndex(); }
+
+    // using-scope that invalidates the append/child caches when the enclosing
+    // mutation method RETURNS. Remove/Move/Swap/CopyFrom navigate first (which
+    // rebuilds the child-index cache to the PRE-mutation tree) and only then
+    // mutate, so invalidating at entry would leave a stale cache behind. We must
+    // invalidate on exit, after the structural change has happened.
+    private readonly struct BodyCacheGuard : System.IDisposable
+    {
+        private readonly WordHandler _h;
+        public BodyCacheGuard(WordHandler h) => _h = h;
+        public void Dispose() => _h.InvalidateBodyParaCache();
+    }
 
     // ==================== Navigation ====================
 
@@ -715,24 +727,31 @@ public partial class WordHandler
     // PERF: cache the flattened+filtered body paragraph/table lists per Body
     // instance. /body/p[N] and /body/tbl[N] are resolved by index; without
     // the cache, dumping a 14k-paragraph doc made 14k Get calls × 14k walks
-    // → O(n²). Invalidation is by-count: any body mutation that adds or
-    // removes a top-level child bumps body.ChildElements.Count and the
-    // cache is rebuilt on next access. Property-only Set calls do not
-    // change the count and don't invalidate (correct — they don't change
-    // which paragraph sits at index N).
-    private readonly Dictionary<OpenXmlElement, (int count, List<OpenXmlElement> paras, List<OpenXmlElement> tables)>
+    // → O(n²). Invalidation is by explicit clear: ClearBodyChildIndex() is
+    // called on every structural add (Add() entry) and on Remove/Move/Swap/
+    // CopyFrom/raw-set (via InvalidateBodyParaCache / RawSet). Property-only
+    // Set calls do NOT clear (correct — they don't change which paragraph sits
+    // at index N), so a batch of set /body/p[N] keeps hitting the cache.
+    //
+    // The guard must NOT recompute body.ChildElements.Count: the SDK stores
+    // children in a singly-linked list, so .Count is O(n), which made even a
+    // cache *hit* O(n) and turned batch set/get of /body/p[N] back into O(n²).
+    private readonly Dictionary<OpenXmlElement, (List<OpenXmlElement> paras, List<OpenXmlElement> tables)>
         _bodyChildIndexCache = new();
+
+    // Drop the body child-index cache after a structural mutation. Cheap
+    // (O(#bodies), typically 1). Called from Add() and InvalidateBodyParaCache.
+    private void ClearBodyChildIndex() => _bodyChildIndexCache.Clear();
 
     private List<OpenXmlElement> GetBodyParagraphIndex(Body body) => GetBodyChildIndex(body).paras;
     private List<OpenXmlElement> GetBodyTableIndex(Body body) => GetBodyChildIndex(body).tables;
 
     private (List<OpenXmlElement> paras, List<OpenXmlElement> tables) GetBodyChildIndex(Body body)
     {
-        var currentCount = body.ChildElements.Count;
-        if (_bodyChildIndexCache.TryGetValue(body, out var entry) && entry.count == currentCount)
+        if (_bodyChildIndexCache.TryGetValue(body, out var entry))
             return (entry.paras, entry.tables);
 
-        var flat = new List<OpenXmlElement>(body.ChildElements.Count);
+        var flat = new List<OpenXmlElement>();
         void Collect(OpenXmlElement el)
         {
             foreach (var c in el.ChildElements)
@@ -750,7 +769,7 @@ public partial class WordHandler
             if (e is Paragraph p && !IsOMathParaWrapperParagraph(p)) paras.Add(p);
             else if (e is Table t) tables.Add(t);
         }
-        _bodyChildIndexCache[body] = (currentCount, paras, tables);
+        _bodyChildIndexCache[body] = (paras, tables);
         return (paras, tables);
     }
 
@@ -1189,7 +1208,13 @@ public partial class WordHandler
                 };
             }
 
-            var childList = children.ToList();
+            // Reuse the list when the switch already produced one (e.g.
+            // GetBodyParagraphIndex/GetBodyTableIndex return a cached
+            // List<OpenXmlElement>). ToList() would copy it O(n) on EVERY
+            // navigation, so resolving /body/p[N] for N=1..n — batch set/get of
+            // paragraphs — was O(n²). The list is only read here (ElementAt /
+            // LastOrDefault / IndexOf), so sharing the cached reference is safe.
+            var childList = children as List<OpenXmlElement> ?? children.ToList();
             OpenXmlElement? next;
             if (seg.Index.HasValue)
                 next = childList.ElementAtOrDefault(seg.Index.Value - 1);

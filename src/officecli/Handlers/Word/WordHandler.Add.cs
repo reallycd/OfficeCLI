@@ -126,6 +126,14 @@ public partial class WordHandler
                 ?? throw new ArgumentException($"Path not found: {parentPath}" + (ctx != null ? $". {ctx}" : ""));
         }
 
+        // Only a body-level add changes the body's direct paragraph/table set
+        // that GetBodyChildIndex caches. Run-adds (parent = a paragraph) and
+        // table-cell adds (parent = a cell paragraph) don't, so they must NOT
+        // clear it — clearing on every add turned the table-heavy gov_ndrc
+        // replay O(n²) (each later /body/tbl[last()] navigation rebuilt the
+        // whole index).
+        if (parent is Body) ClearBodyChildIndex();
+
         // Reject add operations whose parent/child combination would produce
         // schema-invalid OOXML (e.g. /body/sectPr accepting a paragraph child,
         // or /body/p[N] accepting a nested paragraph/table). `position` is
