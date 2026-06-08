@@ -1171,8 +1171,17 @@ public static partial class WordBatchEmitter
                 var posVEl = anchor.Element(wp + "positionV");
                 var posH = posHEl?.Element(wp + "posOffset")?.Value;
                 var posV = posVEl?.Element(wp + "posOffset")?.Value;
+                // A floating drawing positions each axis EITHER by an absolute
+                // posOffset OR by a relative <wp:align> (left/center/right /
+                // top/bottom). Capture the align form too — without it a
+                // center-aligned textbox round-trips as posOffset=0 (i.e. jumps
+                // hard left). posOffset wins when both somehow appear.
+                var alignH = posHEl?.Element(wp + "align")?.Value;
+                var alignV = posVEl?.Element(wp + "align")?.Value;
                 if (!string.IsNullOrEmpty(posH)) props["anchor.x"] = posH + "emu";
+                else if (!string.IsNullOrEmpty(alignH)) props["hAlign"] = alignH;
                 if (!string.IsNullOrEmpty(posV)) props["anchor.y"] = posV + "emu";
+                else if (!string.IsNullOrEmpty(alignV)) props["vAlign"] = alignV;
                 // Anchor reference frames. AddTextbox hardcodes column/paragraph;
                 // without forwarding these a textbox anchored relativeFrom="page"
                 // round-trips as relativeFrom="paragraph" and floats off-position
