@@ -272,7 +272,8 @@ public partial class WordHandler
             && elementLower != "fieldchar" && elementLower != "fldchar"
             && elementLower != "instrtext"
             && elementLower != "tab"
-            && elementLower != "break" && elementLower != "br")
+            && elementLower != "break" && elementLower != "br"
+            && elementLower != "pagebreak") // BUG-R8A(BUG2): help docs `pagebreak` selector
             return false;
 
         // Type filter: when element names a specialized run kind, the run's
@@ -297,8 +298,11 @@ public partial class WordHandler
             if (run.GetFirstChild<TabChar>() == null) return false;
             if (run.GetFirstChild<Text>() != null) return false;
         }
-        else if (elementLower is "break" or "br")
+        else if (elementLower is "break" or "br" or "pagebreak")
         {
+            // BUG-R8A(BUG2): `pagebreak` is a documented help selector that the
+            // handler never wired up; resolve it to the same break-run matcher
+            // as `break`/`br` (handler is lenient and accepts aliases).
             if (run.GetFirstChild<Break>() == null) return false;
             if (run.GetFirstChild<Text>() != null) return false;
         }

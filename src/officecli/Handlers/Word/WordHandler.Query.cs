@@ -1927,7 +1927,8 @@ public partial class WordHandler
              || parsed.Element == "fieldchar" || parsed.Element == "fldchar"
              || parsed.Element == "instrtext"
              || parsed.Element == "tab"
-             || parsed.Element == "break" || parsed.Element == "br");
+             || parsed.Element == "break" || parsed.Element == "br"
+             || parsed.Element == "pagebreak"); // BUG-R8A(BUG2): documented help selector
         bool isPictureSelector = parsed.ChildSelector == null &&
             (parsed.Element == "picture" || parsed.Element == "image" || parsed.Element == "img");
         bool isOleSelector = parsed.ChildSelector == null &&
@@ -1980,7 +1981,8 @@ public partial class WordHandler
                 or "fieldchar" or "fldchar"
                 or "instrtext"
                 or "tab"
-                or "break" or "br";
+                or "break" or "br"
+                or "pagebreak"; // BUG-R8A(BUG2): documented help selector
         if (!isKnownType && parsed.ChildSelector == null)
         {
             var root = _doc.MainDocumentPart?.Document;
