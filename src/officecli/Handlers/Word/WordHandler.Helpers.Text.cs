@@ -40,13 +40,12 @@ public partial class WordHandler
                 sb.Append(GetRunText(run));
             else if (child is Hyperlink hyperlink)
             {
-                foreach (var hChild in hyperlink.ChildElements)
-                {
-                    if (hChild is Run hRun) sb.Append(GetRunText(hRun));
-                    else if (hChild.LocalName == "oMath" || hChild is M.OfficeMath)
-                        sb.Append(string.Concat(hChild.Descendants<Text>().Select(t => t.Text))
-                            + string.Concat(hChild.Descendants<M.Text>().Select(t => t.Text)));
-                }
+                // BUG-R4B(BUG7): a hyperlink may nest another hyperlink
+                // (<w:hyperlink><w:hyperlink><w:r>…). The old loop only looked
+                // at the OUTER hyperlink's direct Run children, so the inner
+                // hyperlink's anchor text vanished from view text. Recurse so
+                // nested hyperlink runs contribute their text. Read-side only.
+                AppendHyperlinkText(sb, hyperlink);
             }
             else if (child.LocalName == "oMath" || child is M.OfficeMath)
             {
@@ -59,6 +58,21 @@ public partial class WordHandler
             }
         }
         return sb.ToString();
+    }
+
+    // BUG-R4B(BUG7): walk a hyperlink's children, recursing into nested
+    // <w:hyperlink> so inner anchor text survives. Mirrors the per-child run /
+    // math handling of GetParagraphText.
+    private static void AppendHyperlinkText(StringBuilder sb, Hyperlink hyperlink)
+    {
+        foreach (var hChild in hyperlink.ChildElements)
+        {
+            if (hChild is Run hRun) sb.Append(GetRunText(hRun));
+            else if (hChild is Hyperlink nested) AppendHyperlinkText(sb, nested);
+            else if (hChild.LocalName == "oMath" || hChild is M.OfficeMath)
+                sb.Append(string.Concat(hChild.Descendants<Text>().Select(t => t.Text))
+                    + string.Concat(hChild.Descendants<M.Text>().Select(t => t.Text)));
+        }
     }
 
     /// <summary>
