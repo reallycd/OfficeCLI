@@ -166,11 +166,21 @@ public partial class WordHandler
                 $"Bookmark name '{bkName}' contains path-special characters " +
                 "('/', '[', ']'). These characters prevent later addressing via " +
                 "selectors. Use only letters, digits, '.', '_', '-' in bookmark names.");
+        // BUG-R3 (dump emits a name its own batch rejects): OOXML's w:name
+        // permits whitespace and quote/@ characters (LibreOffice exports e.g.
+        // a bookmark literally named "Fast_math"_optimization). The old hard
+        // reject broke dump→batch round-trip — the dumped `add bookmark
+        // name="…"` couldn't replay. Only '/', '[', ']' truly break path
+        // addressing (rejected above); whitespace/quote/@ merely make BARE
+        // attribute selectors ambiguous. Preserve the source name and warn,
+        // mirroring the duplicate-bookmark-name allow+warn handling below.
         if (bkName.Any(char.IsWhiteSpace) || bkName[0] == '@' || bkName[0] == '\'' || bkName.Contains('"'))
-            throw new ArgumentException(
-                $"Bookmark name '{bkName}' contains whitespace or quote/@ chars " +
-                "that prevent later addressing via bare attribute selectors. " +
-                "Use only letters, digits, '.', '_', '-' in bookmark names.");
+        {
+            LastAddWarnings.Add(
+                $"bookmark name '{bkName}' contains whitespace or quote/@ chars — " +
+                "kept (OOXML allows it), but addressing by a bare attribute " +
+                "selector (/bookmark[@name=...]) may be ambiguous; quote the value.");
+        }
 
         // BUG-DUMPR2-02: Word permits multiple bookmarks to share a name
         // (legal OOXML; validates clean), so a hard reject broke dump→batch
@@ -304,15 +314,35 @@ public partial class WordHandler
         // contain whitespace, leading '@', or quote chars; double-quote the
         // value when the raw name would otherwise be rejected so the returned
         // path is round-trippable via `get`/`add --after`.
+        // BUG-R3 (dump emits a name its own batch rejects): a name with an
+        // embedded double-quote (legal in OOXML w:name, e.g. LibreOffice's
+        // "Fast_math"_optimization) cannot be expressed as an attribute
+        // selector value in EITHER the bare or double-quoted form. The
+        // bookmark itself is already in the document at this point; only the
+        // navigable RETURN path can't carry the name. Fall back to a positional
+        // bookmarkStart[N] segment instead of throwing, so dump→batch round-trip
+        // preserves the bookmark. Warn that the @name selector is unavailable.
+        string BookmarkSelector(OpenXmlElement container)
+        {
+            if (!bkName.Contains('"'))
+                return $"bookmarkStart[@name={QuoteAttrValueIfNeeded(bkName)}]";
+            LastAddWarnings.Add(
+                $"bookmark name '{bkName}' contains an embedded double-quote — kept " +
+                "(OOXML allows it), but it cannot be addressed by /bookmark[@name=...]; " +
+                "use a positional bookmarkStart[N] selector instead.");
+            var pos = container.Descendants<BookmarkStart>().ToList().IndexOf(bookmarkStart) + 1;
+            return $"bookmarkStart[{(pos > 0 ? pos : 1)}]";
+        }
+
         string resultPath;
         if (wrappingPara != null)
         {
             var wrapIdx = parent.Elements<Paragraph>().ToList().IndexOf(wrappingPara) + 1;
-            resultPath = $"{parentPath}/{BuildParaPathSegment(wrappingPara, wrapIdx)}/bookmarkStart[@name={QuoteAttrValueIfNeeded(bkName)}]";
+            resultPath = $"{parentPath}/{BuildParaPathSegment(wrappingPara, wrapIdx)}/{BookmarkSelector(wrappingPara)}";
         }
         else
         {
-            resultPath = $"{parentPath}/bookmarkStart[@name={QuoteAttrValueIfNeeded(bkName)}]";
+            resultPath = $"{parentPath}/{BookmarkSelector(parent)}";
         }
         return resultPath;
     }
