@@ -18,6 +18,64 @@ public partial class WordHandler
         return "default";
     }
 
+    // BUG-R5B(BUG1): on dump→batch replay, a section whose break is encoded as
+    // an inline w:pPr/w:sectPr can be re-materialized verbatim by a different
+    // emit path (EmitCrossParagraphFieldMember raw-sets the whole <w:p>,
+    // including its <w:headerReference>/<w:footerReference>) while
+    // EmitHeadersFooters independently emits `add header|footer parent=/section[N]`
+    // for the same section. The reference copied in by the raw-set points at an
+    // r:id that has no matching part on the rebuilt doc (the part was never
+    // recreated) — an orphan. AddHeader/AddFooter's duplicate-of-type guard saw
+    // the orphan and threw "already exists", aborting the add and losing the
+    // footer/header CONTENT for that section.
+    //
+    // Distinguish a genuine duplicate (the existing reference resolves to a real
+    // part — a true user error) from an orphaned reference (its r:id resolves to
+    // nothing — round-trip leftover). For the orphan we repurpose the add:
+    // create the part, rewire the reference's r:id to it, and skip prepending a
+    // second reference. Returns the existing reference to repoint, or null when
+    // none of this type / it is a genuine non-orphan duplicate.
+    private HeaderReference? FindOrphanedHeaderReference(SectionProperties? sectPr, HeaderFooterValues type)
+    {
+        var mainPart = _doc.MainDocumentPart;
+        if (sectPr == null || mainPart == null) return null;
+        foreach (var hr in sectPr.Elements<HeaderReference>())
+        {
+            if (hr.Type == null || hr.Type.Value != type) continue;
+            if (string.IsNullOrEmpty(hr.Id?.Value)) return hr; // missing r:id ⇒ orphan
+            if (!ReferenceResolvesToPart(mainPart, hr.Id!.Value!)) return hr;
+        }
+        return null;
+    }
+
+    private FooterReference? FindOrphanedFooterReference(SectionProperties? sectPr, HeaderFooterValues type)
+    {
+        var mainPart = _doc.MainDocumentPart;
+        if (sectPr == null || mainPart == null) return null;
+        foreach (var fr in sectPr.Elements<FooterReference>())
+        {
+            if (fr.Type == null || fr.Type.Value != type) continue;
+            if (string.IsNullOrEmpty(fr.Id?.Value)) return fr; // missing r:id ⇒ orphan
+            if (!ReferenceResolvesToPart(mainPart, fr.Id!.Value!)) return fr;
+        }
+        return null;
+    }
+
+    private static bool ReferenceResolvesToPart(MainDocumentPart mainPart, string relationshipId)
+    {
+        try
+        {
+            // GetPartById throws (KeyNotFoundException / ArgumentOutOfRange) when
+            // the relationship id is unknown to the part — that's exactly the
+            // orphan case we want to detect.
+            return mainPart.GetPartById(relationshipId) != null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private string AddSection(OpenXmlElement parent, string parentPath, int? index, Dictionary<string, string> properties)
     {
         var body = _doc.MainDocumentPart?.Document?.Body
@@ -1808,7 +1866,13 @@ public partial class WordHandler
             };
         }
         var preSectPr = ResolveTargetSectPrForHeaderFooter(parentPath);
-        if (preSectPr != null && preSectPr.Elements<HeaderReference>()
+        // BUG-R5B(BUG1): an orphaned reference (r:id resolves to no part) is a
+        // round-trip leftover, not a genuine duplicate — repoint it instead of
+        // throwing so the header CONTENT is created. A reference that resolves
+        // to a real part is a true duplicate and still rejected.
+        var orphanHeaderRef = FindOrphanedHeaderReference(preSectPr, preHeaderType);
+        if (orphanHeaderRef == null
+            && preSectPr != null && preSectPr.Elements<HeaderReference>()
                 .Any(r => r.Type != null && r.Type.Value == preHeaderType))
         {
             throw new ArgumentException(
@@ -1924,12 +1988,22 @@ public partial class WordHandler
 
         var headerType = preHeaderType;
 
-        var headerRef = new HeaderReference
+        // BUG-R5B(BUG1): repoint an orphaned reference to the newly-created part
+        // rather than prepending a second reference of the same type.
+        var orphanHeaderRefToRewire = FindOrphanedHeaderReference(hSectPr, headerType);
+        if (orphanHeaderRefToRewire != null)
         {
-            Id = mainPartH.GetIdOfPart(headerPart),
-            Type = headerType
-        };
-        hSectPr.PrependChild(headerRef);
+            orphanHeaderRefToRewire.Id = mainPartH.GetIdOfPart(headerPart);
+        }
+        else
+        {
+            var headerRef = new HeaderReference
+            {
+                Id = mainPartH.GetIdOfPart(headerPart),
+                Type = headerType
+            };
+            hSectPr.PrependChild(headerRef);
+        }
 
         if (headerType == HeaderFooterValues.First)
         {
@@ -1991,7 +2065,12 @@ public partial class WordHandler
             };
         }
         var preFSectPr = ResolveTargetSectPrForHeaderFooter(parentPath);
-        if (preFSectPr != null && preFSectPr.Elements<FooterReference>()
+        // BUG-R5B(BUG1): orphaned reference (r:id resolves to no part) ⇒ repoint
+        // instead of throwing so the footer CONTENT survives round-trip; a
+        // reference resolving to a real part is still a genuine duplicate.
+        var orphanFooterRef = FindOrphanedFooterReference(preFSectPr, preFooterType);
+        if (orphanFooterRef == null
+            && preFSectPr != null && preFSectPr.Elements<FooterReference>()
                 .Any(r => r.Type != null && r.Type.Value == preFooterType))
         {
             throw new ArgumentException(
@@ -2098,17 +2177,27 @@ public partial class WordHandler
 
         var footerType = preFooterType;
 
-        var footerRef = new FooterReference
+        // BUG-R5B(BUG1): repoint an orphaned reference to the newly-created part
+        // rather than inserting a second reference of the same type.
+        var orphanFooterRefToRewire = FindOrphanedFooterReference(fSectPr, footerType);
+        if (orphanFooterRefToRewire != null)
         {
-            Id = mainPartF.GetIdOfPart(footerPart),
-            Type = footerType
-        };
-        // Insert footerReference after the last headerReference to maintain schema order
-        var lastHeaderRef = fSectPr.Elements<HeaderReference>().LastOrDefault();
-        if (lastHeaderRef != null)
-            fSectPr.InsertAfter(footerRef, lastHeaderRef);
+            orphanFooterRefToRewire.Id = mainPartF.GetIdOfPart(footerPart);
+        }
         else
-            fSectPr.PrependChild(footerRef);
+        {
+            var footerRef = new FooterReference
+            {
+                Id = mainPartF.GetIdOfPart(footerPart),
+                Type = footerType
+            };
+            // Insert footerReference after the last headerReference to maintain schema order
+            var lastHeaderRef = fSectPr.Elements<HeaderReference>().LastOrDefault();
+            if (lastHeaderRef != null)
+                fSectPr.InsertAfter(footerRef, lastHeaderRef);
+            else
+                fSectPr.PrependChild(footerRef);
+        }
 
         if (footerType == HeaderFooterValues.First)
         {

@@ -463,7 +463,8 @@ public static partial class WordBatchEmitter
         });
     }
 
-    private static void EmitHeadersFooters(WordHandler word, List<BatchItem> items)
+    private static void EmitHeadersFooters(WordHandler word, List<BatchItem> items,
+                                           List<DocxUnsupportedWarning>? warnings = null)
     {
         var root = word.Get("/");
         if (root.Children == null) return;
@@ -544,14 +545,14 @@ public static partial class WordBatchEmitter
                 // section actually links to.
                 if (!headerPathInfo.TryGetValue(child.Path, out var hi)) continue;
                 hIdx++;
-                EmitHeaderFooterPart(word, child.Path, "header", hIdx, items, hi.Type, hi.SectionPath);
+                EmitHeaderFooterPart(word, child.Path, "header", hIdx, items, hi.Type, hi.SectionPath, warnings);
             }
             else if (child.Type == "footer")
             {
                 // Same orphan guard as header above.
                 if (!footerPathInfo.TryGetValue(child.Path, out var fi)) continue;
                 fIdx++;
-                EmitHeaderFooterPart(word, child.Path, "footer", fIdx, items, fi.Type, fi.SectionPath);
+                EmitHeaderFooterPart(word, child.Path, "footer", fIdx, items, fi.Type, fi.SectionPath, warnings);
             }
         }
     }
@@ -559,7 +560,8 @@ public static partial class WordBatchEmitter
     private static void EmitHeaderFooterPart(WordHandler word, string sourcePath, string kind,
                                              int targetIndex, List<BatchItem> items,
                                              string subTypeOverride = "default",
-                                             string? sectionParent = null)
+                                             string? sectionParent = null,
+                                             List<DocxUnsupportedWarning>? warnings = null)
     {
         var partNode = word.Get(sourcePath);
         // BUG-DUMP9-08: tables are valid block-level OOXML inside hdr/ftr
@@ -647,6 +649,26 @@ public static partial class WordBatchEmitter
         });
 
         var partTargetPath = $"/{kind}[{targetIndex}]";
+        // BUG-R5B(BUG1): a header/footer body can host a textbox-bearing run
+        // (e.g. a centered page-number textbox in the footer). TryEmitTextbox —
+        // which AddTextbox supports for /header[N] and /footer[N] hosts — bails
+        // out when ctx is null, and EmitParagraph was previously called with no
+        // ctx here, so the textbox (and the PAGE field inside it) was silently
+        // dropped. Build a part-scoped ctx so the textbox emit path fires and
+        // unsupported-content warnings surface. Footnote/endnote/chart cursors
+        // are part-local (header/footer rarely carry them, and the body ctx's
+        // cursors must not be consumed from here).
+        var hfCtx = new BodyEmitContext(
+            FootnoteTexts: new List<string>(),
+            EndnoteTexts: new List<string>(),
+            FootnoteCursor: new NoteCursor(),
+            EndnoteCursor: new NoteCursor(),
+            ChartSpecs: new List<ChartSpec>(),
+            ChartCursor: new NoteCursor(),
+            ParaIdToTargetIdx: null,
+            DeferredBookmarks: new List<BatchItem>(),
+            TextboxCounters: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
+            Warnings: warnings ?? new List<DocxUnsupportedWarning>());
         int pIdx = 0, tblIdx = 0;
         bool sawFirstPara = false;
         // BUG-DUMP-R2-NESTED-LEAD (header/footer site): a header/footer body
@@ -669,7 +691,7 @@ public static partial class WordBatchEmitter
             {
                 pIdx++;
                 EmitParagraph(word, child.Path, partTargetPath, pIdx, items,
-                              autoPresent: !sawFirstPara && !firstChildIsTable);
+                              autoPresent: !sawFirstPara && !firstChildIsTable, hfCtx);
                 sawFirstPara = true;
             }
         }

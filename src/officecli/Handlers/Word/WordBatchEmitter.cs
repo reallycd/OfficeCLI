@@ -198,7 +198,7 @@ public static partial class WordBatchEmitter
         // apply time.
         var paraIdToTargetIdx = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         EmitBody(word, items, warnings, paraIdToTargetIdx);
-        EmitHeadersFooters(word, items);
+        EmitHeadersFooters(word, items, warnings);
         EmitComments(word, items, paraIdToTargetIdx);
         // CONSISTENCY(markRPr-inherit-opt-out): dump emits each run's props
         // verbatim from the source; we never want AddRun's UX-convenience
