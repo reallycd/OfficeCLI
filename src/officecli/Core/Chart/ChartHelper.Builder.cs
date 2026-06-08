@@ -1142,6 +1142,14 @@ internal static partial class ChartHelper
     {
         // Stock chart expects series in Open-High-Low-Close order (4 series)
         // or High-Low-Close order (3 series)
+        // BUG-R6A(BUG2): OOXML CT_StockChart constrains c:ser to minOccurs=3,
+        // maxOccurs=4. Any other count writes a schema-invalid file (e.g.
+        // c:hiLowLines appears where the validator still expects c:ser). Reject
+        // up front with an actionable message rather than emitting broken XML.
+        if (seriesData.Count is < 3 or > 4)
+            throw new ArgumentException(
+                $"stock chart requires 3 or 4 data series (high, low, close [, open]); got {seriesData.Count}.");
+
         var stockChart = new C.StockChart();
 
         for (int i = 0; i < seriesData.Count; i++)

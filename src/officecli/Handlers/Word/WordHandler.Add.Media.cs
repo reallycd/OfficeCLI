@@ -143,9 +143,12 @@ public partial class WordHandler
             return $"/chart[{(cxDocOrderIdx >= 0 ? cxDocOrderIdx + 1 : cxAllCharts.Count)}]";
         }
 
-        // Create ChartPart and build chart
+        // BUG-R6A(BUG2): Build chart content BEFORE adding part (invalid type or
+        // a chart-type cardinality violation throws, which must not leave an
+        // empty/malformed ChartPart on disk). Mirrors the Excel/Pptx ordering.
+        var chartSpace = Core.ChartHelper.BuildChartSpace(chartType, chartTitle, categories, seriesData, properties);
         var chartPart = chartMainPart.AddNewPart<ChartPart>();
-        chartPart.ChartSpace = Core.ChartHelper.BuildChartSpace(chartType, chartTitle, categories, seriesData, properties);
+        chartPart.ChartSpace = chartSpace;
 
         // Apply deferred properties (axisTitle, dataLabels, etc.) via SetChartProperties
         // Must be called BEFORE Save() so the in-memory DOM is still available.
