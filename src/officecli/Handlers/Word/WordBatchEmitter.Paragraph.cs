@@ -1469,6 +1469,49 @@ public static partial class WordBatchEmitter
                     EmitTable(word, sourceTblPath, innerTblIdx, items, ctx,
                               parentTablePath: null, containerPath: textboxPath);
                 }
+                else if (child.Type == "sdt")
+                {
+                    // BUG-R5B(BUG1): a block-level <w:sdt> nested inside a
+                    // textbox (the canonical centered page-number footer:
+                    // textbox → sdt → <w:p> with a PAGE field) was silently
+                    // dropped — the inner walk only recognised paragraph and
+                    // table types, so the SDT (and the field inside it) vanished
+                    // on dump→batch and the footer lost its page number. There
+                    // is no typed `add sdt` parent for a txbxContent host, and a
+                    // PAGE-field SDT is "rich" content the typed text emit cannot
+                    // reproduce anyway. Inject the SDT verbatim via raw-set into
+                    // the just-created textbox's <w:txbxContent> (mirrors the
+                    // rich-block-SDT raw-set in EmitSdt). The part is the host's
+                    // own part (/document for body, /header[N] or /footer[N]
+                    // otherwise); the (//w:txbxContent)[n] index selects the
+                    // textbox we just emitted.
+                    var sdtRaw = word.RawElementXml(child.Path);
+                    if (!string.IsNullOrEmpty(sdtRaw))
+                    {
+                        var rawPart = hostPath == "/body" ? "/document" : hostPath;
+                        // `add textbox` auto-seeds one empty <w:p> in the
+                        // txbxContent. To keep document order, an SDT that
+                        // precedes every source paragraph (the canonical
+                        // page-number footer: sdt-then-empty-p) is prepended so
+                        // it lands ahead of the seed paragraph; an SDT that
+                        // follows already-emitted paragraphs is appended.
+                        items.Add(new BatchItem
+                        {
+                            Command = "raw-set",
+                            Part = rawPart,
+                            Xpath = $"(//w:txbxContent)[{n}]",
+                            Action = firstParaSeen ? "append" : "prepend",
+                            Xml = sdtRaw
+                        });
+                    }
+                    else
+                    {
+                        ctx.Warnings.Add(new DocxUnsupportedWarning(
+                            Element: "textbox.sdt",
+                            Path: child.Path,
+                            Reason: "content control nested inside a textbox could not be serialized for round-trip; it will be missing from the replayed document"));
+                    }
+                }
             }
         }
         catch
