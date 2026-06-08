@@ -226,10 +226,18 @@ public static partial class WordBatchEmitter
             Props = tableAddProps
         });
 
-        // For nested tables, the target path is parent_cell/tbl[1] (first
-        // table in the cell). For outer tables, it's /body/tbl[N].
+        // BUG-R3 (nested-table multi-instance): a single cell may hold MORE
+        // THAN ONE nested table stacked back-to-back (LibreOffice export
+        // splits a logical table across several <w:tbl> siblings). The old
+        // `tbl[1]` target hardcoded the FIRST nested table for every nested
+        // emit, so the 2nd..Nth tables' per-cell `set tc[K]` ops resolved
+        // against table #1 (wrong rows/cols) and produced thousands of
+        // "Path not found …/tbl[1]/tr[N]/tc[K]". `add table` on a cell parent
+        // appends (tbl[1], tbl[2], …, verified), so the just-added nested
+        // table is always the cell's LAST table — mirror the outer-table
+        // `tbl[last()]` convention so each nested table addresses itself.
         var tablePath = parentTablePath != null
-            ? $"{parentTablePath}/tbl[1]"
+            ? $"{parentTablePath}/tbl[last()]"
             : $"{containerPath}/tbl[last()]";
 
         if (tableSetProps != null && tableSetProps.Count > 0)
