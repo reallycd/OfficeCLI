@@ -3296,8 +3296,24 @@ public partial class WordHandler
                         node.Format["sectionBreak.docGrid.type"] = sbGrid.Type.InnerText;
                     if (sbGrid.LinePitch?.Value != null)
                         node.Format["sectionBreak.docGrid.linePitch"] = sbGrid.LinePitch.Value;
-                    if (sbGrid.CharacterSpace?.Value != null)
-                        node.Format["sectionBreak.docGrid.charSpace"] = sbGrid.CharacterSpace.Value;
+                    // BUG-R7B(BUG3): charSpace is ST_DecimalNumber (signed), but
+                    // Word stores a negative value as its unsigned 32-bit wrap
+                    // (e.g. -6145 -> 4294961151) which overflows Int32Value.Value
+                    // and threw "Value was either too large or too small for an
+                    // Int32" on dump. Read the raw text and wrap unsigned->signed,
+                    // mirroring the lenient root/section readback in
+                    // WordHandler.Navigation.DocSettings.cs / Query.cs. A
+                    // non-numeric value is skipped rather than crashing the dump.
+                    if (sbGrid.CharacterSpace != null)
+                    {
+                        var rawCs = sbGrid.CharacterSpace.InnerText;
+                        if (long.TryParse(rawCs, System.Globalization.NumberStyles.Integer,
+                                System.Globalization.CultureInfo.InvariantCulture, out var csVal))
+                        {
+                            if (csVal > int.MaxValue) csVal -= 4294967296L; // 2^32 unsigned->signed
+                            node.Format["sectionBreak.docGrid.charSpace"] = (int)csVal;
+                        }
+                    }
                 }
             }
         }
