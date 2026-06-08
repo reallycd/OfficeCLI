@@ -160,6 +160,12 @@ public partial class WordHandler
             pm.Left = ParseTwips(mLeft);
         if (properties.TryGetValue("marginRight", out var mRight) || properties.TryGetValue("marginright", out mRight))
             pm.Right = ParseTwips(mRight);
+        if (properties.TryGetValue("marginHeader", out var mHdr) || properties.TryGetValue("marginheader", out mHdr))
+            pm.Header = ParseTwips(mHdr);
+        if (properties.TryGetValue("marginFooter", out var mFtr) || properties.TryGetValue("marginfooter", out mFtr))
+            pm.Footer = ParseTwips(mFtr);
+        if (properties.TryGetValue("marginGutter", out var mGut) || properties.TryGetValue("margingutter", out mGut))
+            pm.Gutter = ParseTwips(mGut);
 
         // Line numbering — mirrors Set parser (WordHandler.Set.SectionLayout.cs).
         // CONSISTENCY(linenumbers-countby-independent): lineNumberCountBy can

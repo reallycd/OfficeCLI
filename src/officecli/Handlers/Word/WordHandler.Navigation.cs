@@ -204,6 +204,11 @@ public partial class WordHandler
                 if (margins.Bottom?.Value != null) node.Format["marginBottom"] = FormatTwipsToCm((uint)Math.Abs(margins.Bottom.Value));
                 if (margins.Left?.Value != null) node.Format["marginLeft"] = FormatTwipsToCm(margins.Left.Value);
                 if (margins.Right?.Value != null) node.Format["marginRight"] = FormatTwipsToCm(margins.Right.Value);
+                // header/footer-from-edge distances + binding gutter (pgMar
+                // @header/@footer/@gutter) — needed for dump→batch fidelity.
+                if (margins.Header?.Value != null) node.Format["marginHeader"] = FormatTwipsToCm(margins.Header.Value);
+                if (margins.Footer?.Value != null) node.Format["marginFooter"] = FormatTwipsToCm(margins.Footer.Value);
+                if (margins.Gutter?.Value != null) node.Format["marginGutter"] = FormatTwipsToCm(margins.Gutter.Value);
             }
 
             // CONSISTENCY(root-vs-section-readback): the body-level sectPr surfaced at /

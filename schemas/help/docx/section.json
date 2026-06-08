@@ -83,6 +83,30 @@
       "readback": "unit-qualified cm",
       "enforcement": "strict"
     },
+    "marginHeader": {
+      "type": "length",
+      "add": true, "set": true, "get": true,
+      "description": "header-from-top-edge distance (pgMar @header).",
+      "examples": ["--prop marginHeader=1.5cm"],
+      "readback": "unit-qualified cm",
+      "enforcement": "strict"
+    },
+    "marginFooter": {
+      "type": "length",
+      "add": true, "set": true, "get": true,
+      "description": "footer-from-bottom-edge distance (pgMar @footer).",
+      "examples": ["--prop marginFooter=1.75cm"],
+      "readback": "unit-qualified cm",
+      "enforcement": "strict"
+    },
+    "marginGutter": {
+      "type": "length",
+      "add": true, "set": true, "get": true,
+      "description": "binding gutter width (pgMar @gutter).",
+      "examples": ["--prop marginGutter=0cm"],
+      "readback": "unit-qualified cm",
+      "enforcement": "strict"
+    },
     "columns": {
       "type": "int",
       "description": "number of text columns. Add accepts combined form \"N\" or \"N,SPACE\" (e.g. \"2,1cm\"); separate space override via alias \"columns.space\".",

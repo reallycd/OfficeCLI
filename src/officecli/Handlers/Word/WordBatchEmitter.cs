@@ -241,6 +241,10 @@ public static partial class WordBatchEmitter
         // Section page layout (mirrors body's trailing sectPr)
         "pageWidth", "pageHeight", "orientation",
         "marginTop", "marginBottom", "marginLeft", "marginRight",
+        // pgMar header/footer-from-edge distances and binding gutter. Without
+        // these the round-tripped sectPr fell back to the blank's defaults,
+        // silently dropping the source's header/footer spacing.
+        "marginHeader", "marginFooter", "marginGutter",
         "pageStart", "pageNumFmt",
         // BUG-DUMP11-01: chapter-numbering attributes on w:pgNumType.
         "chapStyle", "chapSep",

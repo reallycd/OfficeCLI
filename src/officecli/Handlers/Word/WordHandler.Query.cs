@@ -923,6 +923,11 @@ public partial class WordHandler
         if (margin?.Bottom?.Value != null) secNode.Format["marginBottom"] = FormatTwipsToCm((uint)Math.Abs(margin.Bottom.Value));
         if (margin?.Left?.Value != null) secNode.Format["marginLeft"] = FormatTwipsToCm(margin.Left.Value);
         if (margin?.Right?.Value != null) secNode.Format["marginRight"] = FormatTwipsToCm(margin.Right.Value);
+        // CONSISTENCY(root-vs-section-readback): mirror the root "/" readback in
+        // Navigation.cs — header/footer-from-edge distances + binding gutter.
+        if (margin?.Header?.Value != null) secNode.Format["marginHeader"] = FormatTwipsToCm(margin.Header.Value);
+        if (margin?.Footer?.Value != null) secNode.Format["marginFooter"] = FormatTwipsToCm(margin.Footer.Value);
+        if (margin?.Gutter?.Value != null) secNode.Format["marginGutter"] = FormatTwipsToCm(margin.Gutter.Value);
 
         // Page numbering start (w:pgNumType/@start) and format (w:pgNumType/@fmt)
         var pgNumType = sectPr.GetFirstChild<PageNumberType>();

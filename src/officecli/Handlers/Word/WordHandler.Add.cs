@@ -631,6 +631,15 @@ public partial class WordHandler
                 case "marginright":
                     EnsurePageMargin().Right = ParseTwips(value);
                     break;
+                case "marginheader":
+                    EnsurePageMargin().Header = ParseTwips(value);
+                    break;
+                case "marginfooter":
+                    EnsurePageMargin().Footer = ParseTwips(value);
+                    break;
+                case "margingutter":
+                    EnsurePageMargin().Gutter = ParseTwips(value);
+                    break;
 
                 // Core document properties
                 case "title":

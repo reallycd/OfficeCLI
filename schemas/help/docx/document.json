@@ -578,6 +578,42 @@
       ],
       "enforcement": "report"
     },
+    "marginHeader": {
+      "type": "length",
+      "add": false,
+      "set": true,
+      "get": true,
+      "description": "header-from-top-edge distance (pgMar @header). Convenience readback from sectPr; primary edit path is /section[N].",
+      "readback": "length in cm",
+      "examples": [
+        "--prop marginHeader=1.5cm"
+      ],
+      "enforcement": "report"
+    },
+    "marginFooter": {
+      "type": "length",
+      "add": false,
+      "set": true,
+      "get": true,
+      "description": "footer-from-bottom-edge distance (pgMar @footer). Convenience readback from sectPr; primary edit path is /section[N].",
+      "readback": "length in cm",
+      "examples": [
+        "--prop marginFooter=1.75cm"
+      ],
+      "enforcement": "report"
+    },
+    "marginGutter": {
+      "type": "length",
+      "add": false,
+      "set": true,
+      "get": true,
+      "description": "binding gutter width (pgMar @gutter). Convenience readback from sectPr; primary edit path is /section[N].",
+      "readback": "length in cm",
+      "examples": [
+        "--prop marginGutter=0cm"
+      ],
+      "enforcement": "report"
+    },
     "extended.application": {
       "type": "string",
       "add": false,

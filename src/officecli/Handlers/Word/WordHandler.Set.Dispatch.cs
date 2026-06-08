@@ -821,6 +821,15 @@ public partial class WordHandler
                 case "marginright":
                     EnsureSectPrPageMargin(sectPr).Right = ParseTwips(value);
                     break;
+                case "marginheader":
+                    EnsureSectPrPageMargin(sectPr).Header = ParseTwips(value);
+                    break;
+                case "marginfooter":
+                    EnsureSectPrPageMargin(sectPr).Footer = ParseTwips(value);
+                    break;
+                case "margingutter":
+                    EnsureSectPrPageMargin(sectPr).Gutter = ParseTwips(value);
+                    break;
                 case "columns" or "cols" or "col":
                 {
                     // Equal-width columns: "3" or "3,720" (count,space in twips)
