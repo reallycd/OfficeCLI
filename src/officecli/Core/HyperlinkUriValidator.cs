@@ -39,6 +39,14 @@ public static class HyperlinkUriValidator
         "tel",
         "sms",
         "ppaction",
+        // BUG-R4B(BUG5): file: is a legitimate, low-risk hyperlink scheme that
+        // real-world documents use to link local/network resources
+        // (file:///C:/...). Unlike javascript:/data:/vbscript:, it does not
+        // execute script or exfiltrate data — Office prompts on follow like any
+        // external link. Allowing it lets dump→replay round-trip file-target
+        // hyperlinks instead of emitting a command the batch rejects.
+        // javascript:/data:/vbscript: stay rejected (omitted from this set).
+        "file",
     };
 
     /// <summary>
@@ -68,7 +76,7 @@ public static class HyperlinkUriValidator
         if (string.IsNullOrEmpty(scheme)) return;
         if (AllowedSchemes.Contains(scheme)) return;
         throw new ArgumentException(
-            $"Invalid {contextKey} URL scheme '{scheme}:': only http, https, mailto, ftp, ftps, sftp, news, tel, sms, and ppaction targets are accepted. " +
-            "javascript:, file:, data:, vbscript:, and similar schemes are rejected to prevent click-bait redirection in shared documents.");
+            $"Invalid {contextKey} URL scheme '{scheme}:': only http, https, mailto, ftp, ftps, sftp, news, tel, sms, file, and ppaction targets are accepted. " +
+            "javascript:, data:, vbscript:, and similar schemes are rejected to prevent click-bait redirection in shared documents.");
     }
 }
