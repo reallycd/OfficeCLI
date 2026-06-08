@@ -25,11 +25,18 @@ public static class Bcp47LanguageTag
 
     // Shape: primary subtag 2-3 letters with optional hyphenated subtags;
     // 4-8 letter primary requires at least one subtag (reserved/grandfathered
-    // range); `x-…` private-use form. Subtags are 1-8 alphanumerics.
+    // range); `x-…` private-use form. Subtags are 1-8 alphanumerics with an
+    // optional single `_<1-8 alnum>` legacy-collation suffix.
     // R18-fuzz-3: prior `^[A-Za-z][A-Za-z0-9-]*$` form let "INVALID" and
     // 1000-char garbage through; this shape rejects both.
+    // The `_…` suffix admits Word's legacy sort/collation language tags
+    // (es-ES_tradnl, ja-JP_radstr, zh-TW_pinyin, de-DE_phoneb, hu-HU_technl,
+    // zh-CN_stroke, ka-GE_modern, …): Word writes and reads them, so a
+    // dump→batch round-trip must accept them; they are still bounded (one
+    // underscore per subtag, 1-8 chars each, 35 overall) so garbage stays out.
+    private const string Subtag = @"[A-Za-z0-9]{1,8}(?:_[A-Za-z0-9]{1,8})?";
     private static readonly Regex Shape = new(
-        @"^(?:[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*|[A-Za-z]{4,8}(?:-[A-Za-z0-9]{1,8})+|x(?:-[A-Za-z0-9]{1,8})+)$",
+        @"^(?:[A-Za-z]{2,3}(?:-" + Subtag + @")*|[A-Za-z]{4,8}(?:-" + Subtag + @")+|x(?:-[A-Za-z0-9]{1,8})+)$",
         RegexOptions.Compiled);
 
     /// <summary>
