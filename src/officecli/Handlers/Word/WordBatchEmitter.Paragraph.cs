@@ -657,15 +657,14 @@ public static partial class WordBatchEmitter
         // emit `add r text="\t"` to round-trip the tab character.
         if (run.Type != "tab") return false;
         var tabParent = ResolveHyperlinkParent(run, paraTargetPath, items);
+        var tabProps = FilterEmittableProps(run.Format);
+        tabProps["text"] = "\t";
         items.Add(new BatchItem
         {
             Command = "add",
             Parent = tabParent,
             Type = "r",
-            Props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["text"] = "\t"
-            }
+            Props = tabProps
         });
         return true;
     }
@@ -677,7 +676,12 @@ public static partial class WordBatchEmitter
         // emit branch the runs filter would drop it and round-trip would
         // silently lose right-align/header-style tabs.
         if (run.Type != "ptab") return false;
-        var ptabProps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // BUG-DUMP-TABRPR: carry the ptab run's own rPr (font / size / szCs /
+        // …) alongside its align/relativeTo/leader. Like a tab, a positional
+        // tab paints a leader in the run's font and contributes to line
+        // height, so its typography is meaningful — RunToNode keeps it on
+        // run.Format and AddPtab applies it on replay.
+        var ptabProps = FilterEmittableProps(run.Format);
         if (run.Format.TryGetValue("align", out var pAlign) && pAlign != null)
             ptabProps["alignment"] = pAlign.ToString() ?? "";
         if (run.Format.TryGetValue("relativeTo", out var pRel) && pRel != null)

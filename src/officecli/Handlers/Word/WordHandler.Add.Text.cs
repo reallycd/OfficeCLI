@@ -2414,6 +2414,18 @@ public partial class WordHandler
             ptab.Leader = AbsolutePositionTabLeaderCharValues.None;
 
         var ptabRun = new Run(ptab);
+        // BUG-DUMP-TABRPR: a positional tab paints a leader in the run's font
+        // and contributes to line height, so its typography is meaningful
+        // (mirrors a plain tab). Apply any run-level props (font / size /
+        // szCs / bold / …) onto the ptab run's rPr so dump→batch round-trips
+        // them; EnsureRunProperties prepends <w:rPr> ahead of <w:ptab> per
+        // schema order. ptab-structural keys are consumed above.
+        foreach (var (k, v) in properties)
+        {
+            var kl = k.ToLowerInvariant();
+            if (kl is "align" or "alignment" or "relativeto" or "leader") continue;
+            ApplyRunFormatting(EnsureRunProperties(ptabRun), k, v);
+        }
         InsertIntoParagraph(para, ptabRun, index);
         // CONSISTENCY(paraid-textid-refresh): paragraph contents changed,
         // so textId must regenerate to mark the paragraph as modified for

@@ -181,26 +181,34 @@ public partial class WordHandler
         var breakElInline = run.GetFirstChild<Break>();
         var tabElInline = run.GetFirstChild<TabChar>();
         var hasText = run.GetFirstChild<Text>() != null;
-        // CONSISTENCY(run-special-content): mirror the 5-way type upgrade
-        // in Navigation.cs — ptab / fieldChar / instrText / tab / break.
-        // Round 11 caught that `tab` was missing from this judgment:
-        // Get strips typography from tab runs, but Set silently accepted
-        // bold/color/font writes onto them, breaking read/write symmetry.
+        // CONSISTENCY(run-special-content): mirror the type upgrade in
+        // Navigation.cs. `isSpecialRun` (incl. tab / ptab) gates structural
+        // rejections like text= injection, which would corrupt a tab/marker
+        // run's OOXML. `isMarkerRun` is the narrower set of runs whose rPr
+        // paints nothing (fieldChar / instrText / break) — only those reject
+        // typography. BUG-DUMP-TABRPR: a tab / positional tab IS a sized
+        // inline element (Word stamps font/size/szCs on them to drive line
+        // height + leader glyphs), so typography on them is accepted —
+        // keeping Set symmetric with Add (which applies it) and Get (which
+        // now reads it back). The earlier rejection of tab/ptab typography
+        // matched a Get-side strip that was itself wrong for them.
         bool isSpecialRun = ptabEl != null || fldCharEl != null || instrEl != null
                             || (breakElInline != null && !hasText)
                             || (tabElInline != null && !hasText);
+        bool isMarkerRun = fldCharEl != null || instrEl != null
+                            || (breakElInline != null && !hasText);
 
         foreach (var (key, value) in properties)
         {
             // CONSISTENCY(run-special-content): typography props (font.* /
-            // size / bold / color / underline …) are noise on ptab /
-            // fieldChar / instrText / tab / break runs because there is no
-            // glyph to apply them to. Get strips them on readback (Round 2);
-            // accepting them on Set would write to <w:rPr> anyway and
-            // diverge between the read and write surfaces. Reject so the
-            // caller sees a clean unsupported notice and the OOXML stays
-            // free of cosmetic-but-invisible noise.
-            if (isSpecialRun && IsTypographyOnlyKey(key))
+            // size / bold / color / underline …) are noise on the MARKER
+            // runs (ptab / fieldChar / instrText / break) — their rPr paints
+            // nothing, Get strips it, and accepting it on Set would write
+            // invisible cruft to <w:rPr>. Reject so the caller sees a clean
+            // unsupported notice. A pure-tab run is NOT a marker (it is a
+            // sized inline element), so it accepts typography here, matching
+            // Add/Get. See BUG-DUMP-TABRPR note above.
+            if (isMarkerRun && IsTypographyOnlyKey(key))
             {
                 unsupported.Add(key);
                 continue;

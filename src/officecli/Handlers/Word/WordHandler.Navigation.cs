@@ -2192,13 +2192,26 @@ public partial class WordHandler
             PopulateEffectiveRunProperties(node, run, parentPara);
 
         // Same noise-suppression for direct rPr-level keys read before
-        // the type upgrade above (font.*/size/bold/...): they are valid
-        // OOXML but irrelevant to special-content runs, where node.Type
-        // already conveys the semantic role. Strip them for ptab /
-        // fieldChar / instrText / tab / break so audit tools see a
-        // clean property bag (alignment, fieldCharType, instr,
-        // breakType, etc.).
-        if (node.Type is "ptab" or "fieldChar" or "instrText" or "tab" or "break")
+        // the type upgrade above (font.*/size/bold/...): on a pure MARKER
+        // run (fieldChar / instrText / break) the rPr has no glyph to paint,
+        // so surfacing font/size/color is noise that primes audit tools to
+        // misread cosmetic styling on a structural marker as meaningful —
+        // strip it so the bag shows only the role-defining keys
+        // (fieldCharType, instr, breakType, …).
+        //
+        // BUG-DUMP-TABRPR: tab and ptab are deliberately NOT in this list
+        // (they were, historically, under the same "no glyph" rationale —
+        // but that was wrong for them). A tab / positional tab is a SIZED
+        // inline element: Word routinely stamps rPr on these runs (font/size/
+        // szCs drive the line height and the leader-dot glyphs the tab
+        // paints), and stripping it dropped that rPr on every dump→batch
+        // round-trip, leaving an empty <w:rPr/>. The earlier strip never
+        // needed them anyway — the tab/ptab assertions
+        // (Req5Round12FuzzTabSpecialTests) only check a run shows no
+        // typography AFTER Set rejected/never-applied any (so the run
+        // genuinely has none to read); they don't require hiding typography
+        // that a source document already authored.
+        if (node.Type is "fieldChar" or "instrText" or "break")
         {
             foreach (var noiseKey in TypographyOnlyKeys)
                 node.Format.Remove(noiseKey);
