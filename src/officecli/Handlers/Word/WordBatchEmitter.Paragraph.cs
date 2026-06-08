@@ -114,6 +114,27 @@ public static partial class WordBatchEmitter
             props.Remove("listStyle");
             props.Remove("start");
         }
+        // BUG-R4F-02: a paragraph may carry a numId that does not resolve to any
+        // <w:num> in /numbering (dangling reference). This is valid OOXML — Word
+        // renders the paragraph, just without a list marker — but the Add-side
+        // dangling-numId guard (WordHandler.Add.Text.cs) rejects it, and because
+        // `add p` is atomic the whole paragraph (TEXT included) is lost on replay.
+        // Drop the numbering props so the `add p` succeeds with its text, and
+        // surface a warning so the dropped numbering is visible. The numbering is
+        // kept whenever the numId IS defined (the common case). Mirrors the
+        // out-of-window font-size / zero-width-column clamps in Filters.cs.
+        if (props.TryGetValue("numId", out var numIdStr)
+            && int.TryParse(numIdStr, out var numIdInt)
+            && numIdInt > 0
+            && !word.IsNumIdDefined(numIdInt))
+        {
+            props.Remove("numId");
+            props.Remove("numLevel");
+            ctx?.Warnings.Add(new DocxUnsupportedWarning(
+                Element: "numId",
+                Path: pNode.Path,
+                Reason: $"paragraph references numId={numIdInt} which is not defined in /numbering (dangling reference); the numbering was dropped so the paragraph text survives dump→batch round-trip"));
+        }
         // Collapse non-TOC field chains (fldChar(begin) + instrText(" PAGE ")
         // + fldChar(separate) + display run(s) + fldChar(end)) into a single
         // synthetic "field" entry. Without this collapse, the subsequent

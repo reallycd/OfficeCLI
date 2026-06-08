@@ -1147,6 +1147,21 @@ public partial class WordHandler
     }
 
     /// <summary>
+    /// BUG-R4F-02: true when a &lt;w:num w:numId=N&gt; instance is defined in the
+    /// numbering part. The dump emitter consults this to avoid emitting an
+    /// `add p {numId:N}` for a paragraph whose numId is dangling (no matching
+    /// &lt;w:num&gt;) — such an `add` is rejected by the Add-side dangling-numId
+    /// guard, which (since `add p` is atomic) would drop the paragraph TEXT too.
+    /// </summary>
+    internal bool IsNumIdDefined(int numId)
+    {
+        if (numId <= 0) return false; // 0/-1 are no-list sentinels, not references
+        var numbering = _doc.MainDocumentPart?.NumberingDefinitionsPart?.Numbering;
+        return numbering?.Elements<NumberingInstance>()
+            .Any(n => n.NumberID?.Value == numId) ?? false;
+    }
+
+    /// <summary>
     /// Add a numbering instance (&lt;w:num&gt;) under /numbering. A num is a thin
     /// pointer that references an existing &lt;w:abstractNum&gt; via abstractNumId.
     ///
