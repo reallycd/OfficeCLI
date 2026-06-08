@@ -223,7 +223,60 @@ public static partial class WordBatchEmitter
         // `/styles`, etc.) intentionally do NOT include sibling parts, so
         // warning about them every time would be noise.
         EmitAuxiliaryPartsScan(word, warnings);
+        // BUG-R7B(BUG1): footnotes/endnotes round-trip through the reference
+        // run that anchors them (emitted as `add footnote`/`add endnote` while
+        // walking the body). A note body present in footnotes.xml/endnotes.xml
+        // with NO anchoring reference in the document is an orphan — Word never
+        // displays it and `add footnote` (which always inserts a reference)
+        // cannot recreate it without fabricating an anchor the source never
+        // had. Rather than silently drop such note bodies, surface a warning
+        // so the loss is visible (mirrors EmitAuxiliaryPartsScan's philosophy:
+        // a noisy warning beats silent data loss).
+        WarnOrphanNotes(word, items, warnings);
         return (items, warnings);
+    }
+
+    // BUG-R7B(BUG1): warn on note bodies that have no anchoring reference run.
+    // `add footnote`/`add endnote` items are emitted one-per-reference during
+    // the body walk; comparing that count against the number of real note
+    // bodies (excluding the reserved separator / continuationSeparator notes,
+    // ids -1/0, which Query already filters out) exposes orphans.
+    private static void WarnOrphanNotes(WordHandler word, List<BatchItem> items,
+                                        List<DocxUnsupportedWarning> warnings)
+    {
+        WarnOrphanNotesOfKind(word, items, warnings, "footnote");
+        WarnOrphanNotesOfKind(word, items, warnings, "endnote");
+    }
+
+    private static void WarnOrphanNotesOfKind(WordHandler word, List<BatchItem> items,
+                                              List<DocxUnsupportedWarning> warnings, string kind)
+    {
+        List<DocumentNode> notes;
+        try { notes = word.Query(kind); }
+        catch { return; }
+        if (notes.Count == 0) return;
+
+        var emitted = items.Count(it =>
+            it.Command == "add"
+            && string.Equals(it.Type, kind, StringComparison.OrdinalIgnoreCase));
+        if (emitted >= notes.Count) return;
+
+        // The first `emitted` notes are the ones a reference recovered (Query
+        // and the body walk both run in document order); the remainder are
+        // orphans. Report each so its lost text is visible.
+        foreach (var orphan in notes.Skip(emitted))
+        {
+            warnings.Add(new DocxUnsupportedWarning(
+                Element: kind,
+                Path: orphan.Path,
+                Reason: $"{kind} body has no anchoring reference in the document; orphan note dropped on dump (text: \"{Truncate(orphan.Text)}\")"));
+        }
+    }
+
+    private static string Truncate(string? s, int max = 60)
+    {
+        s ??= "";
+        return s.Length <= max ? s : s.Substring(0, max) + "…";
     }
 
     private static string? ExtractParaId(string anchorPath)

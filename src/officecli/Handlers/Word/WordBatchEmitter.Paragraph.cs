@@ -33,7 +33,7 @@ public static partial class WordBatchEmitter
             ctx.ParaIdToTargetIdx[earlyParaId.ToString()!] = targetIndex;
         }
 
-        if (TryEmitInlineSectionBreak(pNode, parentPath, items, ctx)) return;
+        if (TryEmitInlineSectionBreak(word, pNode, parentPath, items, ctx)) return;
         if (TryEmitTocParagraph(pNode, parentPath, items)) return;
         if (TryEmitTextboxOnlyParagraph(word, pNode, parentPath, autoPresent, items, ctx)) return;
 
@@ -316,7 +316,7 @@ public static partial class WordBatchEmitter
             // can't be resolved.
             if (TryEmitOleRun(run, paraTargetPath, items, ctx, word)) continue;
             if (TryEmitPictureRun(word, run, paraTargetPath, parentPath, targetIndex, items, ctx, sharedAttachPara)) continue;
-            if (TryEmitNoteRefRun(run, paraTargetPath, items, ctx)) continue;
+            if (TryEmitNoteRefRun(word, run, paraTargetPath, items, ctx)) continue;
             EmitPlainOrHyperlinkRun(run, paraTargetPath, items, ctx);
         }
     }
@@ -353,7 +353,7 @@ public static partial class WordBatchEmitter
         return true;
     }
 
-    private static bool TryEmitInlineSectionBreak(DocumentNode pNode, string parentPath, List<BatchItem> items, BodyEmitContext? ctx)
+    private static bool TryEmitInlineSectionBreak(WordHandler word, DocumentNode pNode, string parentPath, List<BatchItem> items, BodyEmitContext? ctx)
     {
         // Inline section break: a paragraph carrying <w:sectPr> is the
         // OOXML representation of a mid-document section boundary.
@@ -396,13 +396,12 @@ public static partial class WordBatchEmitter
                     if (c.Type == "sdt") return true;
                     if (c.Type != "run" && c.Type != "r") return false;
                     if (!string.IsNullOrEmpty(c.Text)) return true;
-                    // BUG-DUMP5-08: include empty rStyle-bearing footnote /
-                    // endnote refs (their visible text comes via the typed
-                    // emit branch below, not from c.Text).
-                    if (c.Format.TryGetValue("rStyle", out var rsv)
-                        && rsv != null
-                        && (string.Equals(rsv.ToString(), "FootnoteReference", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(rsv.ToString(), "EndnoteReference", StringComparison.OrdinalIgnoreCase)))
+                    // BUG-DUMP5-08 / BUG-R7B(BUG1): include empty footnote /
+                    // endnote reference runs (their visible text comes via the
+                    // typed emit branch below, not from c.Text). Detect via the
+                    // actual reference child, not the arbitrary rStyle name.
+                    var rsv = c.Format.TryGetValue("rStyle", out var rsraw) ? rsraw?.ToString() : null;
+                    if (ClassifyNoteRefRun(word, c, rsv) != NoteRefKind.None)
                         return true;
                     return false;
                 })
@@ -437,9 +436,13 @@ public static partial class WordBatchEmitter
                         continue;
                     }
                     var rStyle = run.Format.TryGetValue("rStyle", out var rs) ? rs?.ToString() : null;
-                    if (ctx != null && rStyle == "FootnoteReference")
+                    // BUG-R7B(BUG1): detect via the actual reference child, not
+                    // the (arbitrary) rStyle name.
+                    var carrierNoteKind = ctx != null
+                        ? ClassifyNoteRefRun(word, run, rStyle) : NoteRefKind.None;
+                    if (carrierNoteKind == NoteRefKind.Footnote)
                     {
-                        var noteText = ctx.FootnoteCursor.Index < ctx.FootnoteTexts.Count
+                        var noteText = ctx!.FootnoteCursor.Index < ctx.FootnoteTexts.Count
                             ? ctx.FootnoteTexts[ctx.FootnoteCursor.Index] : "";
                         ctx.FootnoteCursor.Index++;
                         items.Add(new BatchItem
@@ -451,9 +454,9 @@ public static partial class WordBatchEmitter
                         });
                         continue;
                     }
-                    if (ctx != null && rStyle == "EndnoteReference")
+                    if (carrierNoteKind == NoteRefKind.Endnote)
                     {
-                        var noteText = ctx.EndnoteCursor.Index < ctx.EndnoteTexts.Count
+                        var noteText = ctx!.EndnoteCursor.Index < ctx.EndnoteTexts.Count
                             ? ctx.EndnoteTexts[ctx.EndnoteCursor.Index] : "";
                         ctx.EndnoteCursor.Index++;
                         items.Add(new BatchItem
@@ -587,12 +590,15 @@ public static partial class WordBatchEmitter
         // `add hyperlink` — `add p` does not consume url/anchor.
         if (r.Format.ContainsKey("url") || r.Format.ContainsKey("anchor")
             || r.Format.ContainsKey("isHyperlink")) return false;
-        // BUG-FUZZ-2: footnote/endnote reference runs need the typed
-        // `add footnote/endnote` branch; AddParagraph doesn't consume rStyle.
-        if (r.Format.TryGetValue("rStyle", out var srStyle)
-            && (string.Equals(srStyle?.ToString(), "FootnoteReference", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(srStyle?.ToString(), "EndnoteReference", StringComparison.OrdinalIgnoreCase)))
-            return false;
+        // BUG-FUZZ-2 / BUG-R7B(BUG1): footnote/endnote reference runs need the
+        // typed `add footnote/endnote` branch; AddParagraph doesn't consume the
+        // reference. Detect via the actual reference child, not the arbitrary
+        // rStyle name (real docs use ids like "a5", not "FootnoteReference").
+        {
+            var srStyle = r.Format.TryGetValue("rStyle", out var srraw) ? srraw?.ToString() : null;
+            if (ClassifyNoteRefRun(word, r, srStyle) != NoteRefKind.None)
+                return false;
+        }
         // BUG-W14-EFFECTS / BUG-DUMP5-09 / 7-01 / 5-10: run-level w14 effects /
         // OpenType properties / sym / trackChange — AddParagraph's
         // ApplyRunFormatting fallback has no cases for these; they'd
@@ -1597,16 +1603,24 @@ public static partial class WordBatchEmitter
         return true;
     }
 
-    private static bool TryEmitNoteRefRun(DocumentNode run, string paraTargetPath, List<BatchItem> items, BodyEmitContext? ctx)
+    private static bool TryEmitNoteRefRun(WordHandler word, DocumentNode run, string paraTargetPath, List<BatchItem> items, BodyEmitContext? ctx)
     {
-        // Footnote/endnote reference runs are empty <w:r> elements with
-        // rStyle = FootnoteReference / EndnoteReference. Emit them as a
-        // typed footnote/endnote add anchored on the host paragraph and
-        // pull the body text from the pre-resolved ordered list — see
-        // BodyEmitContext for the document-order assumption.
+        // Footnote/endnote reference runs carry a <w:footnoteReference> /
+        // <w:endnoteReference> child. Emit them as a typed footnote/endnote
+        // add anchored on the host paragraph and pull the body text from the
+        // pre-resolved ordered list — see BodyEmitContext for the
+        // document-order assumption.
+        //
+        // BUG-R7B(BUG1): detection cannot rely on rStyle == "FootnoteReference":
+        // that is only the default style name. Real documents reference the
+        // note with an arbitrary style id (e.g. rStyle="a5"), so the run's
+        // rStyle never matched and the reference (plus its note body) was
+        // silently dropped — Get surfaces no Format key for the reference
+        // element, so probe the raw run XML for the actual reference child.
         if (ctx == null) return false;
         var rStyle = run.Format.TryGetValue("rStyle", out var rs) ? rs?.ToString() : null;
-        if (rStyle == "FootnoteReference")
+        var noteKind = ClassifyNoteRefRun(word, run, rStyle);
+        if (noteKind == NoteRefKind.Footnote)
         {
             var noteText = ctx.FootnoteCursor.Index < ctx.FootnoteTexts.Count
                 ? ctx.FootnoteTexts[ctx.FootnoteCursor.Index]
@@ -1621,7 +1635,7 @@ public static partial class WordBatchEmitter
             });
             return true;
         }
-        if (rStyle == "EndnoteReference")
+        if (noteKind == NoteRefKind.Endnote)
         {
             var noteText = ctx.EndnoteCursor.Index < ctx.EndnoteTexts.Count
                 ? ctx.EndnoteTexts[ctx.EndnoteCursor.Index]
@@ -1637,6 +1651,28 @@ public static partial class WordBatchEmitter
             return true;
         }
         return false;
+    }
+
+    private enum NoteRefKind { None, Footnote, Endnote }
+
+    // BUG-R7B(BUG1): a run is a footnote/endnote reference when it contains a
+    // <w:footnoteReference>/<w:endnoteReference> child — the rStyle is only a
+    // weak hint (defaults to FootnoteReference/EndnoteReference but is an
+    // arbitrary style id in real documents). Probe the raw XML; fall back to
+    // the rStyle name when raw XML is unavailable.
+    private static NoteRefKind ClassifyNoteRefRun(WordHandler word, DocumentNode run, string? rStyle)
+    {
+        if (run.Type != "run" && run.Type != "r") return NoteRefKind.None;
+        var raw = word.GetElementXml(run.Path);
+        if (!string.IsNullOrEmpty(raw))
+        {
+            if (raw.Contains("footnoteReference", StringComparison.Ordinal)) return NoteRefKind.Footnote;
+            if (raw.Contains("endnoteReference", StringComparison.Ordinal)) return NoteRefKind.Endnote;
+            return NoteRefKind.None;
+        }
+        if (string.Equals(rStyle, "FootnoteReference", StringComparison.OrdinalIgnoreCase)) return NoteRefKind.Footnote;
+        if (string.Equals(rStyle, "EndnoteReference", StringComparison.OrdinalIgnoreCase)) return NoteRefKind.Endnote;
+        return NoteRefKind.None;
     }
 
     private static void EmitPlainOrHyperlinkRun(DocumentNode run, string paraTargetPath, List<BatchItem> items, BodyEmitContext? ctx = null)
