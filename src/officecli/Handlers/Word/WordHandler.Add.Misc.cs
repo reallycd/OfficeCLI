@@ -172,15 +172,20 @@ public partial class WordHandler
                 "that prevent later addressing via bare attribute selectors. " +
                 "Use only letters, digits, '.', '_', '-' in bookmark names.");
 
-        // Reject duplicate bookmark names. OOXML bookmark names are expected
-        // to be unique per document; tolerating duplicates makes
-        // /bookmark[@name=X] ambiguous (it picks the first), so the path
-        // returned by `add` may not identify the bookmark just inserted.
+        // BUG-DUMPR2-02: Word permits multiple bookmarks to share a name
+        // (legal OOXML; validates clean), so a hard reject broke dump→batch
+        // round-trip of any such document — the replay re-adds each bookmark by
+        // its source name and the second one threw, dropping a bookmark. The
+        // bookmark Id stays unique (allocated below), which is what the format
+        // requires; only the display name repeats. Warn instead of failing:
+        // /bookmark[@name=X] then resolves to the first match, but the bookmark
+        // is preserved. (Mirrors the duplicate form-field-name handling.)
         var existingStarts = body.Descendants<BookmarkStart>().ToList();
         if (existingStarts.Any(b => string.Equals(b.Name?.Value, bkName, StringComparison.Ordinal)))
         {
-            throw new ArgumentException(
-                $"bookmark name '{bkName}' already exists; pick a unique name.");
+            LastAddWarnings.Add(
+                $"bookmark name '{bkName}' duplicates an existing bookmark — kept " +
+                "(Word allows it), but addressing by this name resolves to the first match.");
         }
 
         var existingIds = existingStarts
