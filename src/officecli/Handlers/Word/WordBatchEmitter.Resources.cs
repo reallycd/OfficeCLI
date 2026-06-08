@@ -727,15 +727,66 @@ public static partial class WordBatchEmitter
                                      Dictionary<string, int> paraIdToTargetIdx)
     {
         var comments = word.Query("comment");
+        int targetCommentIdx = 0;  // 1-based index of the comment as it will be rebuilt
+        int sourceCommentIdx = 0;  // 1-based positional index in the source comments part
         foreach (var c in comments)
         {
+            targetCommentIdx++;
+            sourceCommentIdx++;
             var props = FilterEmittableProps(c.Format);
+
+            // BUG-R9A(BUG1): emit the comment body STRUCTURALLY instead of
+            // flattening it to a single `text` prop. A comment body may carry
+            // multiple runs (each with its own rPr) and multiple paragraphs;
+            // the old flatten-to-`text` path discarded all per-run formatting
+            // and any paragraph beyond the first (silent data loss). Strategy:
+            //   - `add comment` carries the FIRST paragraph's FIRST run text +
+            //     that run's rPr (ApplyCommentFormatKeys applies them to the
+            //     lone run present at creation time).
+            //   - remaining runs in the first paragraph -> `add run` into
+            //     /comments/comment[N]/p[1].
+            //   - additional paragraphs -> `add paragraph` into
+            //     /comments/comment[N], then `add run` per run.
+            // Mirrors how /body content runs/paragraphs are emitted. Plain and
+            // empty comments still round-trip (single run / no run).
+            //
+            // Enumerate the source comment's paragraphs WITH their run children.
+            // Use the positional comment index (word.Query("comment") returns
+            // comments in source order, so loop position == positional index)
+            // and Get(path, depth:2) so each paragraph node carries populated
+            // run Children — word.Query enumerates collection children at
+            // depth 0 (empty Children), which would silently re-flatten.
+            var bodyParas = new List<DocumentNode>();
+            for (int pIdx = 1; ; pIdx++)
+            {
+                DocumentNode? para;
+                try { para = word.Get($"/comments/comment[{sourceCommentIdx}]/p[{pIdx}]", depth: 2); }
+                catch { break; }
+                if (para == null) break;
+                bodyParas.Add(para);
+            }
+
+            var firstParaRuns = bodyParas.Count > 0
+                ? bodyParas[0].Children.Where(IsRoundTrippableCommentRun).ToList()
+                : new List<DocumentNode>();
+
             // BUG-R6B(BUG1): always emit `text`, even when empty. An empty
             // comment (no inline text, or only an empty table) is valid OOXML;
             // omitting `text` produced a dump op that AddComment refused to
             // replay ("'text' property is required"), silently dropping the
             // comment on round-trip. AddComment now accepts text="".
-            props["text"] = c.Text ?? string.Empty;
+            // The first run's text + rPr ride on `add comment`; if there is no
+            // first run (empty comment) fall back to empty text.
+            if (firstParaRuns.Count > 0)
+            {
+                var firstRun = firstParaRuns[0];
+                props["text"] = firstRun.Text ?? string.Empty;
+                MergeRunFormatProps(props, firstRun);
+            }
+            else
+            {
+                props["text"] = c.Text ?? string.Empty;
+            }
             // Map anchoredTo (source paraId path) -> target paragraph index.
             // anchoredTo looks like "/body/p[@paraId=00100000]"; parse and
             // resolve via the paraId map we built during EmitBody.
@@ -792,6 +843,83 @@ public static partial class WordBatchEmitter
                 Type = "comment",
                 Props = props
             });
+
+            // BUG-R9A(BUG1): structural emit of the remainder of the comment
+            // body. The target comment is rebuilt at /comments/comment[N]
+            // where N == targetCommentIdx (comments replay in source order).
+            string targetCommentPath = $"/comments/comment[{targetCommentIdx}]";
+
+            // Remaining runs of the first paragraph (run [1] already rode on
+            // `add comment`). p[1] always exists after `add comment`.
+            for (int ri = 1; ri < firstParaRuns.Count; ri++)
+            {
+                EmitCommentRun(firstParaRuns[ri], $"{targetCommentPath}/p[1]", items);
+            }
+
+            // Additional paragraphs (paragraph [1] is the `add comment` body).
+            for (int pi = 1; pi < bodyParas.Count; pi++)
+            {
+                var para = bodyParas[pi];
+                var paraProps = FilterEmittableProps(para.Format);
+                paraProps.Remove("text");  // text is carried by per-run emits below
+                items.Add(new BatchItem
+                {
+                    Command = "add",
+                    Parent = targetCommentPath,
+                    Type = "paragraph",
+                    Props = paraProps.Count > 0 ? paraProps : null
+                });
+                var runs = para.Children.Where(IsRoundTrippableCommentRun).ToList();
+                // AddParagraph with no `text` produces an empty paragraph; emit
+                // each run so per-run formatting survives. The new paragraph is
+                // the (pi+1)-th paragraph of the comment.
+                foreach (var run in runs)
+                {
+                    EmitCommentRun(run, $"{targetCommentPath}/p[{pi + 1}]", items);
+                }
+            }
+        }
+    }
+
+    // BUG-R9A(BUG1): a comment-body run is round-trippable as a plain `add run`
+    // only when it is text-carrying (no drawing / field / break / footnote-ref
+    // structure). Comment bodies in practice hold plain text runs; richer
+    // structure inside a comment is rare and out of scope here — skip such runs
+    // rather than mis-emit them as plain text.
+    private static bool IsRoundTrippableCommentRun(DocumentNode run)
+    {
+        return run.Type == "run" || run.Type == "r";
+    }
+
+    // BUG-R9A(BUG1): emit one comment-body run as `add run`, carrying its text
+    // and rPr (italic/bold/color/size/font/…). Mirrors EmitPlainOrHyperlinkRun
+    // for /body runs, minus the hyperlink/revision special-casing (comment
+    // bodies don't carry those in the supported round-trip).
+    private static void EmitCommentRun(DocumentNode run, string paraTargetPath, List<BatchItem> items)
+    {
+        var rProps = FilterEmittableProps(run.Format);
+        if (!string.IsNullOrEmpty(run.Text))
+            rProps["text"] = run.Text!;
+        items.Add(new BatchItem
+        {
+            Command = "add",
+            Parent = paraTargetPath,
+            Type = "r",
+            Props = rProps.Count > 0 ? rProps : null
+        });
+    }
+
+    // BUG-R9A(BUG1): fold a run's rPr format keys into the `add comment` prop
+    // bag so ApplyCommentFormatKeys applies them to the comment's first run.
+    // `text` is set separately by the caller; never copy paragraph/comment-level
+    // keys here (the run node carries only run-level format).
+    private static void MergeRunFormatProps(Dictionary<string, string> props, DocumentNode run)
+    {
+        var rProps = FilterEmittableProps(run.Format);
+        foreach (var (k, v) in rProps)
+        {
+            if (string.Equals(k, "text", StringComparison.OrdinalIgnoreCase)) continue;
+            props[k] = v;
         }
     }
 
