@@ -742,9 +742,36 @@ public partial class WordHandler
     // Per-body-child → owning section, built lazily by FindOwningSectionProperties.
     private Dictionary<OpenXmlElement, SectionProperties?>? _owningSectionCache;
 
-    // Drop the body child-index + owning-section caches after a structural
-    // mutation. Cheap. Called from Add() (body-level) and InvalidateBodyParaCache.
-    private void ClearBodyChildIndex() { _bodyChildIndexCache.Clear(); _owningSectionCache = null; }
+    // Per-body paraId → paragraph, built lazily by GetBodyParaById. Resolving
+    // /body/p[@paraId=X] via FirstOrDefault scan is O(n); dump emits one
+    // Get(/body/p[@paraId]) per paragraph, so that scan made dump O(n²).
+    private Dictionary<OpenXmlElement, Dictionary<string, Paragraph>>? _bodyParaByIdCache;
+
+    // Drop the body child-index + owning-section + paraId caches after a
+    // structural mutation. Called from Add() (body-level) and InvalidateBodyParaCache.
+    private void ClearBodyChildIndex()
+    {
+        _bodyChildIndexCache.Clear();
+        _owningSectionCache = null;
+        _bodyParaByIdCache = null;
+    }
+
+    // O(1) /body/p[@paraId=X] over body-direct (incl. customXml) paragraphs.
+    // Returns null for ids that live only inside tables/sdt — the caller falls
+    // back to a Descendants scan for those (rare).
+    private Paragraph? GetBodyParaById(Body body, string paraId)
+    {
+        _bodyParaByIdCache ??= new();
+        if (!_bodyParaByIdCache.TryGetValue(body, out var map))
+        {
+            map = new(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in GetBodyParagraphIndex(body).OfType<Paragraph>())
+                if (p.ParagraphId?.Value is { } id && !map.ContainsKey(id))
+                    map[id] = p; // first-wins, matches the old FirstOrDefault
+            _bodyParaByIdCache[body] = map;
+        }
+        return map.TryGetValue(paraId, out var found) ? found : null;
+    }
 
     private List<OpenXmlElement> GetBodyParagraphIndex(Body body) => GetBodyChildIndex(body).paras;
     private List<OpenXmlElement> GetBodyTableIndex(Body body) => GetBodyChildIndex(body).tables;
@@ -1232,8 +1259,12 @@ public partial class WordHandler
                 // descendants too — direct-child-only scan made cell paras
                 // unreachable from the canonical /body/p[@paraId=...] form
                 // that AddPtab/AddBreak/AddField return for cell parents.
-                next = childList.OfType<Paragraph>()
-                    .FirstOrDefault(p => string.Equals(p.ParagraphId?.Value, targetId, StringComparison.OrdinalIgnoreCase));
+                // Body case uses the O(1) paraId map (dump resolves one
+                // /body/p[@paraId] per paragraph — the scan was O(n²)).
+                next = current is Body navParaByIdBody
+                    ? GetBodyParaById(navParaByIdBody, targetId)
+                    : childList.OfType<Paragraph>()
+                        .FirstOrDefault(p => string.Equals(p.ParagraphId?.Value, targetId, StringComparison.OrdinalIgnoreCase));
                 if (next == null)
                 {
                     next = (current as OpenXmlElement)?.Descendants<Paragraph>()
