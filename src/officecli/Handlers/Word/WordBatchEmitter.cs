@@ -84,7 +84,7 @@ public static partial class WordBatchEmitter
         var warnings = new List<DocxUnsupportedWarning>();
         switch (path.ToLowerInvariant())
         {
-            case "/theme": EmitThemeRaw(word, items); return (items, warnings);
+            case "/theme": EmitThemeRaw(word, items, warnings); return (items, warnings);
             case "/settings": EmitSettingsRaw(word, items); return (items, warnings);
             case "/numbering": EmitNumberingRaw(word, items); return (items, warnings);
             case "/styles": EmitStyles(word, items); return (items, warnings);
@@ -183,7 +183,7 @@ public static partial class WordBatchEmitter
         // must follow EmitStyles so it overwrites the blank's stamped block
         // rather than being clobbered by it. See EmitDocDefaultsRaw.
         EmitDocDefaultsRaw(word, items);
-        EmitThemeRaw(word, items);
+        EmitThemeRaw(word, items, warnings);
         EmitSettingsRaw(word, items);
         EmitSection(word, items);
         // Headers/footers run AFTER body: multi-section docs now emit

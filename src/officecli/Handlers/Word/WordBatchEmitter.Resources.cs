@@ -278,7 +278,75 @@ public static partial class WordBatchEmitter
         });
     }
 
-    private static void EmitThemeRaw(WordHandler word, List<BatchItem> items)
+    // BUG-R4B(BUG6): the theme part (word/theme/theme1.xml) can carry a
+    // <a:blipFill><a:blip r:embed="rIdN"/> referencing an image relationship in
+    // theme1.xml.rels (a custom fmtScheme bg fill). The dump round-trips the
+    // theme XML verbatim via raw-set but never recreates the theme part's rels
+    // or the media binary, so the r:embed dangles on replay and the rebuilt
+    // theme1.xml fails validation ("relationship 'rId1' ... does not exist").
+    // Theme-image round-trip is a separate feature; here we just ensure the
+    // rebuilt theme has NO dangling reference: strip the unreconstructable
+    // blip/blipFill cleanly (falling back to the previous fill in the same
+    // *StyleLst, or dropping the entry) and signal the loss via a warning.
+    // Mirrors StripDanglingNoteSeparatorRefs / StripDanglingPicBullets.
+    private static string StripDanglingThemeBlipRefs(string themeXml, out bool stripped)
+    {
+        stripped = false;
+        if (string.IsNullOrEmpty(themeXml) || !themeXml.StartsWith("<")) return themeXml;
+        // Fast path: only act when a relationship-bearing attribute is present.
+        if (!themeXml.Contains(":embed=") && !themeXml.Contains(":link="))
+            return themeXml;
+        try
+        {
+            var doc = System.Xml.Linq.XDocument.Parse(themeXml);
+            if (doc.Root == null) return themeXml;
+            var aNs = (System.Xml.Linq.XNamespace)"http://schemas.openxmlformats.org/drawingml/2006/main";
+            var rNs = (System.Xml.Linq.XNamespace)"http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+            var removed = false;
+            // Any blipFill whose blip carries a relationship reference cannot be
+            // reconstructed (image binary + rels not round-tripped). Remove the
+            // whole <a:blipFill> so the parent fill list entry is replaced with a
+            // schema-valid neutral fill rather than a dangling one.
+            foreach (var blipFill in doc.Descendants(aNs + "blipFill").ToList())
+            {
+                var blip = blipFill.Element(aNs + "blip");
+                var hasRel = blip != null
+                    && blip.Attributes().Any(a => a.Name.Namespace == rNs);
+                if (!hasRel) continue;
+                // Replace the unreconstructable blipFill with a neutral
+                // <a:solidFill><a:schemeClr val="phClr"/></a:solidFill> — the
+                // canonical placeholder fill used throughout fmtScheme style
+                // lists — so the surrounding *StyleLst keeps a valid child count
+                // and Word still renders a (plain) fill.
+                var placeholder = new System.Xml.Linq.XElement(aNs + "solidFill",
+                    new System.Xml.Linq.XElement(aNs + "schemeClr",
+                        new System.Xml.Linq.XAttribute("val", "phClr")));
+                blipFill.ReplaceWith(placeholder);
+                removed = true;
+            }
+            // Defensive: drop any other element still carrying an r:embed/r:link
+            // (e.g. an a:blip that is not inside an a:blipFill).
+            foreach (var el in doc.Descendants().ToList())
+            {
+                if (el.Attributes().Any(a => a.Name.Namespace == rNs
+                    && (a.Name.LocalName == "embed" || a.Name.LocalName == "link")))
+                {
+                    el.Remove();
+                    removed = true;
+                }
+            }
+            if (!removed) return themeXml;
+            stripped = true;
+            return doc.Root.ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+        }
+        catch
+        {
+            return themeXml;
+        }
+    }
+
+    private static void EmitThemeRaw(WordHandler word, List<BatchItem> items,
+                                     List<DocxUnsupportedWarning>? warnings = null)
     {
         // Theme carries clrScheme + fontScheme + fmtScheme — pure structured
         // XML that users rarely modify property-by-property; the natural
@@ -312,6 +380,16 @@ public static partial class WordBatchEmitter
         // always emits something rather than skipping theme-less sources.
         if (string.IsNullOrEmpty(xml) || !xml.StartsWith("<") || !xml.Contains("themeElements"))
             xml = BlankDocCreator.BuildDefaultTheme(null, null).OuterXml;
+
+        // BUG-R4B(BUG6): scrub dangling theme image references (the image binary
+        // and theme1.xml.rels are not round-tripped) so the rebuilt theme
+        // validates clean. Warn so the loss is visible.
+        xml = StripDanglingThemeBlipRefs(xml, out var blipStripped);
+        if (blipStripped)
+            warnings?.Add(new DocxUnsupportedWarning(
+                Element: "theme.blipFill",
+                Path: "/theme",
+                Reason: "theme image fill (a:blipFill r:embed) dropped — theme-part image round-trip is not supported; the fill was replaced with a neutral placeholder to keep the rebuilt theme valid"));
 
         items.Add(new BatchItem
         {
