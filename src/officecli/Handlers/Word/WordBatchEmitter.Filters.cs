@@ -302,6 +302,29 @@ public static partial class WordBatchEmitter
             // separately.
             if (string.Equals(key, "tabs", StringComparison.OrdinalIgnoreCase)) continue;
 
+            // A schema-valid but out-of-window font size. <w:sz>/<w:szCs>
+            // (CT_HpsMeasure) permit val=0 and very large values, and Word
+            // opens such documents; Get surfaces them as e.g. "0pt"/"30000pt".
+            // ParseFontSize, however, caps the Add/Set path at [0.5pt, 4000pt]
+            // (below 0.5 rounds to a zero half-point; above 4000 overflows the
+            // int32 the pptx/word writers cast to). On a dump→batch round-trip
+            // the raw value would reach ParseFontSize and throw — and because
+            // `add p` is atomic, the WHOLE paragraph (text included) is dropped,
+            // so a valid document silently loses content. Clamp the size to the
+            // window so the replay stays valid and the run's text survives.
+            // (Like the lineSpacing="0pt" drop above this keeps replay
+            // parseable; we clamp rather than drop because sz=0 means "zero
+            // size", not "inherit default" — clamping preserves the extreme
+            // intent, dropping would reset the run to the style's size.)
+            if ((string.Equals(key, "size", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(key, "size.cs", StringComparison.OrdinalIgnoreCase))
+                && val is string szRaw
+                && TryClampFontSizeForEmit(szRaw, out var clampedSize))
+            {
+                result[key] = clampedSize;
+                continue;
+            }
+
             if (val == null) continue;
             string s = val switch
             {
@@ -315,5 +338,27 @@ public static partial class WordBatchEmitter
         if (shadingFolded != null && !result.ContainsKey("shading"))
             result["shading"] = shadingFolded;
         return result;
+    }
+
+    // Returns true and sets `clamped` only when `raw` parses to a font size
+    // OUTSIDE ParseFontSize's accepted [0.5pt, 4000pt] window; in-window values
+    // return false so the original string (including its exact fractional form,
+    // e.g. "10.5pt") flows through untouched. Unparseable values also return
+    // false — let the normal Add/Set path surface a precise error rather than
+    // masking it here. See the call site for why round-trip needs this.
+    private static bool TryClampFontSizeForEmit(string raw, out string clamped)
+    {
+        clamped = "";
+        var t = raw.Trim();
+        if (t.EndsWith("pt", StringComparison.OrdinalIgnoreCase))
+            t = t[..^2].Trim();
+        if (!double.TryParse(t, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var pt)
+            || double.IsNaN(pt) || double.IsInfinity(pt))
+            return false;
+        if (pt >= 0.5 && pt <= 4000) return false;
+        var bounded = pt < 0.5 ? 0.5 : 4000.0;
+        clamped = bounded.ToString(System.Globalization.CultureInfo.InvariantCulture) + "pt";
+        return true;
     }
 }
