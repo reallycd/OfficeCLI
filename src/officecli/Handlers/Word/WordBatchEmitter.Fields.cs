@@ -236,7 +236,15 @@ public static partial class WordBatchEmitter
             case "FILENAME":
             case "SECTION":
             case "SECTIONPAGES":
+            {
+                // BUG-R7A: these branches took no args of their own, so the
+                // entire `rest` (general switches like `\* roman`,
+                // `\* MERGEFORMAT`, `\p`, `\* arabic`) was dropped — replay
+                // produced a bare ` PAGE `. Capture the whole residual as
+                // trailing switches; AddField splices them back verbatim.
+                if (!string.IsNullOrWhiteSpace(rest)) props["switches"] = rest.Trim();
                 break;
+            }
             case "DATE":
             case "TIME":
             case "CREATEDATE":
@@ -253,6 +261,16 @@ public static partial class WordBatchEmitter
                     rest ?? "", "\\\\@\\s+\"([^\"]+)\"");
                 if (fmtMatch.Success)
                     props["format"] = fmtMatch.Groups[1].Value;
+                // BUG-R7A: the `\@ "..."` capture above kept only the date
+                // picture; any remaining general switch (`\* MERGEFORMAT`,
+                // `\* Upper`, …) was dropped. Strip the consumed `\@ "..."`
+                // span from `rest` and carry whatever is left as trailing
+                // switches so DATE keeps BOTH `\@ "yyyy"` AND `\* MERGEFORMAT`.
+                var dateResidual = fmtMatch.Success
+                    ? (rest ?? "").Remove(fmtMatch.Index, fmtMatch.Length)
+                    : (rest ?? "");
+                dateResidual = dateResidual.Trim();
+                if (!string.IsNullOrEmpty(dateResidual)) props["switches"] = dateResidual;
                 break;
             }
             case "REF":
@@ -263,6 +281,14 @@ public static partial class WordBatchEmitter
                 var name = ExtractFirstArg(rest);
                 if (string.IsNullOrEmpty(name)) return null;
                 props["bookmarkName"] = name;
+                // BUG-R7A: only the bookmark name was captured; trailing
+                // switches (`\h`, `\p`, `\* MERGEFORMAT`, …) were dropped.
+                // Capture the residual after the bookmark name and emit it
+                // via the `switches` prop (AddField splices it back). `\h`
+                // flows through `switches` here, not the legacy `hyperlink`
+                // prop, so there is no double-emission.
+                var refSw = ExtractTrailingSwitches(rest, name);
+                if (!string.IsNullOrEmpty(refSw)) props["switches"] = refSw;
                 break;
             }
             case "SEQ":

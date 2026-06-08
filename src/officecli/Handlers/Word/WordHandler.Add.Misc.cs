@@ -715,37 +715,48 @@ public partial class WordHandler
         var dateFmtSwitch = properties.TryGetValue("format", out var dateFmtVal)
             && !string.IsNullOrWhiteSpace(dateFmtVal)
             ? $"\\@ \"{dateFmtVal}\" " : "";
+        // BUG-R7A: dump→batch round-trips of typed fields lost every general
+        // field switch (`\* roman`, `\* MERGEFORMAT`, `\p`, `\* Upper`, …)
+        // because these bare-instruction arms appended nothing. The emitter
+        // (WordBatchEmitter.BuildFieldAddProps) now carries the residual
+        // switches via the `switches` prop; splice them back here exactly as
+        // SEQ/MERGEFIELD already do via AppendFieldSwitches.
+        var sw = AppendFieldSwitches(properties);
         var fieldInstr = effectiveType switch
         {
-            "pagenum" or "pagenumber" or "page" => " PAGE ",
-            "numpages" => " NUMPAGES ",
-            "sectionpages" => " SECTIONPAGES ",
-            "section" => " SECTION ",
-            "date" => $" DATE {dateFmtSwitch}".TrimEnd() + " ",
-            "createdate" => $" CREATEDATE {dateFmtSwitch}".TrimEnd() + " ",
-            "savedate" => $" SAVEDATE {dateFmtSwitch}".TrimEnd() + " ",
-            "printdate" => $" PRINTDATE {dateFmtSwitch}".TrimEnd() + " ",
-            "edittime" => " EDITTIME ",
-            "author" => " AUTHOR ",
-            "lastsavedby" => " LASTSAVEDBY ",
-            "title" => " TITLE ",
-            "subject" => " SUBJECT ",
-            "filename" => " FILENAME ",
-            "time" => $" TIME {dateFmtSwitch}".TrimEnd() + " ",
-            "numwords" => " NUMWORDS ",
-            "numchars" => " NUMCHARS ",
-            "revnum" => " REVNUM ",
-            "template" => " TEMPLATE ",
-            "comments" or "doccomments" => " COMMENTS ",
-            "keywords" => " KEYWORDS ",
+            "pagenum" or "pagenumber" or "page" => $" PAGE{sw} ",
+            "numpages" => $" NUMPAGES{sw} ",
+            "sectionpages" => $" SECTIONPAGES{sw} ",
+            "section" => $" SECTION{sw} ",
+            "date" => $" DATE {dateFmtSwitch}{sw.TrimStart()}".TrimEnd() + " ",
+            "createdate" => $" CREATEDATE {dateFmtSwitch}{sw.TrimStart()}".TrimEnd() + " ",
+            "savedate" => $" SAVEDATE {dateFmtSwitch}{sw.TrimStart()}".TrimEnd() + " ",
+            "printdate" => $" PRINTDATE {dateFmtSwitch}{sw.TrimStart()}".TrimEnd() + " ",
+            "edittime" => $" EDITTIME{sw} ",
+            "author" => $" AUTHOR{sw} ",
+            "lastsavedby" => $" LASTSAVEDBY{sw} ",
+            "title" => $" TITLE{sw} ",
+            "subject" => $" SUBJECT{sw} ",
+            "filename" => $" FILENAME{sw} ",
+            "time" => $" TIME {dateFmtSwitch}{sw.TrimStart()}".TrimEnd() + " ",
+            "numwords" => $" NUMWORDS{sw} ",
+            "numchars" => $" NUMCHARS{sw} ",
+            "revnum" => $" REVNUM{sw} ",
+            "template" => $" TEMPLATE{sw} ",
+            "comments" or "doccomments" => $" COMMENTS{sw} ",
+            "keywords" => $" KEYWORDS{sw} ",
             // BUG-DUMP9-09: quote MERGEFIELD names containing whitespace so
             // Word parses the full name as one token. " MERGEFIELD First Name "
             // would otherwise be parsed as field "First" with arg "Name".
-            "mergefield" => $" MERGEFIELD {QuoteFieldNameIfNeeded(mergeFieldName!)}{AppendFieldSwitches(properties)} ",
-            "ref" => $" REF {refBookmarkName}{(IsTruthy(properties.GetValueOrDefault("hyperlink")) ? " \\h" : "")} ",
-            "pageref" => $" PAGEREF {refBookmarkName}{(IsTruthy(properties.GetValueOrDefault("hyperlink")) ? " \\h" : "")} ",
-            "noteref" => $" NOTEREF {refBookmarkName}{(IsTruthy(properties.GetValueOrDefault("hyperlink")) ? " \\h" : "")} ",
-            "seq" => $" SEQ {seqIdentifier}{AppendFieldSwitches(properties)} ",
+            "mergefield" => $" MERGEFIELD {QuoteFieldNameIfNeeded(mergeFieldName!)}{sw} ",
+            // BUG-R7A: REF/PAGEREF/NOTEREF now carry `\h`/`\p`/`\*` via the
+            // `switches` prop. The legacy `hyperlink` prop still emits `\h`
+            // for hand-authored adds, but the emitter routes `\h` through
+            // `switches`, so guard against double-emitting it.
+            "ref" => $" REF {refBookmarkName}{RefHyperlinkSwitch(properties, sw)}{sw} ",
+            "pageref" => $" PAGEREF {refBookmarkName}{RefHyperlinkSwitch(properties, sw)}{sw} ",
+            "noteref" => $" NOTEREF {refBookmarkName}{RefHyperlinkSwitch(properties, sw)}{sw} ",
+            "seq" => $" SEQ {seqIdentifier}{sw} ",
             "styleref" => $" STYLEREF \"{styleRefName}\" ",
             "docproperty" => $" DOCPROPERTY \"{docPropertyName}\" ",
             "if" => BuildIfFieldInstruction(properties),
@@ -1049,6 +1060,13 @@ public partial class WordHandler
         "fieldtype", "type", "instr", "instruction", "code",
         "text", "font", "size", "bold", "color",
         "index", "after", "before",
+        // BUG-R7A: `switches` carries residual general field switches
+        // (`\* roman`, `\* MERGEFORMAT`, `\p`, `\h`, …) for every typed
+        // field on dump→batch round-trips, not just SEQ/MERGEFIELD. The
+        // bare-instruction arms (PAGE/NUMPAGES/AUTHOR/TITLE/…) and
+        // DATE/TIME and REF/PAGEREF/NOTEREF all now splice it, so it is
+        // genuinely universal — promote it out of the per-type lists.
+        "switches",
     };
 
     // Render today's DateTime for the result-run placeholder of a DATE/TIME
@@ -1619,6 +1637,19 @@ public partial class WordHandler
         if (properties == null) return "";
         if (!properties.TryGetValue("switches", out var sw) || string.IsNullOrWhiteSpace(sw)) return "";
         return " " + sw.Trim();
+    }
+
+    // BUG-R7A: REF/PAGEREF/NOTEREF accept `\h` either via the legacy
+    // `hyperlink` prop (hand-authored adds) or via the `switches` blob
+    // (dump→batch round-trips, where the emitter routes ALL residual
+    // switches through `switches`). Emit ` \h` from the legacy prop only
+    // when the switches blob doesn't already carry one, so a round-tripped
+    // ` REF bm1 \h ` doesn't become ` REF bm1 \h \h `.
+    private static string RefHyperlinkSwitch(Dictionary<string, string>? properties, string switchesBlob)
+    {
+        if (!IsTruthy(properties?.GetValueOrDefault("hyperlink"))) return "";
+        if (System.Text.RegularExpressions.Regex.IsMatch(switchesBlob, @"\\h\b")) return "";
+        return " \\h";
     }
 
     private static string QuoteFieldNameIfNeeded(string name)
