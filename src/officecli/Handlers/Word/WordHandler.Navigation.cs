@@ -2845,34 +2845,17 @@ public partial class WordHandler
             // Editable status
             node.Format["editable"] = IsSdtEditable(sdtProps);
 
-            // Placeholder detection
-            var showingPlcHdr = sdtProps.GetFirstChild<ShowingPlaceholder>();
-            if (showingPlcHdr != null)
-            {
+            // Placeholder detection. `placeholder` (showingPlcHdr flag) and
+            // `placeholderText` (docPart reference) are INDEPENDENT in OOXML: a
+            // control can declare a placeholder gallery while displaying real
+            // content (showingPlcHdr absent). Surface each on its own so the
+            // docPart reference round-trips even when not currently shown.
+            if (sdtProps.GetFirstChild<ShowingPlaceholder>() != null)
                 node.Format["placeholder"] = true;
-                var plcHdrText = sdtProps.GetFirstChild<SdtPlaceholder>()?.DocPartReference?.Val?.Value;
-                if (plcHdrText != null) node.Format["placeholderText"] = plcHdrText;
-            }
+            var plcHdrText = sdtProps.GetFirstChild<SdtPlaceholder>()?.DocPartReference?.Val?.Value;
+            if (plcHdrText != null) node.Format["placeholderText"] = plcHdrText;
 
-            // Read dropdown/combobox items
-            var ddl = sdtProps.GetFirstChild<SdtContentDropDownList>();
-            var combo = sdtProps.GetFirstChild<SdtContentComboBox>();
-            var listItems = ddl?.Elements<ListItem>() ?? combo?.Elements<ListItem>();
-            if (listItems != null)
-            {
-                // BUG-R5-07: SDT ListItems carry distinct DisplayText and
-                // Value attrs. Real Word docs commonly differ (e.g.
-                // "Draft|DRAFT"). Emit the pipe form when value !=
-                // displayText so dump→add round-trips. ParseSdtItems on
-                // the Add side accepts both bare and piped forms.
-                var items = listItems.Select(li =>
-                {
-                    var disp = li.DisplayText?.Value ?? li.Value?.Value ?? "";
-                    var val = li.Value?.Value ?? li.DisplayText?.Value ?? "";
-                    return disp == val ? disp : $"{disp}|{val}";
-                }).ToList();
-                if (items.Count > 0) node.Format["items"] = string.Join(",", items);
-            }
+            ReadSdtExtraProps(sdtProps, node);
         }
         node.Text = string.Concat(sdtBlockNode.Descendants<Text>().Select(t => t.Text));
         var sdtContent = sdtBlockNode.SdtContentBlock;
@@ -2901,39 +2884,72 @@ public partial class WordHandler
             else if (sdtProps.GetFirstChild<SdtContentText>() != null) node.Format["type"] = "text";
             else node.Format["type"] = "richtext";
 
+            // Read date format for date controls
+            var dateContentRun = sdtProps.GetFirstChild<SdtContentDate>();
+            if (dateContentRun?.DateFormat?.Val?.Value != null)
+                node.Format["format"] = dateContentRun.DateFormat.Val.Value;
+
             // Editable status
             node.Format["editable"] = IsSdtEditable(sdtProps);
 
-            // Placeholder detection
-            var showingPlcHdrRun = sdtProps.GetFirstChild<ShowingPlaceholder>();
-            if (showingPlcHdrRun != null)
-            {
+            // Placeholder detection — `placeholder` (showingPlcHdr) and
+            // `placeholderText` (docPart) are independent (see SdtBlockToNode).
+            if (sdtProps.GetFirstChild<ShowingPlaceholder>() != null)
                 node.Format["placeholder"] = true;
-                var plcHdrTextRun = sdtProps.GetFirstChild<SdtPlaceholder>()?.DocPartReference?.Val?.Value;
-                if (plcHdrTextRun != null) node.Format["placeholderText"] = plcHdrTextRun;
-            }
+            var plcHdrTextRun = sdtProps.GetFirstChild<SdtPlaceholder>()?.DocPartReference?.Val?.Value;
+            if (plcHdrTextRun != null) node.Format["placeholderText"] = plcHdrTextRun;
 
-            var ddl = sdtProps.GetFirstChild<SdtContentDropDownList>();
-            var combo = sdtProps.GetFirstChild<SdtContentComboBox>();
-            var listItems = ddl?.Elements<ListItem>() ?? combo?.Elements<ListItem>();
-            if (listItems != null)
-            {
-                // BUG-R5-07: SDT ListItems carry distinct DisplayText and
-                // Value attrs. Real Word docs commonly differ (e.g.
-                // "Draft|DRAFT"). Emit the pipe form when value !=
-                // displayText so dump→add round-trips. ParseSdtItems on
-                // the Add side accepts both bare and piped forms.
-                var items = listItems.Select(li =>
-                {
-                    var disp = li.DisplayText?.Value ?? li.Value?.Value ?? "";
-                    var val = li.Value?.Value ?? li.DisplayText?.Value ?? "";
-                    return disp == val ? disp : $"{disp}|{val}";
-                }).ToList();
-                if (items.Count > 0) node.Format["items"] = string.Join(",", items);
-            }
+            ReadSdtExtraProps(sdtProps, node);
         }
         node.Text = string.Concat(sdtRunNode.Descendants<Text>().Select(t => t.Text));
         return node;
+    }
+
+    // BUG-DUMP-SDTPROPS: read the SDT sdtPr children that the typed dump→batch
+    // path previously dropped — list items, date-picker selected value/calendar/
+    // language/store-as, and combo/dropdown current selection (lastValue).
+    // Shared by SdtBlockToNode and SdtRunToNode so block and inline controls
+    // surface the identical canonical keys.
+    private static void ReadSdtExtraProps(SdtProperties sdtProps, DocumentNode node)
+    {
+        // Date-picker: surface the actual selected value + locale/calendar so a
+        // populated date control round-trips, not just its display format.
+        var date = sdtProps.GetFirstChild<SdtContentDate>();
+        if (date != null)
+        {
+            if (date.FullDate?.Value != null)
+                node.Format["date.fullDate"] = date.FullDate.Value.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            if (date.Calendar?.Val != null && date.Calendar.Val.HasValue)
+                node.Format["date.calendar"] = date.Calendar.Val.InnerText;
+            if (date.LanguageId?.Val?.Value != null)
+                node.Format["date.lid"] = date.LanguageId.Val.Value;
+            if (date.SdtDateMappingType?.Val != null && date.SdtDateMappingType.Val.HasValue)
+                node.Format["date.storeMappedDataAs"] = date.SdtDateMappingType.Val.InnerText;
+        }
+
+        // Dropdown / combo: list items + current selection (lastValue).
+        var ddl = sdtProps.GetFirstChild<SdtContentDropDownList>();
+        var combo = sdtProps.GetFirstChild<SdtContentComboBox>();
+        var listItems = ddl?.Elements<ListItem>() ?? combo?.Elements<ListItem>();
+        if (listItems != null)
+        {
+            // BUG-R5-07: SDT ListItems carry distinct DisplayText and
+            // Value attrs. Real Word docs commonly differ (e.g.
+            // "Draft|DRAFT"). Emit the pipe form when value !=
+            // displayText so dump→add round-trips. ParseSdtItems on
+            // the Add side accepts both bare and piped forms.
+            var items = listItems.Select(li =>
+            {
+                var disp = li.DisplayText?.Value ?? li.Value?.Value ?? "";
+                var val = li.Value?.Value ?? li.DisplayText?.Value ?? "";
+                return disp == val ? disp : $"{disp}|{val}";
+            }).ToList();
+            if (items.Count > 0) node.Format["items"] = string.Join(",", items);
+        }
+        if (ddl?.LastValue?.Value is { Length: > 0 } ddlLast)
+            node.Format["dropDown.lastValue"] = ddlLast;
+        if (combo?.LastValue?.Value is { Length: > 0 } comboLast)
+            node.Format["comboBox.lastValue"] = comboLast;
     }
 
     private DocumentNode OfficeMathToNode(M.OfficeMath inlineMath, DocumentNode node)

@@ -289,7 +289,11 @@ public static partial class WordBatchEmitter
             if (parentPath == "/body" && TryEmitRichInlineSdt(word, sdt, items, ctx))
                 return;
             var sdtProps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var key in new[] { "type", "alias", "tag", "items", "format" })
+            // BUG-DUMP-SDTPROPS: forward the form-control sdtPr children the typed
+            // emit previously dropped (lock / placeholder / date-picker value /
+            // combo+dropdown selection). Same whitelist as the block-SDT path
+            // (EmitSdtTyped) so inline and block controls round-trip identically.
+            foreach (var key in SdtTypedEmitKeys)
             {
                 if (sdt.Format.TryGetValue(key, out var v) && v != null)
                 {

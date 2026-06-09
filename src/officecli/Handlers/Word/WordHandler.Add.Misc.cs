@@ -1593,6 +1593,8 @@ public partial class WordHandler
                     break;
             }
 
+            ApplySdtExtraProps(sdtProps, ciProps);
+
             sdtRun.AppendChild(sdtProps);
             var sdtContent = new SdtContentRun();
             var contentRun = new Run(new Text(sdtText) { Space = SpaceProcessingModeValues.Preserve });
@@ -1710,6 +1712,8 @@ public partial class WordHandler
                     break;
             }
 
+            ApplySdtExtraProps(sdtProps, ciProps);
+
             sdtBlock.AppendChild(sdtProps);
             var sdtContent = new SdtContentBlock();
             var contentPara = new Paragraph(new Run(new Text(sdtText) { Space = SpaceProcessingModeValues.Preserve }));
@@ -1727,6 +1731,67 @@ public partial class WordHandler
                 : $"{parentPath}/sdt[{blockSiblingCount}]";
         }
         return resultPath;
+    }
+
+    // BUG-DUMP-SDTPROPS: apply the form-control sdtPr children that the typed
+    // dump→batch path previously dropped — placeholder docPart + showingPlcHdr,
+    // date-picker selected value/locale/calendar/store-as, and combo/dropdown
+    // current selection (lastValue). Mirrors the Get-side ReadSdtExtraProps so
+    // dump→batch round-trips. Respects CT_SdtPr schema order: placeholder /
+    // showingPlcHdr sit before the type element (date/comboBox/dropDownList);
+    // the date/lastValue attrs land on the already-appended type element.
+    private static void ApplySdtExtraProps(SdtProperties sdtProps, Dictionary<string, string> ciProps)
+    {
+        // The type-content element (date/comboBox/dropDownList/text) was appended
+        // last; placeholder + showingPlcHdr must precede it per schema.
+        var typeElement = sdtProps.LastChild as OpenXmlElement;
+        bool typeIsContent = typeElement is SdtContentDate or SdtContentComboBox
+            or SdtContentDropDownList or SdtContentText;
+        OpenXmlElement? insertBefore = typeIsContent ? typeElement : null;
+
+        void InsertSchemaOrdered(OpenXmlElement el)
+        {
+            if (insertBefore != null) sdtProps.InsertBefore(el, insertBefore);
+            else sdtProps.AppendChild(el);
+        }
+
+        // Placeholder: docPart reference (<w:placeholder>) and the showingPlcHdr
+        // flag are INDEPENDENT in OOXML. A control can declare a placeholder
+        // gallery while displaying real content. Emit each only when its own key
+        // is present so the corpus shape (placeholderText, no showingPlcHdr)
+        // round-trips byte-for-byte.
+        var placeholderText = ciProps.GetValueOrDefault("placeholderText", "");
+        if (!string.IsNullOrEmpty(placeholderText))
+            InsertSchemaOrdered(new SdtPlaceholder
+            {
+                DocPartReference = new DocPartReference { Val = placeholderText }
+            });
+        if (IsTruthy(ciProps.GetValueOrDefault("placeholder", "")))
+            InsertSchemaOrdered(new ShowingPlaceholder());
+
+        // Date-picker selected value + locale/calendar/store-as.
+        if (typeElement is SdtContentDate date)
+        {
+            if (ciProps.TryGetValue("date.fullDate", out var fd)
+                && DateTime.TryParse(fd, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
+                    out var fdVal))
+                date.FullDate = fdVal;
+            if (ciProps.TryGetValue("date.lid", out var lid) && !string.IsNullOrEmpty(lid))
+                date.LanguageId = new LanguageId { Val = lid };
+            if (ciProps.TryGetValue("date.storeMappedDataAs", out var sma) && !string.IsNullOrEmpty(sma))
+                date.SdtDateMappingType = new SdtDateMappingType { Val = new EnumValue<DateFormatValues>(new DateFormatValues(sma)) };
+            if (ciProps.TryGetValue("date.calendar", out var cal) && !string.IsNullOrEmpty(cal))
+                date.Calendar = new Calendar { Val = new EnumValue<CalendarValues>(new CalendarValues(cal)) };
+        }
+
+        // Combo / dropdown current selection.
+        if (typeElement is SdtContentComboBox combo
+            && ciProps.TryGetValue("comboBox.lastValue", out var cbLast) && !string.IsNullOrEmpty(cbLast))
+            combo.LastValue = cbLast;
+        if (typeElement is SdtContentDropDownList ddl
+            && ciProps.TryGetValue("dropDown.lastValue", out var ddLast) && !string.IsNullOrEmpty(ddLast))
+            ddl.LastValue = ddLast;
     }
 
     private string AddWatermark(OpenXmlElement parent, string parentPath, int? index, Dictionary<string, string> properties)

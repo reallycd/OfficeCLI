@@ -1285,6 +1285,19 @@ public static partial class WordBatchEmitter
     // consumes plus the visible text; targets <paramref name="parentPath"/>
     // (/body for body-level SDTs, a cell path for cell-nested ones). AddSdt
     // accepts both Body and TableCell parents, so the same emit serves both.
+    // BUG-DUMP-SDTPROPS: canonical Get keys the typed `add sdt` path forwards.
+    // Shared by EmitSdtTyped (block SDT) and EmitInlineSdt (inline SDT) so both
+    // round-trip the identical set of form-control properties. `editable` is a
+    // Get readback (negation of `lock`); `id` is allocated at creation — neither
+    // forwarded.
+    internal static readonly string[] SdtTypedEmitKeys =
+    {
+        "type", "alias", "tag", "items", "format", "lock",
+        "placeholder", "placeholderText",
+        "date.fullDate", "date.calendar", "date.lid", "date.storeMappedDataAs",
+        "comboBox.lastValue", "dropDown.lastValue",
+    };
+
     private static void EmitSdtTyped(WordHandler word, string sourcePath, string parentPath,
                                      List<BatchItem> items)
     {
@@ -1296,7 +1309,14 @@ public static partial class WordBatchEmitter
         // Whitelist Get-canonical keys that AddSdt consumes. `editable` is a
         // Get readback (negation of `lock`), the source-side `id` is allocated
         // at creation, so neither is forwarded.
-        foreach (var key in new[] { "type", "alias", "tag", "items", "format" })
+        //
+        // BUG-DUMP-SDTPROPS: forward the form-control sdtPr children the typed
+        // emit previously dropped — `lock` (content-control locking), the
+        // placeholder docPart/showing-placeholder flag, the date-picker selected
+        // value + locale/calendar/store-as, and the combo/dropdown current
+        // selection. Each has a matching AddSdt case; the Get reader surfaces the
+        // canonical key (ReadSdtExtraProps + placeholder detection).
+        foreach (var key in SdtTypedEmitKeys)
         {
             if (sdt.Format.TryGetValue(key, out var v) && v != null)
             {
