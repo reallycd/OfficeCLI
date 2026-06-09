@@ -94,7 +94,8 @@ public partial class WordHandler
     private static Run CreateAnchorImageRun(string relationshipId, long cx, long cy, string altText,
         string wrap, long hPos, long vPos,
         DW.HorizontalRelativePositionValues hRel, DW.VerticalRelativePositionValues vRel,
-        bool behindText, uint docPropId, string? pictureName = null)
+        bool behindText, uint docPropId, string? pictureName = null,
+        string? hAlign = null, string? vAlign = null)
     {
         OpenXmlElement wrapElement = wrap.ToLowerInvariant() switch
         {
@@ -123,12 +124,21 @@ public partial class WordHandler
 
         var anchorDocPropId = docPropId;
         var docPrName = pictureName ?? altText;
+        // A floating axis is positioned EITHER by an absolute <wp:posOffset>
+        // OR by a relative <wp:align> keyword. When an align keyword is given
+        // (left/center/right horizontally; top/bottom/center/inside/outside
+        // vertically), emit <wp:align> so the picture honours Word's relative
+        // placement instead of collapsing to posOffset=0 at the margin origin.
+        OpenXmlElement hChild = !string.IsNullOrEmpty(hAlign)
+            ? new DW.HorizontalAlignment(hAlign)
+            : new DW.PositionOffset(hPos.ToString());
+        OpenXmlElement vChild = !string.IsNullOrEmpty(vAlign)
+            ? new DW.VerticalAlignment(vAlign)
+            : new DW.PositionOffset(vPos.ToString());
         var anchor = new DW.Anchor(
             new DW.SimplePosition { X = 0, Y = 0 },
-            new DW.HorizontalPosition(new DW.PositionOffset(hPos.ToString()))
-                { RelativeFrom = hRel },
-            new DW.VerticalPosition(new DW.PositionOffset(vPos.ToString()))
-                { RelativeFrom = vRel },
+            new DW.HorizontalPosition(hChild) { RelativeFrom = hRel },
+            new DW.VerticalPosition(vChild) { RelativeFrom = vRel },
             new DW.Extent { Cx = cx, Cy = cy },
             new DW.EffectExtent { LeftEdge = 0, TopEdge = 0, RightEdge = 0, BottomEdge = 0 },
             wrapElement,
@@ -273,6 +283,15 @@ public partial class WordHandler
             var hPos = anchorEl.GetFirstChild<DW.HorizontalPosition>();
             if (hPos != null)
             {
+                // A floating axis positions EITHER by an absolute <wp:posOffset>
+                // OR by a relative <wp:align> keyword (left/center/right). The
+                // align form was dropped on dump, so every aligned picture
+                // rebuilt with posOffset=0 (collapsed to the margin origin;
+                // right-aligned floats stacked under the left ones). Surface the
+                // align keyword too so the Add path can reproduce it.
+                var alignEl = hPos.GetFirstChild<DW.HorizontalAlignment>();
+                if (alignEl != null && !string.IsNullOrEmpty(alignEl.Text))
+                    node.Format["hAlign"] = alignEl.Text;
                 var offset = hPos.GetFirstChild<DW.PositionOffset>();
                 // BUG-R7-11: skip zero-valued offsets. AddPicture defaults the
                 // PositionOffset to 0 when no hPosition prop is given, so a
@@ -288,6 +307,11 @@ public partial class WordHandler
             var vPos = anchorEl.GetFirstChild<DW.VerticalPosition>();
             if (vPos != null)
             {
+                // See hAlign note above — capture the vertical <wp:align>
+                // keyword (top/bottom/center/inside/outside) too.
+                var alignEl = vPos.GetFirstChild<DW.VerticalAlignment>();
+                if (alignEl != null && !string.IsNullOrEmpty(alignEl.Text))
+                    node.Format["vAlign"] = alignEl.Text;
                 var offset = vPos.GetFirstChild<DW.PositionOffset>();
                 // BUG-R7-11: see hPosition note above.
                 if (offset != null && long.TryParse(offset.Text, out var vEmu) && vEmu != 0)

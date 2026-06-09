@@ -97,6 +97,30 @@
       "readback": "OOXML positionV @relativeFrom token",
       "enforcement": "report"
     },
+    "hAlign": {
+      "type": "string",
+      "add": true,
+      "set": false,
+      "get": true,
+      "description": "relative horizontal alignment keyword for a floating picture (left, center, right, inside, outside) via positionH/align. Overrides hPosition when set.",
+      "examples": [
+        "--prop anchor=true --prop hAlign=right --prop hRelative=margin"
+      ],
+      "readback": "OOXML positionH/align keyword",
+      "enforcement": "report"
+    },
+    "vAlign": {
+      "type": "string",
+      "add": true,
+      "set": false,
+      "get": true,
+      "description": "relative vertical alignment keyword for a floating picture (top, bottom, center, inside, outside) via positionV/align. Overrides vPosition when set.",
+      "examples": [
+        "--prop anchor=true --prop vAlign=top --prop vRelative=margin"
+      ],
+      "readback": "OOXML positionV/align keyword",
+      "enforcement": "report"
+    },
     "width": {
       "type": "length",
       "description": "width — cm length (extent.Cy/Cx in EMU formatted to cm).",

@@ -401,7 +401,15 @@ public partial class WordHandler
                 ? ParseVerticalRelative(vRelStr)
                 : DW.VerticalRelativePositionValues.Margin;
             var behind = properties.TryGetValue("behindtext", out var behindStr) && IsTruthy(behindStr);
-            imgRun = CreateAnchorImageRun(relId, cxEmu, cyEmu, altText, wrapType, hPos, vPos, hRel, vRel, behind, imgDocPropId, pictureName);
+            // Relative <wp:align> keyword per axis (left/center/right;
+            // top/bottom/center/inside/outside). When present it overrides the
+            // posOffset form so an aligned float honours Word's relative
+            // placement instead of collapsing to the margin origin.
+            var hAlign = properties.TryGetValue("halign", out var hAlignStr) && !string.IsNullOrEmpty(hAlignStr)
+                ? hAlignStr : null;
+            var vAlign = properties.TryGetValue("valign", out var vAlignStr) && !string.IsNullOrEmpty(vAlignStr)
+                ? vAlignStr : null;
+            imgRun = CreateAnchorImageRun(relId, cxEmu, cyEmu, altText, wrapType, hPos, vPos, hRel, vRel, behind, imgDocPropId, pictureName, hAlign, vAlign);
         }
         else
         {
@@ -517,7 +525,7 @@ public partial class WordHandler
             var lk = key.ToLowerInvariant();
             if (lk is "width" or "height" or "alt" or "name" or "src"
                 or "wrap" or "anchor" or "hposition" or "vposition"
-                or "hrelative" or "vrelative" or "behindtext"
+                or "hrelative" or "vrelative" or "halign" or "valign" or "behindtext"
                 or "tooltip" or "tgtframe" or "tgtframe" or "history" or "url"
                 or "relid" or "id" or "contenttype" or "filesize"
                 or "src.svg")
