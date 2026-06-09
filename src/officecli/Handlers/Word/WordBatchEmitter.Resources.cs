@@ -957,6 +957,144 @@ public static partial class WordBatchEmitter
         }
     }
 
+    // BUG-R12A(BUG3): emit a footnote/endnote STRUCTURALLY (mirrors the R9
+    // comment-body fix EmitComments above) instead of flattening the note body
+    // to a single `text` prop. A note body may carry multiple runs (each with
+    // its own rPr) and multiple paragraphs; the old flatten-to-`text` path
+    // (BodyEmitContext.FootnoteTexts/EndnoteTexts) discarded all per-run
+    // formatting and any paragraph beyond the first (silent data loss).
+    //
+    // Strategy (identical to EmitComments):
+    //   - `add footnote`/`add endnote` (anchored on the body carrier paragraph)
+    //     carries the FIRST content paragraph's FIRST content run text + that
+    //     run's rPr (ApplyFootnoteEndnoteFormatKeys applies them to the lone
+    //     authored run AddFootnote/AddEndnote seeds at creation time).
+    //   - remaining runs in the first paragraph -> `add r` into
+    //     /footnote[N]/p[1] (or /endnote[N]/p[1]).
+    //   - additional paragraphs -> `add paragraph` into /footnote[N], then
+    //     `add r` per run.
+    //
+    // <paramref name="kind"/> is "footnote" or "endnote"; <paramref
+    // name="sourceNoteIdx"/> is the 1-based positional index in the source note
+    // part (== document-order reference cursor + 1, since references walk in
+    // order). <paramref name="targetNoteIdx"/> is the 1-based index of the note
+    // as it will be rebuilt — equal to the number of `add footnote`/`add
+    // endnote` ops already emitted (including this one). The note reference mark
+    // run (footnoteRef/endnoteRef, empty text) is skipped: AddFootnote/AddEndnote
+    // recreates it on replay.
+    private static void EmitNoteReference(WordHandler word, string kind, int sourceNoteIdx,
+                                          int targetNoteIdx, string carrierPath, List<BatchItem> items)
+    {
+        // Count the note's paragraphs from its raw XML (deterministic). A
+        // depth-N note Get returns EMPTY children — it does not enumerate its
+        // <w:p> grandchildren — and, inside the dump session, out-of-range
+        // /<kind>[N]/p[K] does NOT reliably throw (it clamped, producing a flood
+        // of empty paragraphs), so neither the children list nor a Get-until-
+        // throw loop is a safe bound. The raw XML <w:p…> open-tag count is.
+        int paraCount = 0;
+        var noteXml = word.GetElementXml($"/{kind}[{sourceNoteIdx}]");
+        if (!string.IsNullOrEmpty(noteXml))
+            paraCount = System.Text.RegularExpressions.Regex.Matches(noteXml, "<w:p[ >]").Count;
+
+        // Enumerate exactly that many paragraphs WITH their run children.
+        // Get(path, depth:2) per paragraph so each node carries populated run
+        // Children (the per-paragraph Get is the only way to reach the runs).
+        var bodyParas = new List<DocumentNode>();
+        for (int pIdx = 1; pIdx <= paraCount; pIdx++)
+        {
+            DocumentNode? para;
+            try { para = word.Get($"/{kind}[{sourceNoteIdx}]/p[{pIdx}]", depth: 2); }
+            catch { break; }
+            if (para == null) break;
+            bodyParas.Add(para);
+        }
+
+        var firstParaRuns = bodyParas.Count > 0
+            ? bodyParas[0].Children.Where(c => IsRoundTrippableNoteRun(word, c)).ToList()
+            : new List<DocumentNode>();
+
+        // `add footnote`/`add endnote` requires a non-empty `text` (AddFootnote/
+        // AddEndnote throw without it). Carry the first content run's text + rPr;
+        // fall back to the concatenated note text only when no content run
+        // resolves (degenerate/empty note).
+        var noteProps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (firstParaRuns.Count > 0)
+        {
+            var firstRun = firstParaRuns[0];
+            // TrimStart the FIRST content run's text only: AddFootnote/AddEndnote
+            // prepend a single space between the superscript reference mark and
+            // the authored text, and GetFootnoteText trims it back on readback —
+            // so the source first run carries that leading space. Re-feeding it
+            // verbatim to AddFootnote would prepend ANOTHER space every round
+            // (dump fixed-point never converges; R7B exact-text assertions fail).
+            // Trimming here mirrors GetFootnoteText exactly: a genuinely
+            // authored leading space (no preceding refmark space, e.g. the
+            // hand-authored "Plain " case) has none to trim, so it is preserved.
+            noteProps["text"] = (firstRun.Text ?? string.Empty).TrimStart();
+            MergeRunFormatProps(noteProps, firstRun);
+        }
+        else
+        {
+            string fallback = "";
+            try { fallback = word.Get($"/{kind}[{sourceNoteIdx}]").Text ?? ""; }
+            catch { /* leave empty */ }
+            noteProps["text"] = fallback;
+        }
+
+        items.Add(new BatchItem
+        {
+            Command = "add",
+            Parent = carrierPath,
+            Type = kind,
+            Props = noteProps
+        });
+
+        // Structural emit of the remainder. The target note is rebuilt at
+        // /<kind>[targetNoteIdx] (notes replay in reference order; the reserved
+        // separator / continuationSeparator notes, ids -1/0, are excluded by
+        // Query and by the positional /<kind>[N] path index). The first authored
+        // run + p[1] already exist after the `add <kind>` above.
+        string targetNotePath = $"/{kind}[{targetNoteIdx}]";
+
+        for (int ri = 1; ri < firstParaRuns.Count; ri++)
+            EmitCommentRun(firstParaRuns[ri], $"{targetNotePath}/p[1]", items);
+
+        for (int pi = 1; pi < bodyParas.Count; pi++)
+        {
+            var para = bodyParas[pi];
+            var paraProps = FilterEmittableProps(para.Format);
+            paraProps.Remove("text"); // text carried by per-run emits below
+            items.Add(new BatchItem
+            {
+                Command = "add",
+                Parent = targetNotePath,
+                Type = "paragraph",
+                Props = paraProps.Count > 0 ? paraProps : null
+            });
+            var runs = para.Children.Where(c => IsRoundTrippableNoteRun(word, c)).ToList();
+            foreach (var run in runs)
+                EmitCommentRun(run, $"{targetNotePath}/p[{pi + 1}]", items);
+        }
+    }
+
+    // BUG-R12A(BUG3): a note-body run is round-trippable as a plain `add r` only
+    // when it is a text-carrying run that is NOT the note reference mark
+    // (<w:footnoteRef/> / <w:endnoteRef/>, which renders the superscript marker
+    // and is recreated by AddFootnote/AddEndnote). Richer structure (drawings,
+    // fields, nested notes) inside a note body is rare and out of scope — skip
+    // such runs rather than mis-emit them as plain text. Mirrors
+    // IsRoundTrippableCommentRun, plus the ref-mark exclusion.
+    private static bool IsRoundTrippableNoteRun(WordHandler word, DocumentNode run)
+    {
+        if (run.Type != "run" && run.Type != "r") return false;
+        var raw = word.GetElementXml(run.Path);
+        if (!string.IsNullOrEmpty(raw)
+            && (raw.Contains("footnoteRef", StringComparison.Ordinal)
+                || raw.Contains("endnoteRef", StringComparison.Ordinal)))
+            return false; // the reference mark — recreated by AddFootnote/AddEndnote
+        return true;
+    }
+
     // Emit a body-level SDT (Content Control). Simple SDTs (a single text run,
     // dropdown/combobox/date pickers) round-trip as a typed `add /body --type
     // sdt` carrying type/alias/tag/items/format + the visible text — all of

@@ -453,32 +453,19 @@ public static partial class WordBatchEmitter
                     // the (arbitrary) rStyle name.
                     var carrierNoteKind = ctx != null
                         ? ClassifyNoteRefRun(word, run, rStyle) : NoteRefKind.None;
+                    // BUG-R12A(BUG3): structural note-body emit (per-run rPr +
+                    // multi-paragraph), same as TryEmitNoteRefRun. The cursor is
+                    // pre-incremented to the 1-based source/target note index.
                     if (carrierNoteKind == NoteRefKind.Footnote)
                     {
-                        var noteText = ctx!.FootnoteCursor.Index < ctx.FootnoteTexts.Count
-                            ? ctx.FootnoteTexts[ctx.FootnoteCursor.Index] : "";
-                        ctx.FootnoteCursor.Index++;
-                        items.Add(new BatchItem
-                        {
-                            Command = "add",
-                            Parent = carrierPath,
-                            Type = "footnote",
-                            Props = new() { ["text"] = noteText }
-                        });
+                        int idx = ++ctx!.FootnoteCursor.Index;
+                        EmitNoteReference(word, "footnote", idx, idx, carrierPath, items);
                         continue;
                     }
                     if (carrierNoteKind == NoteRefKind.Endnote)
                     {
-                        var noteText = ctx!.EndnoteCursor.Index < ctx.EndnoteTexts.Count
-                            ? ctx.EndnoteTexts[ctx.EndnoteCursor.Index] : "";
-                        ctx.EndnoteCursor.Index++;
-                        items.Add(new BatchItem
-                        {
-                            Command = "add",
-                            Parent = carrierPath,
-                            Type = "endnote",
-                            Props = new() { ["text"] = noteText }
-                        });
+                        int idx = ++ctx!.EndnoteCursor.Index;
+                        EmitNoteReference(word, "endnote", idx, idx, carrierPath, items);
                         continue;
                     }
                     var rProps = FilterEmittableProps(run.Format);
@@ -1670,34 +1657,21 @@ public static partial class WordBatchEmitter
         if (ctx == null) return false;
         var rStyle = run.Format.TryGetValue("rStyle", out var rs) ? rs?.ToString() : null;
         var noteKind = ClassifyNoteRefRun(word, run, rStyle);
+        // BUG-R12A(BUG3): emit the note body STRUCTURALLY (per-run rPr +
+        // multi-paragraph) instead of flattening it to one `text` prop. The
+        // cursor is the 0-based document-order reference index; source AND target
+        // note are the (cursor+1)-th note (Query and the body walk both run in
+        // source order, one `add <kind>` per reference).
         if (noteKind == NoteRefKind.Footnote)
         {
-            var noteText = ctx.FootnoteCursor.Index < ctx.FootnoteTexts.Count
-                ? ctx.FootnoteTexts[ctx.FootnoteCursor.Index]
-                : "";
-            ctx.FootnoteCursor.Index++;
-            items.Add(new BatchItem
-            {
-                Command = "add",
-                Parent = paraTargetPath,
-                Type = "footnote",
-                Props = new() { ["text"] = noteText }
-            });
+            int idx = ++ctx.FootnoteCursor.Index; // 1-based source/target index
+            EmitNoteReference(word, "footnote", idx, idx, paraTargetPath, items);
             return true;
         }
         if (noteKind == NoteRefKind.Endnote)
         {
-            var noteText = ctx.EndnoteCursor.Index < ctx.EndnoteTexts.Count
-                ? ctx.EndnoteTexts[ctx.EndnoteCursor.Index]
-                : "";
-            ctx.EndnoteCursor.Index++;
-            items.Add(new BatchItem
-            {
-                Command = "add",
-                Parent = paraTargetPath,
-                Type = "endnote",
-                Props = new() { ["text"] = noteText }
-            });
+            int idx = ++ctx.EndnoteCursor.Index; // 1-based source/target index
+            EmitNoteReference(word, "endnote", idx, idx, paraTargetPath, items);
             return true;
         }
         return false;
