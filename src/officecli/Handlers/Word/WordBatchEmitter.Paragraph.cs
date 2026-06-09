@@ -169,6 +169,11 @@ public static partial class WordBatchEmitter
                 || c.Type == "tab"
                 || c.Type == "bookmark"
                 || c.Type == "bookmarkEnd"
+                // BUG-DUMP-PERM: ranged editing-permission markers are
+                // positioned paragraph children — keep them in the ordered run
+                // list so TryEmitPermRun replays them at their source offset.
+                || c.Type == "permStart"
+                || c.Type == "permEnd"
                 // BUG-DUMP-RUBY: ruby (phonetic guide) child surfaces the
                 // verbatim <w:r><w:ruby> XML for a raw-set append.
                 || c.Type == "ruby"
@@ -353,6 +358,7 @@ public static partial class WordBatchEmitter
                 sdtCursor++;
             }
             if (TryEmitBookmarkRun(run, paraTargetPath, items, ctx)) continue;
+            if (TryEmitPermRun(run, paraTargetPath, items)) continue;
             if (TryEmitPgNumRun(word, run, parentPath, items, ctx)) continue;
             if (TryEmitDateFieldRun(word, run, parentPath, items, ctx)) continue;
             if (TryEmitRubyRun(run, parentPath, paraTargetPath, items, ctx)) continue;
@@ -678,6 +684,10 @@ public static partial class WordBatchEmitter
         if (runs.Count > 1) return false;
         if (breaksCount > 0 || bookmarksCount > 0 || inlineSdtsCount > 0) return false;
         if (runs.Count == 0) return true;
+        // BUG-DUMP-PERM: a paragraph holding a ranged editing-permission marker
+        // must stay on the explicit-run path so TryEmitPermRun replays the
+        // marker at its offset; collapsing into `add p` would drop it.
+        if (runs.Any(rr => rr.Type == "permStart" || rr.Type == "permEnd")) return false;
         var r = runs[0];
         // Picture / ptab runs need their own typed `add` rows.
         if (r.Type == "picture" || r.Type == "ptab") return false;
@@ -822,6 +832,34 @@ public static partial class WordBatchEmitter
             Parent = paraTargetPath,
             Type = "bookmark",
             Props = bmProps
+        });
+        return true;
+    }
+
+    // BUG-DUMP-PERM: emit a ranged editing-permission marker (<w:permStart>/
+    // <w:permEnd>) at its DOM position so an editable-region delimiter survives
+    // round-trip. Mirrors TryEmitBookmarkRun: each marker is a positioned
+    // `add permStart`/`add permEnd` op carrying its source attributes.
+    private static bool TryEmitPermRun(DocumentNode run, string paraTargetPath, List<BatchItem> items)
+    {
+        if (run.Type != "permStart" && run.Type != "permEnd") return false;
+        var props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in run.Type == "permStart"
+            ? new[] { "id", "edGrp", "ed", "colFirst", "colLast" }
+            : new[] { "id" })
+        {
+            if (run.Format.TryGetValue(key, out var v) && v != null)
+            {
+                var s = v.ToString() ?? "";
+                if (s.Length > 0) props[key] = s;
+            }
+        }
+        items.Add(new BatchItem
+        {
+            Command = "add",
+            Parent = paraTargetPath,
+            Type = run.Type,
+            Props = props
         });
         return true;
     }

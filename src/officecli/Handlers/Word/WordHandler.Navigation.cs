@@ -1531,6 +1531,21 @@ public partial class WordHandler
         return node;
     }
 
+    // BUG-DUMP-PERM: surface a ranged editing-permission start marker
+    // (<w:permStart>) with all its attributes so dump→batch round-trips the
+    // editable-region delimiter. Mirrors BookmarkStartToNode.
+    private static DocumentNode PermStartToNode(PermStart permStart, DocumentNode node)
+    {
+        node.Type = "permStart";
+        if (permStart.Id?.Value != null) node.Format["id"] = permStart.Id.Value.ToString();
+        if (permStart.EditorGroup?.Value != null && permStart.EditorGroup.HasValue)
+            node.Format["edGrp"] = permStart.EditorGroup.InnerText;
+        if (permStart.Ed?.Value is { Length: > 0 } edUser) node.Format["ed"] = edUser;
+        if (permStart.ColumnFirst?.Value != null) node.Format["colFirst"] = permStart.ColumnFirst.Value.ToString();
+        if (permStart.ColumnLast?.Value != null) node.Format["colLast"] = permStart.ColumnLast.Value.ToString();
+        return node;
+    }
+
     private DocumentNode FootnoteToNode(Footnote fnEl, DocumentNode node, string path, int depth)
     {
         node.Type = "footnote";
@@ -3912,6 +3927,15 @@ public partial class WordHandler
             var paraBookmarkEnds = para.Elements<BookmarkEnd>()
                 .Where(be => be.Id?.Value != null && IsContentSpanBookmark(be))
                 .ToList();
+            // BUG-DUMP-PERM: ranged editing-permission markers (<w:permStart>/
+            // <w:permEnd>) are positioned paragraph children just like bookmark
+            // markers — they delimit a region a group/user may edit inside a
+            // protected document. Surface them in the DOM-ordered merge so the
+            // emitter replays a positioned `add permStart`/`add permEnd` op at
+            // each marker's original offset (mirrors the bookmark two-marker
+            // path). Without this they were dropped entirely on round-trip.
+            var paraPermStarts = para.Elements<PermStart>().ToList();
+            var paraPermEnds = para.Elements<PermEnd>().ToList();
             // BUG-DUMP-RUBY: ruby-bearing runs (a <w:r> wrapping <w:ruby>, the
             // CJK phonetic guide) are excluded from GetAllRuns (their inner
             // <w:rt>/<w:rubyBase> runs would otherwise flatten into sequential
@@ -3932,6 +3956,8 @@ public partial class WordHandler
                 .Concat(bareFieldUnknowns.Select(u => (pos: descendantPos.TryGetValue(u, out var p) ? p : int.MaxValue, kind: u.LocalName == "fldChar" ? "fieldChar" : "instrText", el: (OpenXmlElement)u)))
                 .Concat(paraBookmarks.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "bookmark", el: (OpenXmlElement)b)))
                 .Concat(paraBookmarkEnds.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "bookmarkEnd", el: (OpenXmlElement)b)))
+                .Concat(paraPermStarts.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "permStart", el: (OpenXmlElement)b)))
+                .Concat(paraPermEnds.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "permEnd", el: (OpenXmlElement)b)))
                 .OrderBy(t => t.pos)
                 .ToList();
             int bareFieldIdx = 0;
@@ -4031,6 +4057,25 @@ public partial class WordHandler
                     if (!string.IsNullOrEmpty(matchName))
                         beNode.Format["name"] = matchName!;
                     node.Children.Add(beNode);
+                }
+                else if (entry.kind == "permStart")
+                {
+                    // BUG-DUMP-PERM: surface the permStart marker at its DOM
+                    // position with all its attributes so the emitter can replay
+                    // a positioned `add permStart`.
+                    node.Children.Add(PermStartToNode((PermStart)entry.el,
+                        new DocumentNode { Path = $"{path}/permStart[{paraPermStarts.IndexOf((PermStart)entry.el) + 1}]" }));
+                }
+                else if (entry.kind == "permEnd")
+                {
+                    var pe = (PermEnd)entry.el;
+                    var peNode = new DocumentNode
+                    {
+                        Type = "permEnd",
+                        Path = $"{path}/permEnd[{paraPermEnds.IndexOf(pe) + 1}]",
+                    };
+                    if (pe.Id?.Value != null) peNode.Format["id"] = pe.Id.Value.ToString();
+                    node.Children.Add(peNode);
                 }
                 else
                 {

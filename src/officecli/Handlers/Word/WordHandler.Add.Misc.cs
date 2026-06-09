@@ -445,6 +445,47 @@ public partial class WordHandler
         return resultPath;
     }
 
+    // BUG-DUMP-PERM: add a ranged editing-permission marker. permStart delimits
+    // the start of a region a group (edGrp) or user (ed) may edit inside a
+    // protected document; permEnd closes it. Both are positioned paragraph
+    // children (like bookmark markers); --index anchors them at the right offset.
+    private string AddPerm(OpenXmlElement parent, string parentPath, int? index, Dictionary<string, string> properties, string type)
+    {
+        var isStart = type.Equals("permStart", StringComparison.OrdinalIgnoreCase);
+        var idStr = properties.GetValueOrDefault("id", "");
+        if (string.IsNullOrEmpty(idStr) || !int.TryParse(idStr, out var permId))
+            throw new ArgumentException($"'id' property (integer) is required for {type}");
+
+        OpenXmlElement marker;
+        string segment;
+        if (isStart)
+        {
+            var ps = new PermStart { Id = permId };
+            if (properties.TryGetValue("edGrp", out var edGrp) && !string.IsNullOrEmpty(edGrp))
+                ps.EditorGroup = new EnumValue<RangePermissionEditingGroupValues>(new RangePermissionEditingGroupValues(edGrp));
+            if (properties.TryGetValue("ed", out var ed) && !string.IsNullOrEmpty(ed))
+                ps.Ed = ed;
+            if (properties.TryGetValue("colFirst", out var cf) && int.TryParse(cf, out var cfn))
+                ps.ColumnFirst = cfn;
+            if (properties.TryGetValue("colLast", out var cl) && int.TryParse(cl, out var cln))
+                ps.ColumnLast = cln;
+            marker = ps;
+            segment = $"permStart[@id={permId}]";
+        }
+        else
+        {
+            marker = new PermEnd { Id = permId };
+            segment = $"permEnd[@id={permId}]";
+        }
+
+        if (parent is Paragraph permPara)
+            InsertIntoParagraph(permPara, new[] { marker }, index);
+        else
+            InsertAtIndexOrAppend(parent, marker, index);
+
+        return $"{parentPath}/{segment}";
+    }
+
     /// <summary>
     /// Quote an attribute predicate value when the bare form would be rejected
     /// by ValidateAndNormalizePredicate. Bare values must have no whitespace,

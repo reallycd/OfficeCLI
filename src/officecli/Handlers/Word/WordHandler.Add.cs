@@ -186,6 +186,7 @@ public partial class WordHandler
             "ole" or "oleobject" or "object" or "embed" => AddOle(parent, parentPath, index, properties),
             "comment" => AddComment(parent, parentPath, index, properties),
             "bookmark" => AddBookmark(parent, parentPath, index, properties),
+            "permstart" or "permend" => AddPerm(parent, parentPath, index, properties, type),
             "hyperlink" or "link" => AddHyperlink(parent, parentPath, index, properties),
             "section" or "sectionbreak" => AddSection(parent, parentPath, index, properties),
             "footnote" => AddFootnote(parent, parentPath, index, properties),

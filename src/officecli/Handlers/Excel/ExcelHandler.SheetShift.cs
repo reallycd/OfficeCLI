@@ -34,6 +34,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using Xdr = DocumentFormat.OpenXml.Drawing.Spreadsheet;
 using C = DocumentFormat.OpenXml.Drawing.Charts;
+using X14 = DocumentFormat.OpenXml.Office2010.Excel;
 
 namespace OfficeCli.Handlers;
 
@@ -280,6 +281,23 @@ public partial class ExcelHandler
                 }
             }
             if (cmtDirty) commentsPart!.Comments!.Save();
+        }
+
+        // 6e. sparklines (x14 extension list on the worksheet). Each sparkline
+        // carries a data range (<xne:f>, sheet-qualified) and a location
+        // (<xne:sqref>, the host cell). Shift the formula via formulaTextMapper
+        // and the location via refMapper; drop a sparkline whose host cell is
+        // deleted (refMapper returns null).
+        foreach (var spk in ws.Descendants<X14.Sparkline>().ToList())
+        {
+            if (formulaTextMapper != null && !string.IsNullOrEmpty(spk.Formula?.Text))
+                spk.Formula.Text = formulaTextMapper(spk.Formula.Text);
+            if (!string.IsNullOrEmpty(spk.ReferenceSequence?.Text))
+            {
+                var shifted = refMapper(spk.ReferenceSequence.Text);
+                if (shifted == null) spk.Remove();
+                else spk.ReferenceSequence.Text = shifted;
+            }
         }
 
         // 7. cell formulas (text + shared/array ref attribute)
