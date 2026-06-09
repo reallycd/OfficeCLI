@@ -38,6 +38,11 @@ public static partial class WordBatchEmitter
         // <w:pgNum/>. Consumed by TryEmitPgNumRun only (routes the run to a
         // verbatim raw-set passthrough); never replayed as an Add/Set property.
         "_hasPgNum",
+        // BUG-DUMP-DATEFIELD: internal flag set by RunToNode when a run contains
+        // a date-component placeholder (<w:dayLong/> etc.). Consumed by
+        // TryEmitDateFieldRun only (routes the run to a verbatim raw-set
+        // passthrough); never replayed as an Add/Set property.
+        "_hasDateField",
         // BUG-DUMP26-01: Navigation stamps this flag when numId/numLevel come
         // from ResolveNumPrFromStyle (paragraph inherits numbering through its
         // style). EmitParagraph consumes the flag to drop the inherited

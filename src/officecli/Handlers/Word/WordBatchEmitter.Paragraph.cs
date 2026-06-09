@@ -354,6 +354,7 @@ public static partial class WordBatchEmitter
             }
             if (TryEmitBookmarkRun(run, paraTargetPath, items, ctx)) continue;
             if (TryEmitPgNumRun(word, run, parentPath, items, ctx)) continue;
+            if (TryEmitDateFieldRun(word, run, parentPath, items, ctx)) continue;
             if (TryEmitRubyRun(run, parentPath, paraTargetPath, items, ctx)) continue;
             if (TryEmitBreakRun(word, run, parentPath, paraTargetPath, items, ctx)) continue;
             if (TryEmitTabRun(run, paraTargetPath, items)) continue;
@@ -735,6 +736,13 @@ public static partial class WordBatchEmitter
             // <w:r>. Collapsing to `add p text="…"` flattens the run into
             // paragraph props and silently drops the pgNum placeholder.
             || r.Format.ContainsKey("_hasPgNum")
+            // BUG-DUMP-DATEFIELD: a run containing a date-component placeholder
+            // (<w:dayLong/> etc.) must stay on the explicit-run path so
+            // TryEmitDateFieldRun raw-passes the verbatim <w:r>. Collapsing to
+            // `add p text="…"` flattens the run into paragraph props and persists
+            // GetRunText's "[dayLong]" sentinel as literal text, losing the
+            // element Word substitutes the date against.
+            || r.Format.ContainsKey("_hasDateField")
             || r.Format.ContainsKey("sym")) return false;
         // BUG-RSHD-PROMOTE: a sole run carrying run-level character shading
         // (<w:rPr><w:shd>) must NOT collapse into `add p`. AddParagraph routes
@@ -950,6 +958,51 @@ public static partial class WordBatchEmitter
                 Element: "pgNum",
                 Path: run.Path,
                 Reason: "page-number placeholder run carries an external relationship reference and could not be serialized verbatim for round-trip"));
+            return true;
+        }
+        items.Add(new BatchItem
+        {
+            Command = "raw-set",
+            Part = "/document",
+            Xpath = "/w:document/w:body/w:p[last()]",
+            Action = "append",
+            Xml = rawXml!
+        });
+        return true;
+    }
+
+    private static bool TryEmitDateFieldRun(WordHandler word, DocumentNode run, string parentPath, List<BatchItem> items, BodyEmitContext? ctx)
+    {
+        // BUG-DUMP-DATEFIELD: a run containing a Word date-component placeholder
+        // (<w:dayLong/> / <w:dayShort/> / <w:monthLong/> / <w:monthShort/> /
+        // <w:yearLong/> / <w:yearShort/>) has no scalar add/set representation —
+        // the typed `add r` path persists GetRunText's "[dayLong]" human sentinel
+        // as literal <w:t> text and drops the element entirely. Mirroring the
+        // pgNum raw-set fallback, re-insert the verbatim <w:r> via a raw-set
+        // append so the date element — and any co-located <w:t> text in the same
+        // run — survive the round-trip. RunToNode stamps Format["_hasDateField"].
+        if (!run.Format.ContainsKey("_hasDateField")) return false;
+        // Only the /body host has the addressable last() paragraph anchor the
+        // raw-set targets; a header/footer-hosted date field needs a different
+        // anchor (backlog, same conservatism as the pgNum/ruby/textbox fallback).
+        if (parentPath != "/body")
+        {
+            ctx?.Warnings.Add(new DocxUnsupportedWarning(
+                Element: "dateField",
+                Path: run.Path,
+                Reason: "date-component placeholder (w:dayLong/w:monthLong/…) inside a header/footer/table cell could not be serialized for round-trip; the placeholder is lost from the replayed document"));
+            return true;
+        }
+        var rawXml = word.RawElementXml(run.Path);
+        if (string.IsNullOrEmpty(rawXml)) return true; // nothing to emit
+        // Same external-rel guard as the other raw-set fallbacks — a dangling
+        // r:id/r:embed would not resolve in the rebuilt document.
+        if (HasExternalRelRef(rawXml!))
+        {
+            ctx?.Warnings.Add(new DocxUnsupportedWarning(
+                Element: "dateField",
+                Path: run.Path,
+                Reason: "date-component placeholder run carries an external relationship reference and could not be serialized verbatim for round-trip"));
             return true;
         }
         items.Add(new BatchItem

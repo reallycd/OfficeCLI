@@ -1698,6 +1698,25 @@ public partial class WordHandler
         // to <w:br/>) rides along inside the same verbatim run XML.
         if (run.GetFirstChild<PageNumber>() != null)
             node.Format["_hasPgNum"] = true;
+        // BUG-DUMP-DATEFIELD: a run containing a Word date-component placeholder
+        // element — <w:dayLong/> / <w:dayShort/> / <w:monthLong/> / <w:monthShort/>
+        // / <w:yearLong/> / <w:yearShort/> (Word substitutes the current date at
+        // render) — has no scalar add/set representation. GetRunText surfaces a
+        // human "[dayLong]" sentinel (fine for `view text`), but the typed
+        // `add p text="…"` collapse persists that sentinel as LITERAL <w:t> text
+        // and the date element vanishes from the round-trip. Mirror the pgNum
+        // raw-set fallback: stamp a sentinel so ShouldCollapseSingleRun keeps the
+        // run on the explicit-run path and TryEmitDateFieldRun re-inserts the
+        // verbatim <w:r> (co-located <w:t> text AND the date element) at its
+        // source position. node.Type / node.Text are untouched — the flag only
+        // routes the emitter, not the readback or the human sentinel.
+        if (run.GetFirstChild<DayLong>() != null
+            || run.GetFirstChild<DayShort>() != null
+            || run.GetFirstChild<MonthLong>() != null
+            || run.GetFirstChild<MonthShort>() != null
+            || run.GetFirstChild<YearLong>() != null
+            || run.GetFirstChild<YearShort>() != null)
+            node.Format["_hasDateField"] = true;
         // BUG-DUMP7-01: surface <w:sym w:font=… w:char=…/> as a `sym`
         // Format key (font:hex). GetRunText also surfaces the resolved
         // Unicode glyph as Text so the run looks non-empty, but Text
