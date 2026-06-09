@@ -39,6 +39,16 @@ internal static class FormulaParser
 
     private const string KatexDocsHint = "See https://katex.org/docs/supported.html for supported syntax.";
 
+    // Bound on LaTeX group nesting. Every recursion flows back through
+    // ParseGroup, so counting its depth caps the whole parser. Deeply nested
+    // input like \frac{{{…}}} (tens of thousands deep) would otherwise blow the
+    // stack with an UNCATCHABLE StackOverflowException, crashing the process
+    // (and, in resident mode, the server holding the open document). Real
+    // formulas never approach this; exceeding it throws a normal catchable
+    // FormulaParseException instead. Mirrors the depth guards in FormulaEvaluator.
+    private const int MaxGroupDepth = 256;
+    [ThreadStatic] private static int _groupDepth;
+
     public static OpenXmlElement Parse(string latex)
     {
         try
@@ -50,6 +60,7 @@ internal static class FormulaParser
             latex = RewriteOver(latex);
             var tokens = Tokenize(latex);
             var pos = 0;
+            _groupDepth = 0; // reset per parse; recursion guard lives in ParseGroup
             var nodes = ParseGroup(tokens, ref pos, false);
             var root = WrapInOfficeMath(nodes);
             // Defense in depth: several builders wrap grouped content in an
@@ -728,6 +739,14 @@ internal static class FormulaParser
 
     private static List<OpenXmlElement> ParseGroup(List<Token> tokens, ref int pos, bool insideBraces)
     {
+        if (++_groupDepth > MaxGroupDepth)
+        {
+            _groupDepth--;
+            throw new FormulaParseException(
+                $"Formula nesting exceeds the maximum supported depth ({MaxGroupDepth}).", null!);
+        }
+        try
+        {
         var elements = new List<OpenXmlElement>();
 
         while (pos < tokens.Count)
@@ -787,6 +806,8 @@ internal static class FormulaParser
         }
 
         return elements;
+        }
+        finally { _groupDepth--; }
     }
 
     private static OpenXmlElement TryAttachScript(List<Token> tokens, ref int pos, OpenXmlElement baseElement)
