@@ -381,6 +381,7 @@ public static partial class WordBatchEmitter
             if (TryEmitOleRun(run, paraTargetPath, items, ctx, word)) continue;
             if (TryEmitPictureRun(word, run, paraTargetPath, parentPath, targetIndex, items, ctx, sharedAttachPara)) continue;
             if (TryEmitNoteRefRun(word, run, paraTargetPath, items, ctx)) continue;
+            if (TryEmitMixedBreakRun(word, run, parentPath, items, ctx)) continue;
             EmitPlainOrHyperlinkRun(run, paraTargetPath, items, ctx, hlBaseline);
         }
         // Flush any SDTs that sit after the last run (or whose rank could not be
@@ -712,6 +713,15 @@ public static partial class WordBatchEmitter
         {
             var probe = word.GetElementXml(r.Path);
             if (!string.IsNullOrEmpty(probe) && IsDrawingBearingRun(probe)) return false;
+            // BUG-DUMP-R24-3: a sole run carrying a page/column <w:br> MIXED with
+            // <w:t> text must stay on the explicit-run path so TryEmitMixedBreakRun
+            // raw-passes the verbatim <w:r>. Collapsing to `add p text="…"`
+            // flattens the run via GetRunText (which drops page/column breaks —
+            // they have no \n representation), silently losing the break.
+            if (!string.IsNullOrEmpty(probe)
+                && System.Text.RegularExpressions.Regex.IsMatch(probe, @"<w:br\b[^>]*\bw:type=""(?:page|column)""")
+                && System.Text.RegularExpressions.Regex.IsMatch(probe, @"<w:t[\s>]"))
+                return false;
         }
         // R14-bug1+2: legacy form field synth — needs its own typed
         // `add formfield` row; collapsing into `add p` flattens the
@@ -913,6 +923,63 @@ public static partial class WordBatchEmitter
             {
                 ["type"] = string.IsNullOrEmpty(breakType) ? "line" : breakType!
             }
+        });
+        return true;
+    }
+
+    // BUG-DUMP-R24-3: a page/column break that lives MIXED inside a
+    // text-bearing run (<w:r><w:t>Before</w:t><w:br w:type="page"/><w:t>After
+    // </w:t></w:r>) is dropped on dump→batch. GetRunText flattens the run text
+    // to "BeforeAfter" (page/column <w:br> has no \n representation, unlike a
+    // textWrapping break) and the `add r` replay loses the break entirely.
+    // A break that is the SOLE content of its run already round-trips via the
+    // Navigation `break`-node upgrade + TryEmitBreakRun. Here we cover only the
+    // mixed case: when the run is a plain text run whose verbatim XML carries a
+    // page/column <w:br>, re-insert the whole <w:r> verbatim via a raw-set
+    // append (mirrors the rich-break / ruby / pgNum raw-set fallback), so text
+    // AND the break — with full run formatting — survive intact.
+    private static bool TryEmitMixedBreakRun(WordHandler word, DocumentNode run, string parentPath, List<BatchItem> items, BodyEmitContext? ctx)
+    {
+        // Only plain text runs reach here (break-only runs are Type=="break"
+        // and consumed by TryEmitBreakRun upstream). Picture/field/etc. runs
+        // were already handled by their own TryEmit* probes before this point.
+        if (run.Type is not ("run" or "r")) return false;
+        var rawXml = word.RawElementXml(run.Path);
+        if (string.IsNullOrEmpty(rawXml)) return false;
+        // Mixed only: a page/column <w:br> alongside a <w:t> (text) child. A
+        // break-only run never has a <w:t>, so it won't match and stays on the
+        // typed path. textWrapping/line breaks (no w:type, or w:type="textWrapping")
+        // already round-trip as \n and must NOT be raw-set here.
+        bool hasPageOrColumnBreak = System.Text.RegularExpressions.Regex.IsMatch(
+            rawXml, @"<w:br\b[^>]*\bw:type=""(?:page|column)""");
+        if (!hasPageOrColumnBreak) return false;
+        bool hasText = System.Text.RegularExpressions.Regex.IsMatch(rawXml, @"<w:t[\s>]");
+        if (!hasText) return false;
+        // BUG-DUMP-R24-3 (FIX-3 follow-up): the verbatim raw-set targets
+        // /w:document/w:body/w:p[last()]; only a body host has that addressable
+        // last() paragraph. A mixed-break run inside a header/footer/cell would
+        // mis-anchor. Return FALSE (not true) so the run falls through to the
+        // normal text path (EmitPlainOrHyperlinkRun), which preserves the run's
+        // <w:t> content via GetRunText — only the page/column <w:br> is dropped.
+        // Returning true here would consume the run and DROP ITS TEXT TOO,
+        // which is worse than the pre-fix flatten-but-keep-text behaviour.
+        // Surface the deterministic "break lost" warning, then defer.
+        if (parentPath != "/body")
+        {
+            ctx?.Warnings.Add(new DocxUnsupportedWarning(
+                Element: "break",
+                Path: run.Path,
+                Reason: "page/column break mixed inside a text run within a header/footer/table cell could not be serialized for round-trip; the break is dropped from the replayed document (the run's text is preserved)"));
+            return false;
+        }
+        if (HasExternalRelRef(rawXml!)) return false;
+        items.Add(new BatchItem
+        {
+            Command = "raw-set",
+            Part = "/document",
+            Xpath = "/w:document/w:body/w:p[last()]",
+            Action = "append",
+            Xml = rawXml!
         });
         return true;
     }
