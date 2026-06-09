@@ -260,6 +260,28 @@ public partial class ExcelHandler
             }
         }
 
+        // 6d. comments (separate WorksheetCommentsPart). The comment's cell anchor
+        // must follow the displacement; a comment whose own cell is deleted is
+        // dropped (refMapper returns null for a single cell on the deleted line).
+        var commentsPart = worksheet.WorksheetCommentsPart;
+        var cmtList = commentsPart?.Comments?.GetFirstChild<CommentList>();
+        if (cmtList != null)
+        {
+            bool cmtDirty = false;
+            foreach (var cmt in cmtList.Elements<Comment>().ToList())
+            {
+                if (cmt.Reference?.Value == null) continue;
+                var shifted = refMapper(cmt.Reference.Value);
+                if (shifted == null) { cmt.Remove(); cmtDirty = true; }
+                else if (!string.Equals(shifted, cmt.Reference.Value, StringComparison.Ordinal))
+                {
+                    cmt.Reference = shifted;
+                    cmtDirty = true;
+                }
+            }
+            if (cmtDirty) commentsPart!.Comments!.Save();
+        }
+
         // 7. cell formulas (text + shared/array ref attribute)
         var sheetData = ws.GetFirstChild<SheetData>();
         if (sheetData != null)
