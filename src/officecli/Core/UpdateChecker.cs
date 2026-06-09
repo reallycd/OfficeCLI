@@ -142,6 +142,14 @@ internal static class UpdateChecker
             config.LatestVersion = latestVersion;
             SaveConfig(config);
 
+            // Package-managed installs (Homebrew) must never self-replace their
+            // binary: Homebrew owns the file and upgrades happen via `brew
+            // upgrade`. Per Homebrew's Acceptable Formulae policy, software
+            // self-update "should be disabled" for formulae. The latest version
+            // is recorded above — so the daily check's telemetry and the version
+            // readout stay intact — we simply stop before the download/swap.
+            if (IsPackageManaged()) return;
+
             // Only download if newer
             if (!IsNewer(latestVersion, currentVersion)) return;
 
@@ -659,6 +667,40 @@ internal static class UpdateChecker
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// True when the running binary is owned by a package manager (Homebrew),
+    /// which performs its own upgrades. Such installs must never self-replace
+    /// their binary — RunRefresh records the latest version for telemetry but
+    /// stops before downloading. Mirrors Homebrew's Acceptable Formulae policy
+    /// ("self-update functionality should be disabled" for formulae).
+    ///
+    /// Resolves symlinks first: Homebrew exposes the formula binary as
+    /// <c>/opt/homebrew/bin/officecli</c> → a symlink into <c>.../Cellar/...</c>,
+    /// and Environment.ProcessPath may report the symlink rather than the
+    /// resolved Cellar/Caskroom target. Both raw and resolved paths are checked
+    /// so detection works regardless of which one the OS hands back. The
+    /// <c>/Cellar/</c> + <c>/Caskroom/</c> substrings are prefix-agnostic, so
+    /// they also catch Intel (<c>/usr/local/Cellar</c>) and Linuxbrew
+    /// (<c>/home/linuxbrew/.linuxbrew/Cellar</c>) layouts.
+    /// </summary>
+    internal static bool IsPackageManaged()
+        => IsPackageManagedPath(Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName);
+
+    internal static bool IsPackageManagedPath(string? exePath)
+    {
+        if (string.IsNullOrEmpty(exePath)) return false;
+        var candidates = new List<string> { exePath };
+        try
+        {
+            var resolved = File.ResolveLinkTarget(exePath, returnFinalTarget: true)?.FullName;
+            if (!string.IsNullOrEmpty(resolved)) candidates.Add(resolved);
+        }
+        catch { /* not a link or inaccessible — fall back to the raw path */ }
+        return candidates.Any(p =>
+            p.Contains("/Cellar/", StringComparison.Ordinal) ||
+            p.Contains("/Caskroom/", StringComparison.Ordinal));
     }
 
     internal static string? GetCurrentVersionPublic() => GetCurrentVersion();
