@@ -88,8 +88,16 @@ jobs:
         run: |
           IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -n 1 | sed -E 's/.*"(.+)"/\1/')
           echo "Signing with: $IDENTITY"
-          codesign --force --options runtime --timestamp --sign "$IDENTITY" publish/${{ matrix.name }}
+          # --options runtime (Hardened Runtime, required by notarization) denies the
+          # self-contained CoreCLR's MAP_JIT executable memory by default, so the runtime
+          # fails to start with "Failed to create CoreCLR, HRESULT: 0x80070008" on every
+          # command. build/officecli.entitlements re-permits exactly allow-jit (the plist
+          # holds no XML comments — codesign's AMFI parser rejects them).
+          codesign --force --options runtime --entitlements build/officecli.entitlements --timestamp --sign "$IDENTITY" publish/${{ matrix.name }}
           codesign --verify --strict --verbose=2 publish/${{ matrix.name }}
+          # Fail the build if allow-jit did not actually embed (e.g. a malformed plist
+          # makes codesign silently drop entitlements) — otherwise the bug ships again.
+          codesign -d --entitlements - --xml publish/${{ matrix.name }} | grep -q allow-jit
 
       - name: Notarize (macOS)
         if: startsWith(matrix.rid, 'osx-')
