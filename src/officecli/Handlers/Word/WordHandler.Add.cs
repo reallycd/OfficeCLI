@@ -760,6 +760,29 @@ public partial class WordHandler
                     break;
             }
         }
+
+        // Geometry-less round-trip: distinguish "source had NO body sectPr at
+        // all" from "source had a pgSz-less sectPr that carries OTHER real
+        // content" (docGrid linesAndChars, cols, headers, …). The emitter
+        // signals a pgSz-less source with pageSize=none / pageMargin=none, but
+        // a truly sectPr-less source emits NOTHING else in this `set /` step —
+        // its props are exactly {pageSize:none, pageMargin:none}. After the
+        // remove sentinels strip pgSz/pgMar, the rebuild target is left with
+        // only the blank template's stamped <w:docGrid w:type="default"/> — a
+        // present-but-empty sectPr that Word resolves to the schema default
+        // (US Letter), flipping the page size away from the app default the
+        // sectPr-less source rendered at. So: when BOTH remove signals fired
+        // and the resulting body sectPr has no real content (only a
+        // default/empty docGrid, nothing else), drop the sectPr entirely so the
+        // rebuild matches the source's sectPr-less state. A sectPr that still
+        // holds real content (a non-default docGrid, cols, headers, pgSz, …) is
+        // never removed — those keys were applied earlier in this same loop.
+        if (RemovedBothPageGeometry(properties))
+        {
+            var bodySectPr = _doc.MainDocumentPart?.Document?.Body?.GetFirstChild<SectionProperties>();
+            if (bodySectPr != null && IsEmptyDefaultSectionProperties(bodySectPr))
+                bodySectPr.Remove();
+        }
         }
         catch
         {
@@ -770,6 +793,61 @@ public partial class WordHandler
             _doc.MainDocumentPart!.Document = new Document(atomicSnapshot);
             throw;
         }
+    }
+
+    /// <summary>
+    /// True when this `set /` carried BOTH the pageSize=none AND pageMargin=none
+    /// remove sentinels — the emitter's signal that the source body sectPr
+    /// omitted both &lt;w:pgSz&gt; and &lt;w:pgMar&gt;. Only this combination can
+    /// indicate a truly sectPr-less source; one without the other is a partial
+    /// geometry omission that keeps its sectPr.
+    /// </summary>
+    private static bool RemovedBothPageGeometry(Dictionary<string, string> properties)
+    {
+        bool pgSzNone = false, pgMarNone = false;
+        foreach (var (key, value) in properties)
+        {
+            switch (key.ToLowerInvariant())
+            {
+                case "pagesize" when string.Equals(value, "none", StringComparison.OrdinalIgnoreCase):
+                    pgSzNone = true;
+                    break;
+                case "pagemargin" when string.Equals(value, "none", StringComparison.OrdinalIgnoreCase):
+                    pgMarNone = true;
+                    break;
+            }
+        }
+        return pgSzNone && pgMarNone;
+    }
+
+    /// <summary>
+    /// True when a body-level sectPr carries no real content: it is either empty
+    /// or holds nothing but a single &lt;w:docGrid&gt; whose only meaningful state
+    /// is the blank template's default (type absent or "default", no linePitch /
+    /// charSpace). Such a sectPr is what the blank rebuild is left with after a
+    /// truly sectPr-less source's pgSz/pgMar removals; Word resolves it to the
+    /// schema-default page size (US Letter), so it must be dropped to match the
+    /// source's app-default fallback. Any other child (pgSz, pgMar, cols,
+    /// headers, a non-default docGrid, …) means the sectPr is real and is kept.
+    /// </summary>
+    private static bool IsEmptyDefaultSectionProperties(SectionProperties sectPr)
+    {
+        foreach (var child in sectPr.ChildElements)
+        {
+            if (child is DocGrid dg)
+            {
+                // A docGrid is "trivial" only if it carries the blank default and
+                // no line/char grid state. linePitch/charSpace presence (or a
+                // non-default type) means a real CJK grid the source intended.
+                bool typeIsDefault = dg.Type?.Value == null || dg.Type.Value == DocGridValues.Default;
+                if (!typeIsDefault || dg.LinePitch?.Value != null || dg.CharacterSpace?.Value != null)
+                    return false;
+                continue;
+            }
+            // Any non-docGrid child is real section content.
+            return false;
+        }
+        return true;
     }
 
     /// <summary>
