@@ -1054,6 +1054,19 @@ public partial class WordHandler
                     InsertSectPrChildInOrder(sectPr, new VerticalTextAlignmentOnPage { Val = enumVal });
                     break;
                 }
+                case "textdirection":
+                {
+                    // BUG-DUMP-SECT-TEXTDIR: mirror TrySetSectionLayout's
+                    // textDirection case so /section[N] users can set the
+                    // section page text flow (East-Asian vertical). Distinct
+                    // from the cell-level textDirection in tcPr.
+                    sectPr.RemoveAllChildren<TextDirection>();
+                    var lower = value.ToLowerInvariant().Trim();
+                    if (lower is "none" or "off" or "false")
+                        break;
+                    InsertSectPrChildInOrder(sectPr, new TextDirection { Val = ParseSectionTextDirection(value) });
+                    break;
+                }
                 case "footnotepr.numfmt" or "footnotepr.numrestart" or "footnotepr.numstart" or "footnotepr.pos"
                   or "endnotepr.numfmt" or "endnotepr.numrestart" or "endnotepr.numstart" or "endnotepr.pos":
                 {

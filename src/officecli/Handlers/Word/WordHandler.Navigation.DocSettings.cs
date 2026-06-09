@@ -90,6 +90,13 @@ public partial class WordHandler
             if (vAlign?.Val != null)
                 node.Format["vAlign"] = vAlign.Val.InnerText;
 
+            // BUG-DUMP-SECT-TEXTDIR: body-section <w:textDirection> (East-Asian
+            // vertical page text flow). Mirror BuildSectionNode so the body
+            // sectPr's text direction survives dump→batch (set / path).
+            var secTextDir = sectPr.GetFirstChild<TextDirection>();
+            if (secTextDir?.Val != null)
+                node.Format["textDirection"] = secTextDir.Val.InnerText;
+
             // BUG-DUMP-SECT-FOOTNOTE: body-section footnote/endnote numbering
             // (<w:footnotePr>/<w:endnotePr>). Mirror BuildSectionNode so the
             // trailing sectPr's numbering survives dump→batch (set / path).

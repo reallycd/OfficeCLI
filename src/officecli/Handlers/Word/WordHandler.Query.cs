@@ -1086,6 +1086,14 @@ public partial class WordHandler
         if (vAlign?.Val != null)
             secNode.Format["vAlign"] = vAlign.Val.InnerText;
 
+        // BUG-DUMP-SECT-TEXTDIR: section-level <w:textDirection> (East-Asian
+        // vertical page text flow). Surface InnerText so dump→batch round-trips
+        // it — without this, vertical (tbRl) layout reverted to horizontal.
+        // Distinct code path from the cell-level textDirection in tcPr.
+        var secTextDir = sectPr.GetFirstChild<TextDirection>();
+        if (secTextDir?.Val != null)
+            secNode.Format["textDirection"] = secTextDir.Val.InnerText;
+
         // BUG-DUMP-SECT-FOOTNOTE: section-level footnote/endnote numbering
         // (<w:footnotePr>/<w:endnotePr> at the start of sectPr). Surface the
         // numFmt/numRestart/numStart/pos sub-keys so dump→batch round-trips them

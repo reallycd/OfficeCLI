@@ -308,6 +308,10 @@ public static partial class WordBatchEmitter
         // Set / accepts it; without inclusion here the body section reverted
         // to top on round-trip.
         "vAlign",
+        // BUG-DUMP-SECT-TEXTDIR: section-level page text flow (w:textDirection,
+        // East-Asian vertical layout). Get/Navigation surfaces it; without this
+        // key the body section's vertical (tbRl) flow reverted to horizontal.
+        "textDirection",
         // pgBorders shorthand ('box' / 'none') — Set materialises four
         // matching sides; Get/Navigation surfaces the presence. Without
         // this key the round-trip silently dropped page borders.

@@ -366,6 +366,19 @@ public partial class WordHandler
             }
         }
 
+        // BUG-DUMP-SECT-TEXTDIR: section page text flow (<w:textDirection>),
+        // East-Asian vertical layout. CONSISTENCY(add-set-symmetry): mirror
+        // TrySetSectionLayout's textDirection case so `add section
+        // --prop textDirection=tbRl` round-trips a mid-document section's
+        // <w:textDirection>. Distinct from the cell-level textDirection in tcPr.
+        if (properties.TryGetValue("textDirection", out var tdVal) ||
+            properties.TryGetValue("textdirection", out tdVal))
+        {
+            var lower = tdVal.ToLowerInvariant().Trim();
+            if (lower is not ("none" or "off" or "false"))
+                InsertSectPrChildInOrder(sectPr, new TextDirection { Val = ParseSectionTextDirection(tdVal) });
+        }
+
         // BUG-DUMP-SECT-FOOTNOTE: section-level footnote/endnote numbering.
         // CONSISTENCY(add-set-symmetry): route footnotePr.* / endnotePr.* through
         // the shared TrySetFootnoteEndnoteNumProps so `add section` round-trips

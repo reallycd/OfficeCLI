@@ -410,6 +410,21 @@ public partial class WordHandler
                 return true;
             }
 
+            // ==================== Text Direction (section page text flow) ====================
+            // BUG-DUMP-SECT-TEXTDIR: w:textDirection in sectPr — East-Asian
+            // vertical page text flow (tbRl, etc.). Distinct from the cell-level
+            // textDirection in tcPr. ST_TextDirection enum.
+            case "textdirection":
+            {
+                var sectPr = EnsureSectionProperties();
+                sectPr.RemoveAllChildren<TextDirection>();
+                var lower = value.ToLowerInvariant().Trim();
+                if (lower is "none" or "off" or "false")
+                    return true;
+                InsertSectPrChildInOrder(sectPr, new TextDirection { Val = ParseSectionTextDirection(value) });
+                return true;
+            }
+
             // ==================== SectionType ====================
             case "section.type" or "sectiontype":
             {
@@ -468,6 +483,25 @@ public partial class WordHandler
         }
         return pb;
     }
+
+    // ==================== textDirection (section page text flow) ====================
+    // BUG-DUMP-SECT-TEXTDIR: parse a section-level <w:textDirection> value.
+    // Canonical ST_TextDirection values are accepted verbatim (round-trip form
+    // from Get's InnerText); the cell-level aliases are also accepted for
+    // leniency. Shared by the body (set /), per-section (set /section[N]), and
+    // AddSection paths so all three apply identical semantics.
+    private static TextDirectionValues ParseSectionTextDirection(string value) =>
+        value.ToLowerInvariant().Trim() switch
+        {
+            "lrtb" or "horizontal" => TextDirectionValues.LefToRightTopToBottom,
+            "tbrl" or "vertical-rl" => TextDirectionValues.TopToBottomRightToLeft,
+            "btlr" or "vertical" => TextDirectionValues.BottomToTopLeftToRight,
+            "lrtbv" or "lrtb-r" or "lr-tb-rotated" => TextDirectionValues.LefttoRightTopToBottomRotated,
+            "tbrlv" or "tbrl-r" or "tb-rl-rotated" => TextDirectionValues.TopToBottomRightToLeftRotated,
+            "tblrv" or "tblr-r" or "tb-lr-rotated" => TextDirectionValues.TopToBottomLeftToRightRotated,
+            _ => throw new ArgumentException(
+                $"Invalid textDirection value: '{value}'. Valid: lrTb, tbRl, btLr, lrTbV, tbRlV, tbLrV, none.")
+        };
 
     // ==================== footnotePr / endnotePr ====================
     // BUG-DUMP-SECT-FOOTNOTE: section-level footnote/endnote numbering lived

@@ -3371,6 +3371,13 @@ public partial class WordHandler
                 if (sbVAlign?.Val != null)
                     node.Format["sectionBreak.vAlign"] = sbVAlign.Val.InnerText;
 
+                // BUG-DUMP-SECT-TEXTDIR: section page text flow on a mid-document
+                // section carrier. Surface as sectionBreak.textDirection so the
+                // carrier sectPr round-trips — distinct from cell-level tcPr.
+                var sbTextDir = inlineSectPr.GetFirstChild<TextDirection>();
+                if (sbTextDir?.Val != null)
+                    node.Format["sectionBreak.textDirection"] = sbTextDir.Val.InnerText;
+
                 // BUG-DUMP-SECT-FOOTNOTE: footnote/endnote numbering on a
                 // mid-document section carrier. Surface as sectionBreak.footnotePr.*
                 // / sectionBreak.endnotePr.* so the carrier sectPr round-trips —
