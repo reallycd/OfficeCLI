@@ -190,8 +190,13 @@ public partial class ExcelHandler
             throw new ArgumentException(
                 $"Invalid row index {rowIdx}. Valid row range is 1-1048576.");
 
-        // If inserting at an existing position, shift rows down first
-        bool needsShift = index.HasValue && sheetData.Elements<Row>().Any(r => r.RowIndex?.Value >= (uint)rowIdx);
+        // If inserting at an existing position, shift everything at/below it
+        // down. Gate only on "inserting at a position" (index set), NOT on the
+        // presence of cell data at/below — sheet-level structures (CF / merge /
+        // dataValidation) anchored on still-empty cells must shift too. Mirrors
+        // AddCol, which always calls ShiftColumnsRight on a positional insert.
+        // When nothing sits at/below rowIdx this is a harmless no-op.
+        bool needsShift = index.HasValue;
         if (needsShift)
             ShiftRowsDown(worksheet, rowIdx);
 
