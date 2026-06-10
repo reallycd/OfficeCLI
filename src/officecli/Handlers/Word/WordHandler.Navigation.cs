@@ -4407,10 +4407,14 @@ public partial class WordHandler
             // already drops the inner runs (so they don't double-emit as plain
             // runs). Mirrors the ruby raw-set path.
             var paraBdos = para.Elements<BidirectionalOverride>().ToList();
+            // BUG-DUMP-R43-7: <w:dir> (BidirectionalEmbedding) is the third bidi
+            // run-container — mirror the bdo merge so the verbatim wrapper replays.
+            var paraDirs = para.Elements<BidirectionalEmbedding>().ToList();
             var ordered = runs.Where(r => r.GetFirstChild<Ruby>() == null)
                 .Select(r => (pos: descendantPos.TryGetValue(r, out var p) ? p : int.MaxValue, kind: "run", el: (OpenXmlElement)r))
                 .Concat(paraRubyRuns.Select(r => (pos: descendantPos.TryGetValue(r, out var p) ? p : int.MaxValue, kind: "ruby", el: (OpenXmlElement)r)))
                 .Concat(paraBdos.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "bdo", el: (OpenXmlElement)b)))
+                .Concat(paraDirs.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "dir", el: (OpenXmlElement)b)))
                 .Concat(inlineEqsAll.Select(e => (pos: descendantPos.TryGetValue(e, out var p) ? p : int.MaxValue, kind: "eq", el: (OpenXmlElement)e)))
                 .Concat(bareFieldUnknowns.Select(u => (pos: descendantPos.TryGetValue(u, out var p) ? p : int.MaxValue, kind: u.LocalName == "fldChar" ? "fieldChar" : "instrText", el: (OpenXmlElement)u)))
                 .Concat(paraBookmarks.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "bookmark", el: (OpenXmlElement)b)))
@@ -4508,6 +4512,27 @@ public partial class WordHandler
                     if (bdoEl.Val?.HasValue == true)
                         bdoNode.Format["bdo.val"] = bdoEl.Val.InnerText;
                     node.Children.Add(bdoNode);
+                    runIdx++;
+                }
+                else if (entry.kind == "dir")
+                {
+                    // BUG-DUMP-R43-7: emit the <w:dir> bidirectional-embedding
+                    // wrapper at its DOM position. The node carries the verbatim
+                    // outer XML (stashed under _rawDirXml) so the emitter re-inserts
+                    // the <w:dir>…</w:dir> via a raw-set append, preserving the
+                    // w:val direction and the wrapped runs. Mirrors the bdo path.
+                    var dirEl = (BidirectionalEmbedding)entry.el;
+                    var dirText = string.Concat(dirEl.Descendants<Text>().Select(t => t.Text));
+                    var dirNode = new DocumentNode
+                    {
+                        Type = "dir",
+                        Text = dirText,
+                        Path = $"{path}/r[{runIdx + 1}]",
+                    };
+                    dirNode.Format["_rawDirXml"] = dirEl.OuterXml;
+                    if (dirEl.Val?.HasValue == true)
+                        dirNode.Format["dir.val"] = dirEl.Val.InnerText;
+                    node.Children.Add(dirNode);
                     runIdx++;
                 }
                 else if (entry.kind == "bookmark")

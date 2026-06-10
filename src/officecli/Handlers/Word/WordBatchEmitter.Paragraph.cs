@@ -180,6 +180,9 @@ public static partial class WordBatchEmitter
                 // BUG-DUMP-R42-9: bdo (bidirectional override) child surfaces the
                 // verbatim <w:bdo> wrapper XML for a raw-set append.
                 || c.Type == "bdo"
+                // BUG-DUMP-R43-7: dir (bidirectional embedding) child surfaces the
+                // verbatim <w:dir> wrapper XML for a raw-set append.
+                || c.Type == "dir"
                 // R10-bug1: include ole children so TryEmitOleRun can fire
                 // a warning instead of letting them be silently filtered
                 // out of the run list (full round-trip is a backlog item).
@@ -404,6 +407,7 @@ public static partial class WordBatchEmitter
             if (TryEmitHyphenRun(word, run, parentPath, items, ctx)) continue;
             if (TryEmitRubyRun(run, parentPath, paraTargetPath, items, ctx)) continue;
             if (TryEmitBdoRun(run, parentPath, items, ctx)) continue;
+            if (TryEmitDirRun(run, parentPath, items, ctx)) continue;
             if (TryEmitBreakRun(word, run, parentPath, paraTargetPath, items, ctx)) continue;
             if (TryEmitTabRun(run, paraTargetPath, items)) continue;
             if (TryEmitPtabRun(run, paraTargetPath, items)) continue;
@@ -906,6 +910,9 @@ public static partial class WordBatchEmitter
         // Collapsing into `add p` would fold the inner text into a plain run and
         // drop the <w:bdo> wrapper (and its load-bearing w:val direction).
         if (r.Type == "bdo") return false;
+        // BUG-DUMP-R43-7: a sole <w:dir> (bidirectional embedding) child must stay
+        // on the explicit-run path so TryEmitDirRun raw-sets the wrapper verbatim.
+        if (r.Type == "dir") return false;
         // BUG-DUMP7-03: inline equation must emit `add equation` explicitly.
         if (r.Type == "equation") return false;
         // BUG-DUMP-R42-5: a sole run carrying its own reading direction
@@ -1202,6 +1209,40 @@ public static partial class WordBatchEmitter
                 Element: "bdo",
                 Path: run.Path,
                 Reason: "bidirectional override (w:bdo) inside a header/footer/table cell could not be serialized for round-trip; the wrapped runs survive flattened but the forced character ordering is lost from the replayed document"));
+            return true;
+        }
+        items.Add(new BatchItem
+        {
+            Command = "raw-set",
+            Part = "/document",
+            Xpath = "/w:document/w:body/w:p[last()]",
+            Action = "append",
+            Xml = rawXml!
+        });
+        return true;
+    }
+
+    private static bool TryEmitDirRun(DocumentNode run, string parentPath, List<BatchItem> items, BodyEmitContext? ctx)
+    {
+        // BUG-DUMP-R43-7: a <w:dir> (bidirectional embedding — sets the bidi
+        // embedding direction of its wrapped runs, distinct from <w:bdo> override
+        // and the run-level <w:rtl> toggle) has no scalar add/set representation;
+        // the typed `add r` path drops the wrapper, losing the load-bearing w:val
+        // direction. Re-insert the captured <w:dir>…</w:dir> verbatim via a
+        // raw-set append, mirroring the bdo fallback exactly.
+        if (run.Type != "dir") return false;
+        var rawXml = run.Format.TryGetValue("_rawDirXml", out var rx) ? rx?.ToString() : null;
+        if (string.IsNullOrEmpty(rawXml))
+            return true; // nothing to emit (shouldn't happen) — consumed anyway
+        // Only a body host has an addressable last() paragraph; a dir inside a
+        // header/footer/cell would mis-anchor — flag the loss instead (same
+        // conservatism as the bdo/ruby fallbacks).
+        if (parentPath != "/body")
+        {
+            ctx?.Warnings.Add(new DocxUnsupportedWarning(
+                Element: "dir",
+                Path: run.Path,
+                Reason: "bidirectional embedding (w:dir) inside a header/footer/table cell could not be serialized for round-trip; the wrapped runs survive flattened but the embedding direction is lost from the replayed document"));
             return true;
         }
         items.Add(new BatchItem

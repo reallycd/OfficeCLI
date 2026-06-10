@@ -257,6 +257,14 @@ public partial class WordHandler
             // The wrapper is surfaced separately as a "bdo" paragraph child whose
             // verbatim XML the emitter raw-sets — mirrors the ruby path above.
             .Where(r => r.Ancestors<BidirectionalOverride>().FirstOrDefault() == null)
+            // BUG-DUMP-R43-7: a <w:dir> (BidirectionalEmbedding — bidirectional
+            // embedding direction wrapper, distinct from <w:bdo> override and the
+            // run-level <w:rtl> toggle) is likewise a run-container. Drop its inner
+            // runs here so they don't flatten into plain runs, dropping the <w:dir>
+            // wrapper (which carries the load-bearing w:val direction). The wrapper
+            // is surfaced separately as a "dir" paragraph child whose verbatim XML
+            // the emitter raw-sets — mirrors the bdo/ruby path above.
+            .Where(r => r.Ancestors<BidirectionalEmbedding>().FirstOrDefault() == null)
             // BUG-DUMP4-06: skip runs nested inside an inline SdtRun. Those
             // runs are surfaced separately as a typed `sdt` paragraph child so
             // alias/tag/type metadata round-trips. Without this filter the
