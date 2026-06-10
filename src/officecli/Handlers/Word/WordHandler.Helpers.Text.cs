@@ -56,8 +56,78 @@ public partial class WordHandler
                 sb.Append(string.Concat(child.Descendants<Text>().Select(t => t.Text))
                     + string.Concat(child.Descendants<M.Text>().Select(t => t.Text)));
             }
+            // BUG-DUMP-R35-2: an inline <w:smartTag>/<w:customXml> wrapper nests
+            // its own runs (and may nest further smartTag/customXml/hyperlink
+            // levels). Like the nested-hyperlink case above, the old loop only
+            // saw the paragraph's DIRECT typed children, so a run wrapped in a
+            // smartTag/customXml was invisible to readback (get .text / view
+            // text returned ""). Recurse into the wrapper so its inner run text
+            // surfaces. Read-side only. Mirrors AppendHyperlinkText.
+            else if (IsRunContainerWrapper(child))
+                AppendWrapperRunText(sb, child);
         }
         return sb.ToString();
+    }
+
+    // BUG-DUMP-R35-2: a <w:smartTag>/<w:customXml> inline wrapper. These parse
+    // as OpenXmlUnknownElement in the schema set we load (the strongly-typed
+    // SmartTagRun/CustomXmlRun classes aren't present in this SDK build — same
+    // observation as the BUG-DUMP5-06/07 unknown-element walk in Navigation), so
+    // match by namespace + local name.
+    private static bool IsRunContainerWrapper(OpenXmlElement el)
+    {
+        const string wNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        return el.NamespaceUri == wNs
+            && (el.LocalName == "smartTag" || el.LocalName == "customXml");
+    }
+
+    // BUG-DUMP-R35-2: walk a smartTag/customXml wrapper's children, recursing
+    // into nested Run / Hyperlink / smartTag / customXml so the inner run text
+    // (including whitespace-only runs between nested wrappers) survives. Mirrors
+    // AppendHyperlinkText's per-child handling.
+    private static void AppendWrapperRunText(StringBuilder sb, OpenXmlElement wrapper)
+    {
+        foreach (var wChild in wrapper.ChildElements)
+        {
+            if (wChild is Run wRun) sb.Append(GetRunText(wRun));
+            else if (wChild is Hyperlink wHl) AppendHyperlinkText(sb, wHl);
+            else if (IsRunContainerWrapper(wChild)) AppendWrapperRunText(sb, wChild);
+            else if (wChild.LocalName == "oMath" || wChild is M.OfficeMath)
+                sb.Append(string.Concat(wChild.Descendants<Text>().Select(t => t.Text))
+                    + string.Concat(wChild.Descendants<M.Text>().Select(t => t.Text)));
+            // BUG-DUMP-R35-2: smartTag/customXml parse as OpenXmlUnknownElement,
+            // so the inner <w:r>/<w:t> are unknown too — GetRunText (typed) and
+            // the typed-Run case above miss them. Pull <w:t> text directly from
+            // the unknown subtree. Use the actual <w:t> elements' .Text (an
+            // OpenXmlUnknownElement.InnerText collapses insignificant whitespace,
+            // which would drop a bare " " run); reading each w:t child's text
+            // node preserves a space-only run between two nested wrappers.
+            else if (wChild is DocumentFormat.OpenXml.OpenXmlUnknownElement)
+                AppendUnknownRunText(sb, wChild);
+        }
+    }
+
+    // BUG-DUMP-R35-2: append the visible text of an unknown-element run subtree
+    // (a <w:r> that parsed as OpenXmlUnknownElement because its smartTag/
+    // customXml wrapper is unknown). Reads each descendant <w:t> element's first
+    // text node so a whitespace-only run is preserved (InnerText on the unknown
+    // element trims insignificant whitespace).
+    private static void AppendUnknownRunText(StringBuilder sb, OpenXmlElement unknownRun)
+    {
+        const string wNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        // Recurse into nested unknown wrappers (smartTag>smartTag>r) too.
+        if (unknownRun.LocalName == "smartTag" || unknownRun.LocalName == "customXml")
+        {
+            foreach (var inner in unknownRun.ChildElements)
+                if (inner is DocumentFormat.OpenXml.OpenXmlUnknownElement)
+                    AppendUnknownRunText(sb, inner);
+            return;
+        }
+        foreach (var tEl in unknownRun.Descendants<DocumentFormat.OpenXml.OpenXmlUnknownElement>())
+        {
+            if (tEl.NamespaceUri == wNs && tEl.LocalName == "t")
+                sb.Append(tEl.InnerText);
+        }
     }
 
     // BUG-R4B(BUG7): walk a hyperlink's children, recursing into nested

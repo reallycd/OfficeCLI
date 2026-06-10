@@ -890,6 +890,87 @@ public partial class WordHandler
         }
     }
 
+    // BUG-DUMP-R35-2: recover the whitespace-preserved text of each <w:r> that
+    // sits inside a <w:smartTag>/<w:customXml> wrapper in <paramref name="para"/>,
+    // in document order. smartTag/customXml parse as OpenXmlUnknownElement and
+    // the SDK's unknown-element reader discards a run's insignificant whitespace
+    // (a `<w:t> </w:t>` with no xml:space="preserve" collapses to `<w:t/>`), so
+    // the space is unrecoverable from the parsed DOM. The part stream still has
+    // it; re-parse it whitespace-preserved (System.Xml.Linq) and return the
+    // wrapper-run texts so the synthesizer can fill in a collapsed run.
+    //
+    // The matching raw paragraph is located by its NON-EMPTY wrapper-run text
+    // fingerprint (those survive in both DOM and raw, so the sequence is a stable
+    // key) — robust against paragraphs living in tables/headers without needing a
+    // positional path. Returns an empty list on any failure (caller falls back to
+    // the parsed DOM text, i.e. the prior behavior).
+    private List<string> RecoverWrapperRunTexts(Paragraph para)
+    {
+        var empty = new List<string>();
+        const string wNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        // DOM-side fingerprint: the non-empty wrapper-run texts of this paragraph.
+        var domKey = new List<string>();
+        bool paraHasWrapper = false;
+        foreach (var unkRun in para.Descendants<DocumentFormat.OpenXml.OpenXmlUnknownElement>())
+        {
+            if (unkRun.LocalName != "r" || unkRun.NamespaceUri != wNs) continue;
+            bool inWrapper = false;
+            for (var anc = unkRun.Parent; anc != null && anc != para; anc = anc.Parent)
+                if (anc is DocumentFormat.OpenXml.OpenXmlUnknownElement uw
+                    && uw.NamespaceUri == wNs
+                    && (uw.LocalName == "smartTag" || uw.LocalName == "customXml"))
+                { inWrapper = true; break; }
+            if (!inWrapper) continue;
+            paraHasWrapper = true;
+            var t = unkRun.InnerText;
+            // Fingerprint on NON-WHITESPACE runs only: the parsed DOM has already
+            // dropped insignificant-whitespace runs (the exact loss we recover),
+            // so a whitespace-only run never appears here. The raw side must
+            // exclude them too or the counts diverge and no paragraph matches.
+            if (!string.IsNullOrWhiteSpace(t)) domKey.Add(t);
+        }
+        if (!paraHasWrapper) return empty;
+
+        try
+        {
+            var part = para.Ancestors<DocumentFormat.OpenXml.OpenXmlPartRootElement>()
+                .FirstOrDefault()?.OpenXmlPart
+                ?? (OpenXmlPart?)_doc.MainDocumentPart;
+            if (part == null) return empty;
+            System.Xml.Linq.XDocument xdoc;
+            using (var stream = part.GetStream(System.IO.FileMode.Open, System.IO.FileAccess.Read))
+                xdoc = System.Xml.Linq.XDocument.Load(stream,
+                    System.Xml.Linq.LoadOptions.PreserveWhitespace);
+            System.Xml.Linq.XNamespace w = wNs;
+            foreach (var rawP in xdoc.Descendants(w + "p"))
+            {
+                // Collect this raw paragraph's wrapper-run texts (all, in order)
+                // plus its non-empty fingerprint for matching.
+                var allTexts = new List<string>();
+                var nonEmpty = new List<string>();
+                foreach (var rawR in rawP.Descendants(w + "r"))
+                {
+                    // Only runs whose ancestor chain (within rawP) includes a
+                    // smartTag/customXml wrapper.
+                    bool inWrap = rawR.Ancestors()
+                        .TakeWhile(a => a != rawP)
+                        .Any(a => a.Name == w + "smartTag" || a.Name == w + "customXml")
+                        || rawR.Ancestors(w + "smartTag").Any()
+                        || rawR.Ancestors(w + "customXml").Any();
+                    if (!inWrap) continue;
+                    var txt = string.Concat(rawR.Descendants(w + "t").Select(t => t.Value));
+                    allTexts.Add(txt);
+                    if (!string.IsNullOrWhiteSpace(txt)) nonEmpty.Add(txt);
+                }
+                if (nonEmpty.Count == domKey.Count
+                    && nonEmpty.SequenceEqual(domKey, StringComparer.Ordinal))
+                    return allTexts;
+            }
+        }
+        catch { /* fall back to parsed DOM text */ }
+        return empty;
+    }
+
     private OpenXmlElement? NavigateToElement(List<PathSegment> segments)
         => NavigateToElement(segments, out _, out _);
 
@@ -4340,9 +4421,34 @@ public partial class WordHandler
             // <w:r>/<w:t> children we find so the inner text round-trips
             // through dump→batch instead of vanishing.
             const string wNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            // BUG-DUMP-R35-2: smartTag/customXml wrappers parse as
+            // OpenXmlUnknownElement; the SDK's unknown-element reader DISCARDS
+            // insignificant whitespace, so a `<w:r><w:t> </w:t></w:r>` (no
+            // xml:space="preserve") between two nested wrappers collapses to an
+            // empty `<w:t/>` in the parsed DOM (verified: para.OuterXml shows the
+            // self-closed tag). The space still exists in the part stream, so —
+            // when the parsed run text is empty — recover the run's true,
+            // whitespace-preserved text from the raw part XML by run ordinal.
+            // A typed Run keeps its <w:t> text node (Text.Text returns " " even
+            // without preserve), so this loss is specific to the unknown path.
+            var rawWrapperTexts = RecoverWrapperRunTexts(para);
+            int wrapperRunOrdinal = -1;
             foreach (var unkRun in para.Descendants<DocumentFormat.OpenXml.OpenXmlUnknownElement>())
             {
                 if (unkRun.LocalName != "r" || unkRun.NamespaceUri != wNs) continue;
+                // Is this unknown run nested under a smartTag/customXml wrapper
+                // (vs a ruby/ins/del subtree)? Only the wrapper case advances the
+                // raw-text recovery cursor and triggers the flatten warning.
+                bool inWrapper = false;
+                for (var anc = unkRun.Parent; anc != null; anc = anc.Parent)
+                {
+                    if (anc is DocumentFormat.OpenXml.OpenXmlUnknownElement uw
+                        && uw.NamespaceUri == wNs
+                        && (uw.LocalName == "smartTag" || uw.LocalName == "customXml"))
+                    { inWrapper = true; break; }
+                    if (anc == para) break;
+                }
+                if (inWrapper) wrapperRunOrdinal++;
                 // Only surface runs whose direct parent is an unknown
                 // wrapper (ruby/rt/rubyBase/smartTag/customXml). Runs
                 // whose parent is a typed Paragraph would already be
@@ -4372,13 +4478,31 @@ public partial class WordHandler
                         || tEl.LocalName == "instrText")
                         sbInner.Append(tEl.InnerText);
                 }
-                if (sbInner.Length == 0) continue;
+                var recoveredText = sbInner.ToString();
+                // BUG-DUMP-R35-2: when the parsed run text is empty but a
+                // whitespace-preserved text was recovered from the raw part XML
+                // at this wrapper-run ordinal, use it so a space-only run between
+                // two nested smartTags survives dump→batch ("John Smith", not
+                // "JohnSmith"). Only consult the raw cursor for wrapper runs.
+                if (recoveredText.Length == 0 && inWrapper
+                    && wrapperRunOrdinal >= 0 && wrapperRunOrdinal < rawWrapperTexts.Count)
+                    recoveredText = rawWrapperTexts[wrapperRunOrdinal];
+                // Drop only when there is genuinely no text to carry. A
+                // whitespace-only run is meaningful and must be kept.
+                if (recoveredText.Length == 0) continue;
                 var synthNode = new DocumentNode
                 {
                     Type = "run",
-                    Text = sbInner.ToString(),
+                    Text = recoveredText,
                     Path = $"{path}/r[{runIdx + 1}]",
                 };
+                // BUG-DUMP-R35-2: mark a wrapper-flattened run so the emitter can
+                // surface a deterministic "wrapper flattened" warning (the inner
+                // run text/formatting is preserved; only the smartTag/customXml
+                // wrapper element is dropped — consistent with Word often
+                // stripping these and the project's flatten precedents).
+                if (inWrapper)
+                    synthNode.Format["_wrapperFlattened"] = true;
                 // BUG-DUMP7-10: preserve trackChange attribution from
                 // the typed w:ins/w:del ancestor so the round-trip
                 // re-emits the wrapper (mirrors the typed-Run branch

@@ -2604,6 +2604,20 @@ public static partial class WordBatchEmitter
         var rProps = FilterEmittableProps(run.Format);
         if (!string.IsNullOrEmpty(run.Text))
             rProps["text"] = run.Text!;
+        // BUG-DUMP-R35-2: a run synthesized from inside a <w:smartTag>/
+        // <w:customXml> wrapper. We FLATTEN the wrapper (drop the smartTag/
+        // customXml element) but PRESERVE the inner run's text + formatting —
+        // consistent with how Word often strips these and with the project's
+        // flatten precedents. Surface a deterministic warning so the wrapper
+        // loss isn't silent (matches the external-rel / picBullet convention).
+        if (run.Format.TryGetValue("_wrapperFlattened", out var wfObj)
+            && wfObj is bool wfB && wfB && ctx != null)
+        {
+            ctx.Warnings.Add(new DocxUnsupportedWarning(
+                Element: "smartTag/customXml",
+                Path: run.Path,
+                Reason: "inline smartTag/customXml wrapper flattened on dump→batch round-trip; the wrapped run text and formatting are preserved, only the wrapper element is dropped"));
+        }
         // CONSISTENCY(move-range-markers): a moveFrom/moveTo run's own w:id in
         // the source usually differs from its paired half (the pairing lives on
         // the bracketing range markers' shared w:name, not on the run id). Rewrite
