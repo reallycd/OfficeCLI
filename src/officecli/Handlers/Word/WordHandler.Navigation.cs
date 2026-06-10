@@ -3377,6 +3377,21 @@ public partial class WordHandler
                         beNode.Format["name"] = beName!;
                     node.Children.Add(beNode);
                 }
+                else if (child is MoveFromRangeStart or MoveFromRangeEnd
+                                  or MoveToRangeStart or MoveToRangeEnd)
+                {
+                    // BUG-DUMP-R43-10: block-level tracked-move range markers
+                    // (<w:moveFromRangeStart>/<w:moveFromRangeEnd>/<w:moveToRangeStart>/
+                    // <w:moveToRangeEnd>) appear as direct body children — siblings of
+                    // paragraphs — when a whole block was moved with track-changes.
+                    // (Run-level moveFrom/moveTo are handled elsewhere.) Surface each
+                    // with its localName Type and stash the verbatim outer XML under
+                    // _rawMoveRangeXml so EmitBody re-inserts it via a body-level
+                    // raw-set, preserving id/name/author/date/colFirst/colLast.
+                    var mvNode = ElementToNode(child, $"{path}/{child.LocalName}[1]", depth - 1);
+                    mvNode.Format["_rawMoveRangeXml"] = child.OuterXml;
+                    node.Children.Add(mvNode);
+                }
                 else
                 {
                     // Non-structural (sectPr etc.) — keep localName naming

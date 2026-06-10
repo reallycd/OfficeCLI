@@ -572,6 +572,11 @@ public static partial class WordBatchEmitter
         int? activeSpanEnd = null;
 
         int pIndex = 0, tblIndex = 0;
+        // BUG-DUMP-R43-10: xpath of the most-recently-emitted top-level body
+        // element (paragraph or table). Block-level move-range markers anchor
+        // their raw-set insertafter this element so they land in DOM order; a
+        // leading marker (no prior element) prepends to the body instead.
+        string? lastBodyAnchorXpath = null;
         foreach (var child in bodyNode.Children)
         {
             switch (child.Type)
@@ -605,10 +610,12 @@ public static partial class WordBatchEmitter
                         {
                             EmitParagraph(word, child.Path, "/body", pIndex, items, autoPresent: false, ctx);
                         }
+                        lastBodyAnchorXpath = $"/w:document/w:body/w:p[{pIndex}]";
                     }
                     break;
                 case "table":
                     tblIndex++;
+                    lastBodyAnchorXpath = $"/w:document/w:body/w:tbl[{tblIndex}]";
                     EmitTable(word, child.Path, tblIndex, items, ctx);
                     break;
                 case "section":
@@ -747,6 +754,51 @@ public static partial class WordBatchEmitter
                             Element: "customXml",
                             Path: child.Path,
                             Reason: $"block-level customXml wrapper{descr} (custom-XML data binding: element/uri/placeholder/attr) dropped on dump→batch round-trip; the wrapped content's text survives but the binding does not"));
+                    }
+                    break;
+                case "moveFromRangeStart":
+                case "moveFromRangeEnd":
+                case "moveToRangeStart":
+                case "moveToRangeEnd":
+                    // BUG-DUMP-R43-10: block-level tracked-move range markers are
+                    // body children (siblings of paragraphs). Re-insert the verbatim
+                    // marker via a body-level raw-set append so it lands in DOM order
+                    // after the paragraphs already emitted, preserving the tracked-
+                    // move revision (id/name/author/date). Run-level moveFrom/moveTo
+                    // are handled by EmitParagraph's revision path; this covers only
+                    // the block-level sibling-marker form.
+                    {
+                        var mvRaw = child.Format.TryGetValue("_rawMoveRangeXml", out var mr)
+                            ? mr?.ToString() : null;
+                        if (!string.IsNullOrEmpty(mvRaw))
+                        {
+                            // Anchor relative to the last emitted paragraph/table so
+                            // the marker lands in DOM order AND stays before the
+                            // trailing <w:sectPr> (which must remain body's last
+                            // child). A leading marker (no prior element) prepends.
+                            if (lastBodyAnchorXpath != null)
+                            {
+                                items.Add(new BatchItem
+                                {
+                                    Command = "raw-set",
+                                    Part = "/document",
+                                    Xpath = lastBodyAnchorXpath,
+                                    Action = "insertafter",
+                                    Xml = mvRaw!
+                                });
+                            }
+                            else
+                            {
+                                items.Add(new BatchItem
+                                {
+                                    Command = "raw-set",
+                                    Part = "/document",
+                                    Xpath = "/w:document/w:body",
+                                    Action = "prepend",
+                                    Xml = mvRaw!
+                                });
+                            }
+                        }
                     }
                     break;
                 case "altChunk":
