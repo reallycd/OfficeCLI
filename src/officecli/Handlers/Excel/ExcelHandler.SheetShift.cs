@@ -36,6 +36,7 @@ using Xdr = DocumentFormat.OpenXml.Drawing.Spreadsheet;
 using C = DocumentFormat.OpenXml.Drawing.Charts;
 using X14 = DocumentFormat.OpenXml.Office2010.Excel;
 using Xm = DocumentFormat.OpenXml.Office.Excel;
+using ThreadedCmt = DocumentFormat.OpenXml.Office2019.Excel.ThreadedComments;
 
 namespace OfficeCli.Handlers;
 
@@ -404,6 +405,30 @@ public partial class ExcelHandler
                 loc.Reference = newRef;
                 pivotPart.PivotTableDefinition!.Save();
             }
+        }
+
+        // 6j. threaded comments (Excel 365, separate WorksheetThreadedCommentsPart).
+        // Same storage model as legacy comments — per-cell <threadedComment ref="...">
+        // entries — and 6d already shifts the legacy shadow copies, so skipping the
+        // threaded part would leave the two anchors disagreeing after an insert or
+        // delete. Replies carry the same ref as their root, so dropping every entry
+        // whose cell is deleted removes the whole thread.
+        foreach (var threadedPart in worksheet.WorksheetThreadedCommentsParts)
+        {
+            if (threadedPart?.ThreadedComments == null) continue;
+            bool tcDirty = false;
+            foreach (var tc in threadedPart.ThreadedComments.Elements<ThreadedCmt.ThreadedComment>().ToList())
+            {
+                if (tc.Ref?.Value == null) continue;
+                var shifted = refMapper(tc.Ref.Value);
+                if (shifted == null) { tc.Remove(); tcDirty = true; }
+                else if (!string.Equals(shifted, tc.Ref.Value, StringComparison.Ordinal))
+                {
+                    tc.Ref = shifted;
+                    tcDirty = true;
+                }
+            }
+            if (tcDirty) threadedPart.ThreadedComments.Save();
         }
 
         // 7. cell formulas (text + shared/array ref attribute)
