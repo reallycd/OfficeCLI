@@ -167,6 +167,30 @@
       ],
       "readback": "string value",
       "enforcement": "report"
+    },
+    "rowBandSize": {
+      "type": "integer",
+      "description": "rows per band when a banded table style applies (<w:tblStyleRowBandSize> @w:val). Default 1; e.g. 2 stripes every second row.",
+      "add": true,
+      "set": false,
+      "get": true,
+      "examples": [
+        "--prop rowBandSize=2"
+      ],
+      "readback": "integer value",
+      "enforcement": "report"
+    },
+    "colBandSize": {
+      "type": "integer",
+      "description": "columns per band when a banded table style applies (<w:tblStyleColBandSize> @w:val). Default 1. Alias: columnBandSize.",
+      "add": true,
+      "set": false,
+      "get": true,
+      "examples": [
+        "--prop colBandSize=3"
+      ],
+      "readback": "integer value",
+      "enforcement": "report"
     }
   }
 }

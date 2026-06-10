@@ -252,6 +252,8 @@ public partial class WordHandler
             "style", "shd", "shading", "direction", "dir", "bidi",
             // CONSISTENCY(add-set-symmetry): mirror Set's tblPr-level cases.
             "overlap", "caption", "description",
+            // BUG-DUMP-R36-2: band stripe widths.
+            "rowbandsize", "colbandsize", "columnbandsize",
         };
         foreach (var (tk, tv) in properties)
         {
@@ -492,6 +494,21 @@ public partial class WordHandler
                     if (!string.IsNullOrEmpty(tv))
                         InsertTblPrChildInOrder(tblProps, new TableDescription { Val = tv });
                     break;
+                // BUG-DUMP-R36-2: tblStyleRowBandSize / tblStyleColBandSize —
+                // band stripe width (rows/cols per band) for banded table styles.
+                // Mirrors the Navigation readback; without these the emitter's
+                // `add table` carried rowBandSize/colBandSize but AddTable dropped
+                // them, flattening the visible striping. CONSISTENCY(add-set-symmetry).
+                case "rowbandsize":
+                    tblProps.RemoveAllChildren<TableStyleRowBandSize>();
+                    if (int.TryParse(tv, out var rbs))
+                        InsertTblPrChildInOrder(tblProps, new TableStyleRowBandSize { Val = rbs });
+                    break;
+                case "colbandsize" or "columnbandsize":
+                    tblProps.RemoveAllChildren<TableStyleColumnBandSize>();
+                    if (int.TryParse(tv, out var cbs))
+                        InsertTblPrChildInOrder(tblProps, new TableStyleColumnBandSize { Val = cbs });
+                    break;
                 // BUG-R4-02/08: tblLook props at Add time. Mirrors the Set.Element.cs
                 // tblLook switch — accepts lowercase + camelCase aliases as input.
                 // Without this, dump→batch round-trip silently lost firstRow etc.
@@ -550,6 +567,21 @@ public partial class WordHandler
                     LastAddUnsupportedProps.Add(tk);
                     break;
             }
+        }
+
+        // BUG-DUMP-R36-2: tblStyleRowBandSize / tblStyleColBandSize precede tblW
+        // in CT_TblPr (rank 4/5 < 6). When `width=` is processed AFTER the band
+        // keys in the (unordered) prop dict, the SDK's typed `.TableWidth` setter
+        // re-anchors tblW ahead of the already-inserted band elements, producing
+        // a schema-invalid order. Re-place the band elements through the
+        // order-aware inserter once all tblPr props are applied so they land in
+        // their canonical slot regardless of dict iteration order.
+        foreach (var bandEl in tblProps.ChildElements
+                     .Where(c => c is TableStyleRowBandSize or TableStyleColumnBandSize)
+                     .ToList())
+        {
+            bandEl.Remove();
+            InsertTblPrChildInOrder(tblProps, bandEl);
         }
 
         // Auto-RTL: when the user didn't pin direction explicitly and the

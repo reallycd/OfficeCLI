@@ -2654,6 +2654,25 @@ public partial class WordHandler
             // with empty string) must NOT surface as a "style" key.
             if (!string.IsNullOrEmpty(tp.TableStyle?.Val?.Value))
                 node.Format["style"] = tp.TableStyle.Val.Value!;
+            // BUG-DUMP-R36-2: tblStyleRowBandSize / tblStyleColBandSize control
+            // how many rows/cols make up one stripe when a banded table style
+            // applies (default 1). Previously dropped on round-trip — band size 2
+            // stripes every 2nd row instead of every row, a visible change.
+            // Walk children by local name rather than GetFirstChild<T>: in
+            // CT_TblPr these elements precede tblW, and real-world producers that
+            // emit them AFTER tblW make the strict SDK parser type them as
+            // OpenXmlUnknownElement (the typed accessor then returns null).
+            foreach (var tpChild in tp.ChildElements)
+            {
+                var ln = tpChild.LocalName;
+                if (ln is not ("tblStyleRowBandSize" or "tblStyleColBandSize")) continue;
+                string? valAttr = null;
+                foreach (var a in tpChild.GetAttributes())
+                    if (a.LocalName == "val") { valAttr = a.Value; break; }
+                if (!int.TryParse(valAttr, out var bandVal)) continue;
+                if (ln == "tblStyleRowBandSize") node.Format["rowBandSize"] = bandVal;
+                else node.Format["colBandSize"] = bandVal;
+            }
             // Table borders. `LeftBorder`/`RightBorder` only catch
             // <w:left>/<w:right>; bidi-aware sources use <w:start>/<w:end>
             // which the SDK does NOT alias onto Left/Right (the typed
