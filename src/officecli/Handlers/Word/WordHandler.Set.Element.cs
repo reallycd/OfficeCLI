@@ -1937,6 +1937,57 @@ public partial class WordHandler
         return value.Length == 12 ? value : value.PadRight(12, '0');
     }
 
+    // BUG-DUMP-R42-2: canonical CT_TrPr child order. Used to insert
+    // gridBefore/wBefore/gridAfter/wAfter at the right rank without disturbing
+    // the cnfStyle/cantSplit/trHeight/header/jc children the row setter also
+    // manages. Lower rank = earlier child.
+    private static int TrPrChildRank(OpenXmlElement e) => e switch
+    {
+        ConditionalFormatStyle => 0,
+        GridBefore => 1,
+        WidthBeforeTableRow => 2,
+        GridAfter => 3,
+        WidthAfterTableRow => 4,
+        _ => 100, // cantSplit / trHeight / tblHeader / jc / ins / del / trPrChange — after the skip group
+    };
+
+    private static void InsertTrPrChildInOrder(TableRowProperties trPr, OpenXmlElement child)
+    {
+        int rank = TrPrChildRank(child);
+        // Insert before the first existing child whose rank is strictly greater.
+        OpenXmlElement? anchor = null;
+        foreach (var existing in trPr.ChildElements)
+        {
+            if (TrPrChildRank(existing) > rank) { anchor = existing; break; }
+        }
+        if (anchor != null) trPr.InsertBefore(child, anchor);
+        else trPr.AppendChild(child);
+    }
+
+    // BUG-DUMP-R42-2: parse a row-skip preferred width (wBefore/wAfter) from the
+    // same unit-qualified form the reader emits (FormatTableWidth): "nil", "auto",
+    // "N%", or "{twips}dxa"/bare twips. Mirrors the cell tcW apply contract.
+    private static T BuildRowWidth<T>(string value, string keyName) where T : TableWidthType, new()
+    {
+        var w = new T();
+        if (string.Equals(value, "nil", StringComparison.OrdinalIgnoreCase))
+        { w.Width = "0"; w.Type = TableWidthUnitValues.Nil; }
+        else if (string.Equals(value, "auto", StringComparison.OrdinalIgnoreCase))
+        { w.Width = "0"; w.Type = TableWidthUnitValues.Auto; }
+        else if (value.EndsWith('%') &&
+                 double.TryParse(value.AsSpan(0, value.Length - 1),
+                     System.Globalization.NumberStyles.Float,
+                     System.Globalization.CultureInfo.InvariantCulture, out var pct))
+        { w.Width = ((int)Math.Round(pct * 50)).ToString(); w.Type = TableWidthUnitValues.Pct; }
+        else
+        {
+            var raw = value.EndsWith("dxa", StringComparison.OrdinalIgnoreCase) ? value[..^3] : value;
+            w.Width = ParseTwips(raw).ToString();
+            w.Type = TableWidthUnitValues.Dxa;
+        }
+        return w;
+    }
+
     private List<string> SetElementTableRow(TableRow row, Dictionary<string, string> properties)
     {
         var unsupported = new List<string>();
@@ -2036,6 +2087,30 @@ public partial class WordHandler
                         cnf.Val = cnfVal;
                     break;
                 }
+                // BUG-DUMP-R42-2: leading/trailing grid-column skips. CT_TrPr order
+                // is cnfStyle, gridBefore, wBefore, gridAfter, wAfter, cantSplit,
+                // trHeight, tblHeader, jc — insert each at its correct rank so the
+                // emitted trPr validates regardless of which other children exist.
+                case "gridbefore":
+                    trPr.RemoveAllChildren<GridBefore>();
+                    if (!string.IsNullOrEmpty(value))
+                        InsertTrPrChildInOrder(trPr, new GridBefore { Val = ParseHelpers.SafeParseInt(value, "gridBefore") });
+                    break;
+                case "gridafter":
+                    trPr.RemoveAllChildren<GridAfter>();
+                    if (!string.IsNullOrEmpty(value))
+                        InsertTrPrChildInOrder(trPr, new GridAfter { Val = ParseHelpers.SafeParseInt(value, "gridAfter") });
+                    break;
+                case "wbefore":
+                    trPr.RemoveAllChildren<WidthBeforeTableRow>();
+                    if (!string.IsNullOrEmpty(value))
+                        InsertTrPrChildInOrder(trPr, BuildRowWidth<WidthBeforeTableRow>(value, "wBefore"));
+                    break;
+                case "wafter":
+                    trPr.RemoveAllChildren<WidthAfterTableRow>();
+                    if (!string.IsNullOrEmpty(value))
+                        InsertTrPrChildInOrder(trPr, BuildRowWidth<WidthAfterTableRow>(value, "wAfter"));
+                    break;
                 case "rowalign":
                 {
                     // BUG-DUMP-R24-1: row-level <w:jc> (whole-row alignment) in

@@ -5015,6 +5015,46 @@ public partial class WordHandler
         var rowCnf = trPr.GetFirstChild<ConditionalFormatStyle>();
         if (rowCnf?.Val?.Value is string rowCnfVal && !string.IsNullOrEmpty(rowCnfVal))
             node.Format["cnfStyle"] = rowCnfVal;
+        // BUG-DUMP-R42-2: <w:gridBefore>/<w:gridAfter> (column-count skips) and
+        // their paired preferred widths <w:wBefore>/<w:wAfter> (CT_TrPr). A row
+        // skips N leading/trailing grid columns and reserves a preferred width
+        // for the skipped span — produces a ragged/indented table edge. Were
+        // previously unread, so dump→batch dropped the skip and collapsed the
+        // ragged edge into a full-width row. gridBefore/gridAfter carry an
+        // integer @w:val column count; wBefore/wAfter carry @w:w (twips) + @w:type
+        // (dxa/pct/auto/nil) — surfaced through the same unit-qualified width form
+        // the cell tcW reader emits (see FormatTableWidth) so the type round-trips
+        // losslessly. Add/Set grow matching cases (Add.Table.cs, Set.Element.cs).
+        var gridBefore = trPr.GetFirstChild<GridBefore>();
+        if (gridBefore?.Val?.Value is { } gbVal)
+            node.Format["gridBefore"] = gbVal.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var wBefore = trPr.GetFirstChild<WidthBeforeTableRow>();
+        if (wBefore != null && FormatTableWidth(wBefore.Width, wBefore.Type?.Value) is { } wBeforeStr)
+            node.Format["wBefore"] = wBeforeStr;
+        var gridAfter = trPr.GetFirstChild<GridAfter>();
+        if (gridAfter?.Val?.Value is { } gaVal)
+            node.Format["gridAfter"] = gaVal.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var wAfter = trPr.GetFirstChild<WidthAfterTableRow>();
+        if (wAfter != null && FormatTableWidth(wAfter.Width, wAfter.Type?.Value) is { } wAfterStr)
+            node.Format["wAfter"] = wAfterStr;
+    }
+
+    // BUG-DUMP-R42-2 / BUG-DUMP-R42-6: shared width readback for OOXML
+    // CT_TblWidth-shaped elements (tcW / wBefore / wAfter). Mirrors the cell
+    // tcW reader: pct stored as fifths-of-percent ('N%'), auto/nil round-trip
+    // as their bare type names, dxa as '{twips}dxa'. nil is a DISTINCT value
+    // from '0dxa' ("no preferred width" vs "1-twip explicit") — returning the
+    // literal "nil" keeps BUG-DUMP-R42-6's nil cell width from collapsing to
+    // dxa. Returns null when @w:w can't be parsed and the type isn't auto/nil.
+    private static string? FormatTableWidth(StringValue? rawWidth, TableWidthUnitValues? type)
+    {
+        if (type == TableWidthUnitValues.Nil) return "nil";
+        if (type == TableWidthUnitValues.Auto) return "auto";
+        var w = SafeWidth(rawWidth);
+        if (w is not int twips) return null;
+        if (type == TableWidthUnitValues.Pct)
+            return (twips / 50) + "%";
+        return twips.ToString(System.Globalization.CultureInfo.InvariantCulture) + "dxa";
     }
 
     private static void ReadCellProps(TableCell cell, DocumentNode node)

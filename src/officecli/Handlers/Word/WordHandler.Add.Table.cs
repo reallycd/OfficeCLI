@@ -839,6 +839,48 @@ public partial class WordHandler
             }
         }
 
+        // BUG-DUMP-R42-2: leading/trailing grid-column skips + their preferred
+        // widths (ragged/indented table edge). CONSISTENCY(add-set-symmetry):
+        // mirrors SetElementTableRow's gridBefore/wBefore/gridAfter/wAfter cases.
+        // Use InsertTrPrChildInOrder so each lands at its CT_TrPr rank regardless
+        // of which other trPr children already exist.
+        if (properties.TryGetValue("gridBefore", out var gridBeforeVal)
+            || properties.TryGetValue("gridbefore", out gridBeforeVal))
+        {
+            if (!string.IsNullOrEmpty(gridBeforeVal))
+            {
+                newRowProps ??= newRow.AppendChild(new TableRowProperties());
+                InsertTrPrChildInOrder(newRowProps, new GridBefore { Val = ParseHelpers.SafeParseInt(gridBeforeVal, "gridBefore") });
+            }
+        }
+        if (properties.TryGetValue("wBefore", out var wBeforeVal)
+            || properties.TryGetValue("wbefore", out wBeforeVal))
+        {
+            if (!string.IsNullOrEmpty(wBeforeVal))
+            {
+                newRowProps ??= newRow.AppendChild(new TableRowProperties());
+                InsertTrPrChildInOrder(newRowProps, BuildRowWidth<WidthBeforeTableRow>(wBeforeVal, "wBefore"));
+            }
+        }
+        if (properties.TryGetValue("gridAfter", out var gridAfterVal)
+            || properties.TryGetValue("gridafter", out gridAfterVal))
+        {
+            if (!string.IsNullOrEmpty(gridAfterVal))
+            {
+                newRowProps ??= newRow.AppendChild(new TableRowProperties());
+                InsertTrPrChildInOrder(newRowProps, new GridAfter { Val = ParseHelpers.SafeParseInt(gridAfterVal, "gridAfter") });
+            }
+        }
+        if (properties.TryGetValue("wAfter", out var wAfterVal)
+            || properties.TryGetValue("wafter", out wAfterVal))
+        {
+            if (!string.IsNullOrEmpty(wAfterVal))
+            {
+                newRowProps ??= newRow.AppendChild(new TableRowProperties());
+                InsertTrPrChildInOrder(newRowProps, BuildRowWidth<WidthAfterTableRow>(wAfterVal, "wAfter"));
+            }
+        }
+
         // BUG-DUMP-R24-4: per-row <w:tblPrEx> (table property exceptions),
         // verbatim element captured by Navigation.ReadRowProps. Insert as the
         // row's FIRST child (CT_Row order: tblPrEx?, trPr?, cells).

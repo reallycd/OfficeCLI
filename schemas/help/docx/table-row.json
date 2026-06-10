@@ -65,6 +65,54 @@
       ],
       "readback": "12-digit binary bitmask string",
       "enforcement": "report"
+    },
+    "gridBefore": {
+      "type": "int",
+      "description": "number of leading grid columns this row skips (w:gridBefore @val). Pairs with wBefore (the preferred width reserved for the skipped span) to indent the row's left edge — produces a ragged/indented table edge.",
+      "add": true,
+      "set": true,
+      "get": true,
+      "examples": [
+        "--prop gridBefore=2"
+      ],
+      "readback": "integer column count",
+      "enforcement": "report"
+    },
+    "wBefore": {
+      "type": "string",
+      "description": "preferred width of the leading skipped-column span (w:wBefore w:w/w:type). Same unit-qualified form as cell width: 'Ndxa', 'N%', 'auto', or 'nil'.",
+      "add": true,
+      "set": true,
+      "get": true,
+      "examples": [
+        "--prop wBefore=100dxa"
+      ],
+      "readback": "'Ndxa' | 'N%' | 'auto' | 'nil'",
+      "enforcement": "report"
+    },
+    "gridAfter": {
+      "type": "int",
+      "description": "number of trailing grid columns this row skips (w:gridAfter @val). Pairs with wAfter (the preferred width reserved for the skipped span) to shorten the row's right edge — produces a ragged/indented table edge.",
+      "add": true,
+      "set": true,
+      "get": true,
+      "examples": [
+        "--prop gridAfter=1"
+      ],
+      "readback": "integer column count",
+      "enforcement": "report"
+    },
+    "wAfter": {
+      "type": "string",
+      "description": "preferred width of the trailing skipped-column span (w:wAfter w:w/w:type). Same unit-qualified form as cell width: 'Ndxa', 'N%', 'auto', or 'nil'.",
+      "add": true,
+      "set": true,
+      "get": true,
+      "examples": [
+        "--prop wAfter=14dxa"
+      ],
+      "readback": "'Ndxa' | 'N%' | 'auto' | 'nil'",
+      "enforcement": "report"
     }
   }
 }

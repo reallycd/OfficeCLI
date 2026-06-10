@@ -829,6 +829,10 @@ public static partial class WordBatchEmitter
         "rowAlign",
         // BUG-DUMP-R24-4: per-row <w:tblPrEx> overrides (verbatim element).
         "tblPrEx",
+        // BUG-DUMP-R42-2: leading/trailing grid-column skips + their preferred
+        // widths (ragged/indented table edge). Carried through `set tr` so
+        // SetElementTableRow re-emits <w:gridBefore>/<w:wBefore>/<w:gridAfter>/<w:wAfter>.
+        "gridBefore", "wBefore", "gridAfter", "wAfter",
     };
 
     /// <summary>Read a string-valued key from a DocumentNode.Format dict
