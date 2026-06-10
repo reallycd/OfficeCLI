@@ -1051,12 +1051,10 @@ public partial class WordHandler
             // AddParagraph's pPrChange block at end-of-function.
             if (key.StartsWith("revision.", StringComparison.OrdinalIgnoreCase))
                 continue;
-            // paraMarkDel.* — consumed by AddParagraph's paraMarkDel block at
-            // end-of-function (mirrors paraMarkIns.* on the Get side, which
-            // BatchEmitter rewrites into bare revision.author + ins path).
-            // paraMarkIns.* is unused inside AddParagraph (BatchEmitter
-            // converts it before invoking add p), but allowlist it too so a
-            // user passing it directly doesn't trip UNSUPPORTED.
+            // paraMarkDel.* / paraMarkIns.* — consumed by AddParagraph's
+            // paraMarkDel / paraMarkIns blocks at end-of-function (BUG-DUMP-R44-6:
+            // paraMarkIns is now a mark-only stamp here, no longer rewritten to a
+            // bare revision.author content-insertion by the emitter).
             if (key.StartsWith("paraMarkDel.", StringComparison.OrdinalIgnoreCase)
                 || key.StartsWith("paramarkdel.", StringComparison.OrdinalIgnoreCase)
                 || key.StartsWith("paraMarkIns.", StringComparison.OrdinalIgnoreCase)
@@ -1329,6 +1327,40 @@ public partial class WordHandler
                     para.ReplaceChild(ins, r);
                     ins.AppendChild(r);
                 }
+            }
+        }
+        // BUG-DUMP-R44-6: paraMarkIns: <w:pPr><w:rPr><w:ins .../></w:rPr></w:pPr>
+        // — paragraph-MARK insertion revision (only the pilcrow is a tracked
+        // insertion; the run text is plain). Distinct from a content insertion
+        // (<w:ins> wrapping runs) handled by the bare-attribution branch above.
+        // The dump emits a paraMarkIns.* namespace (mirrors paraMarkDel.*); stamp
+        // the mark rPr ONLY and never wrap the runs, so plain run text is not
+        // promoted to a tracked insertion. Symmetric with the paraMarkDel block.
+        string? pmiAuthor = null, pmiDate = null, pmiId = null;
+        bool hasPmiNs = properties.TryGetValue("paraMarkIns.author", out pmiAuthor);
+        hasPmiNs |= properties.TryGetValue("paraMarkIns.date", out pmiDate);
+        hasPmiNs |= properties.TryGetValue("paraMarkIns.id", out pmiId);
+        if (hasPmiNs)
+        {
+            var author = string.IsNullOrEmpty(pmiAuthor) ? "OfficeCLI" : pmiAuthor!;
+            // BUG-R4F-03: RoundtripKind keeps a …Z date in Utc for byte-identical
+            // round-trip (see the bare-attribution branch above).
+            DateTime date = !string.IsNullOrEmpty(pmiDate)
+                && DateTime.TryParse(pmiDate, null, System.Globalization.DateTimeStyles.RoundtripKind, out var hd3)
+                ? hd3 : DateTime.UtcNow;
+            // CONSISTENCY(pmrp-append): append the mark rPr (lands after pStyle);
+            // prepend the <w:ins> inside the rPr (CT_ParaRPr ins/del/move group
+            // leads). Mirrors the paraMarkDel block below.
+            var pMarkRPr3 = pProps.ParagraphMarkRunProperties
+                          ?? pProps.AppendChild(new ParagraphMarkRunProperties());
+            if (pMarkRPr3.GetFirstChild<Inserted>() == null)
+            {
+                pMarkRPr3.PrependChild(new Inserted
+                {
+                    Author = author,
+                    Date = date,
+                    Id = !string.IsNullOrEmpty(pmiId) ? pmiId : GenerateRevisionId(),
+                });
             }
         }
         // paraMarkDel: <w:pPr><w:rPr><w:del .../></w:rPr></w:pPr> — paragraph-

@@ -38,32 +38,20 @@ public static partial class WordBatchEmitter
         if (TryEmitTextboxOnlyParagraph(word, pNode, parentPath, autoPresent, items, ctx)) return;
 
         var props = FilterEmittableProps(pNode.Format);
-        // paraMarkIns.* → AddParagraph's bare trackChange.author/date form.
-        // A bare trackChange.author (no `trackChange=<kind>` literal) on
-        // `add p` produces both <w:pPr><w:rPr><w:ins/></w:rPr></w:pPr> and
-        // wraps each auto-created content run in <w:ins>. We pass NO `text=`
-        // here so step 1 only stamps the paragraph mark; subsequent `add r`
-        // steps (which already carry their own trackChange=ins) wrap the
-        // content. Guarded against clashing with a sibling pPrChange — if
-        // both surface, paraMarkIns wins (its absence on round-trip is more
-        // visually obvious in Word's revision UI).
-        if (props.Remove("paraMarkIns.author", out var pmiAuthor))
-        {
-            props["revision.author"] = pmiAuthor;
-            // Strip revision.type=format / revision.date from a sibling pPrChange
-            // so the bare-attribution path on AddParagraph fires instead of the
-            // pPrChange path. pPrChange round-trip on paragraphs that are
-            // ALSO newly inserted is a corner case we accept losing for now
-            // (rare in practice; pPrChange semantics overlap with paraMarkIns
-            // on a fresh paragraph anyway).
-            props.Remove("revision.type");
-        }
-        if (props.Remove("paraMarkIns.date", out var pmiDate))
-        {
-            if (!props.ContainsKey("revision.date"))
-                props["revision.date"] = pmiDate;
-        }
-        props.Remove("paraMarkIns.id");
+        // BUG-DUMP-R44-6: paraMarkIns.* must round-trip as a MARK-ONLY tracked
+        // insertion — <w:pPr><w:rPr><w:ins/></w:rPr></w:pPr> on the pilcrow
+        // ALONE — never as a content insertion that wraps the (plain) run text.
+        // The former path here rewrote paraMarkIns.* into a bare revision.author
+        // (no revision.type); AddParagraph's bare-attribution branch treats that
+        // as "this whole paragraph was inserted" and wraps every auto-created
+        // <w:r> in <w:ins>, promoting plain run text to a tracked insertion it
+        // never was (Reject Changes would then delete text the source keeps).
+        // Pass the paraMarkIns.* keys through verbatim instead — AddParagraph's
+        // dedicated paraMarkIns block stamps the mark rPr only, exactly mirroring
+        // the paraMarkDel.* handling just below. A genuine run/paragraph content
+        // insertion still arrives as revision.type=ins on the run/paragraph and
+        // wraps correctly (unaffected by this branch).
+        // (No remove here — let paraMarkIns.* pass through to AddParagraph.)
         // BUG-DUMP-R43-8: pPrChange's PreviousParagraphProperties snapshot now
         // round-trips verbatim via revision.beforeXml (set by the pPrChange
         // readback in Navigation.cs and consumed by AddParagraph). The former
