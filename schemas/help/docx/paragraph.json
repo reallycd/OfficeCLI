@@ -111,6 +111,36 @@
       "readback": "unit-qualified, e.g. \"6pt\"",
       "enforcement": "strict"
     },
+    "spaceBeforeAuto": {
+      "type": "boolean",
+      "aliases": [
+        "beforeAutospacing"
+      ],
+      "add": true,
+      "set": true,
+      "get": true,
+      "description": "w:spacing @beforeAutospacing — Word's 'automatic spacing between paragraphs of the same style' toggle for the space BEFORE the paragraph. Surfaced on get only when present.",
+      "examples": [
+        "--prop spaceBeforeAuto=true"
+      ],
+      "readback": "true|false",
+      "enforcement": "report"
+    },
+    "spaceAfterAuto": {
+      "type": "boolean",
+      "aliases": [
+        "afterAutospacing"
+      ],
+      "add": true,
+      "set": true,
+      "get": true,
+      "description": "w:spacing @afterAutospacing — automatic spacing toggle for the space AFTER the paragraph. See spaceBeforeAuto.",
+      "examples": [
+        "--prop spaceAfterAuto=true"
+      ],
+      "readback": "true|false",
+      "enforcement": "report"
+    },
     "listStyle": {
       "type": "enum",
       "values": [

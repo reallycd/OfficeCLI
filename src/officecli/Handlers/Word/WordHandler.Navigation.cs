@@ -3577,6 +3577,20 @@ public partial class WordHandler
                 {
                     node.Format["spaceAfterLines"] = pProps.SpacingBetweenLines.AfterLines.Value;
                 }
+                // BUG-DUMP-R44-4: the auto-spacing on/off toggles
+                // (w:beforeAutospacing / w:afterAutospacing — Word's "automatic
+                // spacing between paragraphs of the same style") were never read
+                // back, so dump→batch silently dropped them. Emit as bool toggles
+                // under spaceBeforeAuto / spaceAfterAuto (canonical, matching the
+                // spaceBefore* key family).
+                if (pProps.SpacingBetweenLines.BeforeAutoSpacing?.Value != null)
+                {
+                    node.Format["spaceBeforeAuto"] = pProps.SpacingBetweenLines.BeforeAutoSpacing.Value;
+                }
+                if (pProps.SpacingBetweenLines.AfterAutoSpacing?.Value != null)
+                {
+                    node.Format["spaceAfterAuto"] = pProps.SpacingBetweenLines.AfterAutoSpacing.Value;
+                }
             }
             if (pProps.Indentation != null)
             {

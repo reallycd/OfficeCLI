@@ -1107,6 +1107,17 @@ public partial class WordHandler
                 spacingBL.BeforeLines = ParseHelpers.SafeParseInt(value, "spaceBeforeLines");
                 spacingBL.Before = null;
                 return true;
+            // BUG-DUMP-R44-4: auto-spacing on/off toggles (w:beforeAutospacing /
+            // w:afterAutospacing). Mirror AddParagraph; round-trips the bool the
+            // readback emits as spaceBeforeAuto / spaceAfterAuto.
+            case "spacebeforeauto" or "beforeautospacing":
+                var spacingBA = pProps.SpacingBetweenLines ?? (pProps.SpacingBetweenLines = new SpacingBetweenLines());
+                spacingBA.BeforeAutoSpacing = OnOffValue.FromBoolean(IsTruthy(value));
+                return true;
+            case "spaceafterauto" or "afterautospacing":
+                var spacingAA = pProps.SpacingBetweenLines ?? (pProps.SpacingBetweenLines = new SpacingBetweenLines());
+                spacingAA.AfterAutoSpacing = OnOffValue.FromBoolean(IsTruthy(value));
+                return true;
             case "spaceafterlines":
                 var spacingAL = pProps.SpacingBetweenLines ?? (pProps.SpacingBetweenLines = new SpacingBetweenLines());
                 spacingAL.AfterLines = ParseHelpers.SafeParseInt(value, "spaceAfterLines");

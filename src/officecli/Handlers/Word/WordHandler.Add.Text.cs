@@ -310,6 +310,21 @@ public partial class WordHandler
             var spacing = pProps.SpacingBetweenLines ?? (pProps.SpacingBetweenLines = new SpacingBetweenLines());
             spacing.AfterLines = ParseHelpers.SafeParseInt(sal4, "spaceAfterLines");
         }
+        // BUG-DUMP-R44-4: auto-spacing on/off toggles (w:beforeAutospacing /
+        // w:afterAutospacing). Round-trips the bool toggle the readback emits as
+        // spaceBeforeAuto / spaceAfterAuto.
+        if (properties.TryGetValue("spacebeforeauto", out var sba4) || properties.TryGetValue("spaceBeforeAuto", out sba4)
+            || properties.TryGetValue("beforeautospacing", out sba4))
+        {
+            var spacing = pProps.SpacingBetweenLines ?? (pProps.SpacingBetweenLines = new SpacingBetweenLines());
+            spacing.BeforeAutoSpacing = OnOffValue.FromBoolean(IsTruthy(sba4));
+        }
+        if (properties.TryGetValue("spaceafterauto", out var saa4) || properties.TryGetValue("spaceAfterAuto", out saa4)
+            || properties.TryGetValue("afterautospacing", out saa4))
+        {
+            var spacing = pProps.SpacingBetweenLines ?? (pProps.SpacingBetweenLines = new SpacingBetweenLines());
+            spacing.AfterAutoSpacing = OnOffValue.FromBoolean(IsTruthy(saa4));
+        }
         if (properties.TryGetValue("linespacing", out var ls4) || properties.TryGetValue("lineSpacing", out ls4))
         {
             var spacing = pProps.SpacingBetweenLines ?? (pProps.SpacingBetweenLines = new SpacingBetweenLines());
