@@ -4014,6 +4014,17 @@ public partial class WordHandler
             var pmSpacing = pmrpForDump.GetFirstChild<Spacing>();
             if (pmSpacing?.Val?.HasValue == true)
                 node.Format["markRPr.charSpacing"] = $"{pmSpacing.Val.Value / 20.0:0.##}pt";
+            // BUG-DUMP-R41-3: ¶-mark vertical position (<w:pPr><w:rPr><w:position
+            // w:val="-10"/>). The run-level <w:position> already round-trips (see
+            // RunToNode → Format["position"]); the markRPr whitelist surfaced
+            // size/color/kern/charSpacing/… but never <w:position>, so a paragraph
+            // mark's raise/lower was silently dropped on the dump → batch round-trip.
+            // Emit the raw half-point val under markRPr.position; the general
+            // markRPr.* dispatch routes it through ApplyRunFormatting's "position"
+            // case on replay (Add.Text.cs), mirroring the run-level readback.
+            var pmPos = pmrpForDump.GetFirstChild<Position>();
+            if (pmPos?.Val?.Value is string pmPosVal && !string.IsNullOrEmpty(pmPosVal))
+                node.Format["markRPr.position"] = pmPosVal;
             var hl = pmrpForDump.GetFirstChild<Highlight>();
             if (hl?.Val?.HasValue == true) node.Format["markRPr.highlight"] = hl.Val.InnerText;
             // BUG-DUMP-R27-1: ¶-mark character shading (<w:pPr><w:rPr><w:shd/>).
