@@ -1348,6 +1348,34 @@ public static partial class WordBatchEmitter
         {
             noteProps["style"] = noteStyle.ToString()!;
         }
+        // BUG-DUMP-R42-1: capture the ref-mark run's char-style link. Word's
+        // note ref mark carries <w:rStyle w:val="FootnoteReference"/> (or
+        // "EndnoteReference"), linking it to the style in styles.xml that
+        // defines the superscript appearance. AddFootnote/AddEndnote used to
+        // hardcode an inline <w:vertAlign w:val="superscript"/> instead,
+        // severing the style link (style still in styles.xml, run no longer
+        // references it). Forward the source rStyle so AddFootnote/AddEndnote
+        // restores it; when the source mark had no rStyle, leave the prop unset
+        // and AddFootnote/AddEndnote falls back to the inline superscript.
+        if (bodyParas.Count > 0)
+        {
+            var refMarkRun = bodyParas[0].Children.FirstOrDefault(c =>
+                (c.Type == "run" || c.Type == "r")
+                && string.IsNullOrEmpty(c.Text)
+                && (word.GetElementXml(c.Path)?.Contains("footnoteRef", StringComparison.Ordinal) == true
+                    || word.GetElementXml(c.Path)?.Contains("endnoteRef", StringComparison.Ordinal) == true));
+            if (refMarkRun != null)
+            {
+                var refRaw = word.GetElementXml(refMarkRun.Path);
+                if (!string.IsNullOrEmpty(refRaw))
+                {
+                    var rsMatch = System.Text.RegularExpressions.Regex.Match(
+                        refRaw, "<w:rStyle\\s+w:val=\"([^\"]*)\"");
+                    if (rsMatch.Success && !string.IsNullOrEmpty(rsMatch.Groups[1].Value))
+                        noteProps["referenceStyle"] = rsMatch.Groups[1].Value;
+                }
+            }
+        }
         if (firstParaRuns.Count > 0)
         {
             var firstRun = firstParaRuns[0];

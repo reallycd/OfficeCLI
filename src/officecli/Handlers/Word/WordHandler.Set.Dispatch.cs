@@ -592,6 +592,11 @@ public partial class WordHandler
         foreach (var (key, value) in properties)
         {
             if (key.Equals("text", StringComparison.OrdinalIgnoreCase)) continue;
+            // BUG-DUMP-R42-1: `referenceStyle` is consumed at note-creation time
+            // (AddFootnote/AddEndnote stamps it as the ref-mark run's <w:rStyle>).
+            // It is not a paragraph/run format key, so skip it here rather than
+            // reporting it as unsupported.
+            if (key.Equals("referenceStyle", StringComparison.OrdinalIgnoreCase)) continue;
             if (ApplyParagraphLevelProperty(pProps, key, value)) continue;
             bool runApplied = false;
             foreach (var run in contentRuns)

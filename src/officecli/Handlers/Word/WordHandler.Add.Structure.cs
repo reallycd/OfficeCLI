@@ -534,12 +534,20 @@ public partial class WordHandler
             .Select(f => f.Id!.Value)
             .DefaultIfEmpty(0).Max() + 1);
 
+        // BUG-DUMP-R42-1: the ref-mark run links to a char style
+        // (FootnoteReference) via <w:rStyle> in real Word docs. When the dump
+        // carried that source style as `referenceStyle`, restore the rStyle
+        // link instead of inlining a hardcoded vertAlign superscript (which
+        // severs the style link). With no referenceStyle, keep the legacy
+        // inline superscript.
+        var fnRefMarkRPr = properties.TryGetValue("referenceStyle", out var fnRefStyle)
+                && !string.IsNullOrEmpty(fnRefStyle)
+            ? new RunProperties(new RunStyle { Val = fnRefStyle })
+            : new RunProperties(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript });
         var footnote = new Footnote { Id = fnId };
         var fnContentPara = new Paragraph(
             new ParagraphProperties(new ParagraphStyleId { Val = "FootnoteText" }),
-            new Run(
-                new RunProperties(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript }),
-                new FootnoteReferenceMark()),
+            new Run(fnRefMarkRPr, new FootnoteReferenceMark()),
             new Run(new Text(" " + fnText) { Space = SpaceProcessingModeValues.Preserve })
         );
         footnote.AppendChild(fnContentPara);
@@ -589,12 +597,17 @@ public partial class WordHandler
             .Select(e => e.Id!.Value)
             .DefaultIfEmpty(0).Max() + 1);
 
+        // BUG-DUMP-R42-1: mirror AddFootnote — restore the EndnoteReference
+        // char-style link from the carried `referenceStyle` prop, else fall
+        // back to the inline vertAlign superscript.
+        var enRefMarkRPr = properties.TryGetValue("referenceStyle", out var enRefStyle)
+                && !string.IsNullOrEmpty(enRefStyle)
+            ? new RunProperties(new RunStyle { Val = enRefStyle })
+            : new RunProperties(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript });
         var endnote = new Endnote { Id = enId };
         var enContentPara = new Paragraph(
             new ParagraphProperties(new ParagraphStyleId { Val = "EndnoteText" }),
-            new Run(
-                new RunProperties(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript }),
-                new EndnoteReferenceMark()),
+            new Run(enRefMarkRPr, new EndnoteReferenceMark()),
             new Run(new Text(" " + enText) { Space = SpaceProcessingModeValues.Preserve })
         );
         endnote.AppendChild(enContentPara);
