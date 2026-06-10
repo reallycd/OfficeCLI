@@ -150,7 +150,10 @@ public partial class PowerPointHandler
         }
         else if (parsedOutline != null && parsedOutline.Value.dashType == "solid")
         {
-            styles.Add($"border:{parsedOutline.Value.widthPt:0.##}pt solid {parsedOutline.Value.color}");
+            // Compound line (cmpd=dbl/thickThin/thinThick/tri) draws multiple parallel
+            // lines; CSS `double` renders two parallel lines when border-width >= ~3px.
+            var solidStyle = parsedOutline.Value.cmpd != "sng" ? "double" : "solid";
+            styles.Add($"border:{parsedOutline.Value.widthPt:0.##}pt {solidStyle} {parsedOutline.Value.color}");
         }
         // Non-solid outlines rendered as SVG after the shape div
 
@@ -383,14 +386,15 @@ public partial class PowerPointHandler
             // Border layer for clip-path shapes: always use SVG polygon stroke
             if (parsedOutline != null && clipPathCss.StartsWith("clip-path:polygon("))
             {
-                var (bw, dt, bc) = parsedOutline.Value;
+                var (bw, dt, bc, cap, _) = parsedOutline.Value;
                 var polyStr = clipPathCss["clip-path:polygon(".Length..^1];
                 var svgPoints = polyStr.Replace("%", "");
                 var dashArr = DashTypeToSvgDasharray(dt, bw);
                 var dashAttr = !string.IsNullOrEmpty(dashArr) ? $" stroke-dasharray=\"{dashArr}\"" : "";
+                var linecap = CapToSvgLinecap(cap);
                 var safeColor = CssSanitizeColor(bc);
                 sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\">");
-                sb.Append($"<polygon points=\"{svgPoints}\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" vector-effect=\"non-scaling-stroke\" stroke-linecap=\"butt\"{dashAttr}/>");
+                sb.Append($"<polygon points=\"{svgPoints}\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" vector-effect=\"non-scaling-stroke\" stroke-linecap=\"{linecap}\"{dashAttr}/>");
                 sb.Append("</svg>");
             }
         }
@@ -446,9 +450,10 @@ public partial class PowerPointHandler
         // SVG border overlay for non-solid outlines (dashed, dotted, dashDot etc.)
         if (parsedOutline != null && parsedOutline.Value.dashType != "solid")
         {
-            var (bw, dt, bc) = parsedOutline.Value;
+            var (bw, dt, bc, cap, _) = parsedOutline.Value;
             var dashArr = DashTypeToSvgDasharray(dt, bw);
             var dashAttr = !string.IsNullOrEmpty(dashArr) ? $" stroke-dasharray=\"{dashArr}\"" : "";
+            var linecap = CapToSvgLinecap(cap);
             var safeColor = CssSanitizeColor(bc);
 
             if (!string.IsNullOrEmpty(clipPathCss) && clipPathCss.StartsWith("clip-path:polygon("))
@@ -457,7 +462,7 @@ public partial class PowerPointHandler
                 var polyStr = clipPathCss["clip-path:polygon(".Length..^1];
                 var svgPoints = polyStr.Replace("%", "");
                 sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\">");
-                sb.Append($"<polygon points=\"{svgPoints}\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" vector-effect=\"non-scaling-stroke\" stroke-linecap=\"butt\"{dashAttr}/>");
+                sb.Append($"<polygon points=\"{svgPoints}\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" vector-effect=\"non-scaling-stroke\" stroke-linecap=\"{linecap}\"{dashAttr}/>");
                 sb.Append("</svg>");
             }
             else if (!string.IsNullOrEmpty(borderRadiusCss))
@@ -466,7 +471,7 @@ public partial class PowerPointHandler
                 var rxMatch = System.Text.RegularExpressions.Regex.Match(borderRadiusCss, @"border-radius:([\d.]+)");
                 var rx = rxMatch.Success ? rxMatch.Groups[1].Value : "0";
                 sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\">");
-                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" rx=\"{rx}\" ry=\"{rx}\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"butt\"{dashAttr}/>");
+                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" rx=\"{rx}\" ry=\"{rx}\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"{linecap}\"{dashAttr}/>");
                 sb.Append("</svg>");
             }
             else if (presetGeom?.Preset?.InnerText == "ellipse")
@@ -474,7 +479,7 @@ public partial class PowerPointHandler
                 // Ellipse — size in pt so stroke-width matches CSS border path.
                 // CONSISTENCY(shape-stroke-unit): keep stroke-width in pt across solid/non-solid paths.
                 sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\">");
-                sb.Append($"<ellipse cx=\"50%\" cy=\"50%\" rx=\"calc(50% - {bw / 2:0.##}pt)\" ry=\"calc(50% - {bw / 2:0.##}pt)\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"butt\"{dashAttr}/>");
+                sb.Append($"<ellipse cx=\"50%\" cy=\"50%\" rx=\"calc(50% - {bw / 2:0.##}pt)\" ry=\"calc(50% - {bw / 2:0.##}pt)\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"{linecap}\"{dashAttr}/>");
                 sb.Append("</svg>");
             }
             else
@@ -484,7 +489,7 @@ public partial class PowerPointHandler
                 // sits entirely inside the content box (box-sizing:border-box equivalent).
                 // CONSISTENCY(shape-stroke-unit): keep stroke-width in pt across solid/non-solid paths.
                 sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\">");
-                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"butt\"{dashAttr}/>");
+                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"{linecap}\"{dashAttr}/>");
                 sb.Append("</svg>");
             }
         }
@@ -989,11 +994,15 @@ public partial class PowerPointHandler
             : themeColors.TryGetValue("dk1", out var dkc) ? $"#{dkc}" : "#000000";
         var lineColor = defaultLineColor;
         var lineWidth = 1.0;
+        var lineCap = "flat";
+        var lineCmpd = "sng";
         if (outline != null)
         {
             var c = ResolveFillColor(outline.GetFirstChild<Drawing.SolidFill>(), themeColors);
             if (c != null) lineColor = c;
             if (outline.Width?.HasValue == true) lineWidth = outline.Width.Value / EmuConverter.EmuPerPointF;
+            if (outline.CapType?.HasValue == true) lineCap = outline.CapType.InnerText ?? "flat";
+            if (outline.CompoundLineType?.HasValue == true) lineCmpd = outline.CompoundLineType.InnerText ?? "sng";
         }
 
         // Ensure minimum dimensions so the line is visible
@@ -1110,8 +1119,18 @@ public partial class PowerPointHandler
             preset = "straightConnector1";
         }
 
+        // Line cap (rnd→round pill dash ends, sq→square, flat→butt) applies to the stroke.
+        var linecapAttr = $" stroke-linecap=\"{CapToSvgLinecap(lineCap)}\"";
         // CONSISTENCY(shape-stroke-unit): stroke-width in pt matches CSS border path (see R3 fix).
-        var strokeAttrs = $"stroke=\"{safeColor}\" stroke-width=\"{lineWidth:0.##}pt\" fill=\"none\"{dashAttr}{markerStartAttr}{markerEndAttr}";
+        var strokeAttrs = $"stroke=\"{safeColor}\" stroke-width=\"{lineWidth:0.##}pt\" fill=\"none\"{linecapAttr}{dashAttr}{markerStartAttr}{markerEndAttr}";
+        // Compound line (cmpd=dbl/thickThin/thinThick/tri): SVG strokes are a single path,
+        // so we approximate "two parallel lines" by overlaying a thinner transparent-gap
+        // stroke down the center of the full-width stroke. This splits the visible stroke
+        // into two parallel runs without computing offset geometry.
+        var isCompound = lineCmpd != "sng";
+        var compoundGapAttrs = isCompound
+            ? $"stroke=\"transparent\" stroke-width=\"{lineWidth / 3.0:0.##}pt\" fill=\"none\"{linecapAttr}"
+            : "";
 
         var dataPathAttr = string.IsNullOrEmpty(dataPath) ? "" : $" data-path=\"{HtmlEncode(dataPath)}\"";
         // CONSISTENCY(shape-rotation): connectors use the same Transform2D.Rotation
@@ -1140,6 +1159,8 @@ public partial class PowerPointHandler
             if (!string.IsNullOrEmpty(markerDefs))
                 sb.AppendLine($"        {markerDefs}");
             sb.AppendLine($"        <polyline points=\"{points}\" {strokeAttrs}/>");
+            if (isCompound)
+                sb.AppendLine($"        <polyline points=\"{points}\" {compoundGapAttrs}/>");
             sb.AppendLine("      </svg>");
         }
         else if (preset.StartsWith("curvedConnector", StringComparison.Ordinal))
@@ -1156,6 +1177,8 @@ public partial class PowerPointHandler
             if (!string.IsNullOrEmpty(markerDefs))
                 sb.AppendLine($"        {markerDefs}");
             sb.AppendLine($"        <path d=\"{d}\" {strokeAttrs}/>");
+            if (isCompound)
+                sb.AppendLine($"        <path d=\"{d}\" {compoundGapAttrs}/>");
             sb.AppendLine("      </svg>");
         }
         else
@@ -1164,6 +1187,8 @@ public partial class PowerPointHandler
             if (!string.IsNullOrEmpty(markerDefs))
                 sb.AppendLine($"        {markerDefs}");
             sb.AppendLine($"        <line x1=\"{svgX1}\" y1=\"{svgY1}\" x2=\"{svgX2}\" y2=\"{svgY2}\" {strokeAttrs}/>");
+            if (isCompound)
+                sb.AppendLine($"        <line x1=\"{svgX1}\" y1=\"{svgY1}\" x2=\"{svgX2}\" y2=\"{svgY2}\" {compoundGapAttrs}/>");
             sb.AppendLine("      </svg>");
         }
         sb.AppendLine("    </div>");

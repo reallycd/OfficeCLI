@@ -354,7 +354,7 @@ public partial class PowerPointHandler
     /// <summary>
     /// Parse outline into (widthPt, ooxmlDashType, color). Returns null if NoFill.
     /// </summary>
-    private static (double widthPt, string dashType, string color)? ParseOutline(Drawing.Outline outline, Dictionary<string, string> themeColors)
+    private static (double widthPt, string dashType, string color, string cap, string cmpd)? ParseOutline(Drawing.Outline outline, Dictionary<string, string> themeColors)
     {
         if (outline.GetFirstChild<Drawing.NoFill>() != null) return null;
 
@@ -376,14 +376,30 @@ public partial class PowerPointHandler
         if (dash?.Val?.HasValue == true)
             dashType = dash.Val.InnerText ?? "solid";
 
-        return (widthPt, dashType, color);
+        // Line cap (<a:ln cap="rnd|sq|flat"/>) and compound type
+        // (<a:ln cmpd="sng|dbl|thickThin|thinThick|tri"/>).
+        var cap = outline.CapType?.HasValue == true ? (outline.CapType.InnerText ?? "flat") : "flat";
+        var cmpd = outline.CompoundLineType?.HasValue == true ? (outline.CompoundLineType.InnerText ?? "sng") : "sng";
+
+        return (widthPt, dashType, color, cap, cmpd);
     }
+
+    /// <summary>
+    /// Map OOXML line cap (<a:ln cap="rnd|sq|flat"/>) to the SVG stroke-linecap value.
+    /// rnd→round (pill dash ends), sq→square, flat/default→butt.
+    /// </summary>
+    private static string CapToSvgLinecap(string cap) => cap switch
+    {
+        "rnd" => "round",
+        "sq" => "square",
+        _ => "butt",
+    };
 
     private static string OutlineToCss(Drawing.Outline outline, Dictionary<string, string> themeColors)
     {
         var parsed = ParseOutline(outline, themeColors);
         if (parsed == null) return "";
-        var (widthPt, dashType, color) = parsed.Value;
+        var (widthPt, dashType, color, _, cmpd) = parsed.Value;
 
         var borderStyle = dashType switch
         {
@@ -392,6 +408,10 @@ public partial class PowerPointHandler
             "dashDot" or "lgDashDot" or "sysDashDot" or "sysDashDotDot" => "dashed",
             _ => "solid"
         };
+        // Compound (dbl/thickThin/thinThick/tri) draws multiple parallel lines.
+        // CSS `double` renders two parallel lines when the border is wide enough.
+        if (cmpd != "sng" && dashType == "solid")
+            borderStyle = "double";
 
         return $"border:{widthPt:0.##}pt {borderStyle} {color}";
     }
