@@ -2715,8 +2715,10 @@ public partial class ExcelHandler
     private static readonly Dictionary<string, string> NumFmtColorNames =
         new(StringComparer.OrdinalIgnoreCase)
         {
+            // Excel's named format colors are the legacy VGA palette, NOT the
+            // CSS color names — e.g. [Green] is lime #00FF00, not CSS #008000.
             ["Black"] = "#000000", ["White"] = "#FFFFFF", ["Red"] = "#FF0000",
-            ["Green"] = "#008000", ["Blue"] = "#0000FF", ["Yellow"] = "#FFFF00",
+            ["Green"] = "#00FF00", ["Blue"] = "#0000FF", ["Yellow"] = "#FFFF00",
             ["Magenta"] = "#FF00FF", ["Cyan"] = "#00FFFF",
         };
 
@@ -2740,6 +2742,33 @@ public partial class ExcelHandler
             section = fmtCode;
         }
 
+        return ParseSectionColor(section);
+    }
+
+    /// <summary>
+    /// Resolve the CSS color implied by the number format's text (@) section
+    /// for a string cell. Mirrors ApplyTextFormat's section selection: the 4th
+    /// section in a multi-section code, else whichever section carries '@'.
+    /// </summary>
+    private static string? GetTextSectionColor(string fmtCode)
+    {
+        string section;
+        if (fmtCode.Contains(';'))
+        {
+            var sections = fmtCode.Split(';');
+            section = sections.Length >= 4 ? sections[3]
+                : sections.FirstOrDefault(s => ContainsCharOutsideQuotes(s, '@')) ?? fmtCode;
+        }
+        else
+        {
+            section = fmtCode;
+        }
+        return ParseSectionColor(section);
+    }
+
+    /// <summary>Extract the [Color] named token from a single format section.</summary>
+    private static string? ParseSectionColor(string section)
+    {
         var m = System.Text.RegularExpressions.Regex.Match(
             section, @"\[(Black|White|Red|Green|Blue|Yellow|Magenta|Cyan)\]",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
@@ -2753,15 +2782,6 @@ public partial class ExcelHandler
     /// </summary>
     private string? GetCellNumberFormatColor(Cell cell, CellFormat xf, Stylesheet stylesheet)
     {
-        // Only numeric cells carry value-driven format sections.
-        var dt = cell.DataType?.Value;
-        if (dt == CellValues.SharedString || dt == CellValues.InlineString
-            || dt == CellValues.String || dt == CellValues.Boolean || dt == CellValues.Error)
-            return null;
-        if (!double.TryParse(cell.CellValue?.Text, System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture, out var numVal))
-            return null;
-
         var numFmtId = xf.NumberFormatId?.Value ?? 0;
         if (numFmtId == 0) return null;
 
@@ -2769,6 +2789,17 @@ public partial class ExcelHandler
             .FirstOrDefault(nf => nf.NumberFormatId?.Value == numFmtId);
         var fmtCode = customFmt?.FormatCode?.Value ?? ResolveBuiltInFormat(numFmtId);
         if (fmtCode == null) return null;
+
+        // Text cells take the text (@) section's [Color]; the positive/negative/
+        // zero value-driven sections do not apply to them.
+        var dt = cell.DataType?.Value;
+        if (dt == CellValues.SharedString || dt == CellValues.InlineString
+            || dt == CellValues.String || dt == CellValues.Boolean || dt == CellValues.Error)
+            return GetTextSectionColor(fmtCode);
+
+        if (!double.TryParse(cell.CellValue?.Text, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var numVal))
+            return null;
 
         return GetNumberFormatColor(numVal, fmtCode);
     }
