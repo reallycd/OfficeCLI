@@ -72,6 +72,21 @@ internal partial class ChartSvgRenderer
     // <c:dLblPos> for bar/column labels: inEnd|outEnd|ctr|inBase. Synced from ChartInfo.
     public string DataLabelPos { get; set; } = "outEnd";
     public int AxisTickCount { get; set; } = 4;
+    // <c:firstSliceAng> for pie/doughnut: degrees clockwise the first slice's
+    // start edge is rotated from 12 o'clock. Synced from ChartInfo. 0 = top.
+    public int FirstSliceAngle { get; set; }
+    // Per-series fill opacity parsed from <a:solidFill><a:alpha val="…"/>.
+    // Index = series index. Null/absent entry → use the renderer's default
+    // (0.85 for filled charts). Synced from ChartInfo.SeriesFillOpacities.
+    public List<double?> SeriesFillOpacities { get; set; } = [];
+
+    // Series fill opacity for index s, falling back to the supplied default
+    // when the series declared no explicit <a:alpha>.
+    private string FillOpacity(int s, double fallback = 0.85)
+    {
+        var op = s >= 0 && s < SeriesFillOpacities.Count ? SeriesFillOpacities[s] : null;
+        return (op ?? fallback).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+    }
 
     // CONSISTENCY(html-encode): shared plain entity-encoder lives in Core/HtmlPreviewHelper.
     public static string HtmlEncode(string text) => HtmlPreviewHelper.HtmlEncode(text);
@@ -229,7 +244,7 @@ internal partial class ChartSvgRenderer
                         }
                         var by = oy + c * groupH + gap;
                         if (segW > 0.5)
-                            sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{segW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
+                            sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{segW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
                         // Label at segment center — skip if segment narrower than ~2 chars to avoid overflow
                         if (showDataLabels && segW > DataLabelFontPx * 1.6)
                         {
@@ -245,7 +260,7 @@ internal partial class ChartSvgRenderer
                         var barW = Math.Abs(val) / span * plotPw;
                         var bx = val >= 0 ? plotZeroX : plotZeroX - barW;
                         var by = oy + c * groupH + gap + (serCount - 1 - s) * barH;
-                        sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
+                        sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
                         // Data label at the bar's end (grouped horizontal bars).
                         // Mirrors the stacked-branch and vertical-column label logic
                         // which previously left non-stacked horizontal bars unlabeled.
@@ -410,7 +425,7 @@ internal partial class ChartSvgRenderer
                             if (s > 0)
                             {
                                 if (barH > 0.5)
-                                    sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
+                                    sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
                                 if (showDataLabels && barH > DataLabelFontPx + 2)
                                 {
                                     var vlabel = FormatAxisValue(rawVal, valNumFmt);
@@ -449,7 +464,7 @@ internal partial class ChartSvgRenderer
                                 negCursor += val;
                             }
                             if (segH > 0.5)
-                                sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{segH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
+                                sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{segH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
                             if (showDataLabels && segH > DataLabelFontPx + 2)
                             {
                                 var vlabel = LabelText(rawVal, val);
@@ -465,7 +480,7 @@ internal partial class ChartSvgRenderer
                         var bh = Math.Abs(val) / span * ph;
                         var bx = ox + c * groupW + gap + s * barW;
                         var by = val >= 0 ? plotZeroY - bh : plotZeroY;
-                        sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{bh:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
+                        sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{bh:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
                         if (showDataLabels)
                         {
                             var vlabel = LabelText(rawVal, val);
@@ -1082,7 +1097,10 @@ internal partial class ChartSvgRenderer
         var maxExpl = explosions != null && explosions.Count > 0 ? explosions.Max() : 0.0;
         if (maxExpl > 0) r /= (1 + maxExpl);
         var innerR = r * holeRatio;
-        var startAngle = -Math.PI / 2;
+        // firstSliceAng rotates the start edge clockwise from 12 o'clock. SVG y
+        // grows downward, so a clockwise rotation adds to the angle directly.
+        var firstSliceOffset = FirstSliceAngle * Math.PI / 180.0;
+        var startAngle = -Math.PI / 2 + firstSliceOffset;
 
         for (int i = 0; i < values.Length; i++)
         {
@@ -1096,8 +1114,9 @@ internal partial class ChartSvgRenderer
             var cx0 = expl > 0 ? cx + r * expl * Math.Cos(midAngle) : cx;
             var cy0 = expl > 0 ? cy + r * expl * Math.Sin(midAngle) : cy;
 
+            var sliceOpacity = FillOpacity(i);
             if (values.Length == 1 && holeRatio <= 0)
-                sb.AppendLine($"        <circle cx=\"{cx0:0.#}\" cy=\"{cy0:0.#}\" r=\"{r:0.#}\" fill=\"{color}\" opacity=\"0.85\"/>");
+                sb.AppendLine($"        <circle cx=\"{cx0:0.#}\" cy=\"{cy0:0.#}\" r=\"{r:0.#}\" fill=\"{color}\" opacity=\"{sliceOpacity}\"/>");
             else if (holeRatio > 0)
             {
                 // A single ring segment spanning ~full circle (one data point,
@@ -1108,7 +1127,7 @@ internal partial class ChartSvgRenderer
                 // to catch float rounding.
                 if (sliceAngle >= 2 * Math.PI - 1e-6)
                 {
-                    sb.AppendLine($"        <path d=\"M {cx0 - r:0.#},{cy0:0.#} A {r:0.#},{r:0.#} 0 1,1 {cx0 + r:0.#},{cy0:0.#} A {r:0.#},{r:0.#} 0 1,1 {cx0 - r:0.#},{cy0:0.#} Z M {cx0 - innerR:0.#},{cy0:0.#} A {innerR:0.#},{innerR:0.#} 0 1,1 {cx0 + innerR:0.#},{cy0:0.#} A {innerR:0.#},{innerR:0.#} 0 1,1 {cx0 - innerR:0.#},{cy0:0.#} Z\" fill=\"{color}\" fill-rule=\"evenodd\" opacity=\"0.85\"/>");
+                    sb.AppendLine($"        <path d=\"M {cx0 - r:0.#},{cy0:0.#} A {r:0.#},{r:0.#} 0 1,1 {cx0 + r:0.#},{cy0:0.#} A {r:0.#},{r:0.#} 0 1,1 {cx0 - r:0.#},{cy0:0.#} Z M {cx0 - innerR:0.#},{cy0:0.#} A {innerR:0.#},{innerR:0.#} 0 1,1 {cx0 + innerR:0.#},{cy0:0.#} A {innerR:0.#},{innerR:0.#} 0 1,1 {cx0 - innerR:0.#},{cy0:0.#} Z\" fill=\"{color}\" fill-rule=\"evenodd\" opacity=\"{sliceOpacity}\"/>");
                 }
                 else
                 {
@@ -1117,7 +1136,7 @@ internal partial class ChartSvgRenderer
                     var ix1 = cx0 + innerR * Math.Cos(endAngle); var iy1 = cy0 + innerR * Math.Sin(endAngle);
                     var ix2 = cx0 + innerR * Math.Cos(startAngle); var iy2 = cy0 + innerR * Math.Sin(startAngle);
                     var largeArc = sliceAngle > Math.PI ? 1 : 0;
-                    sb.AppendLine($"        <path d=\"M {ox1:0.#},{oy1:0.#} A {r:0.#},{r:0.#} 0 {largeArc},1 {ox2:0.#},{oy2:0.#} L {ix1:0.#},{iy1:0.#} A {innerR:0.#},{innerR:0.#} 0 {largeArc},0 {ix2:0.#},{iy2:0.#} Z\" fill=\"{color}\" opacity=\"0.85\"/>");
+                    sb.AppendLine($"        <path d=\"M {ox1:0.#},{oy1:0.#} A {r:0.#},{r:0.#} 0 {largeArc},1 {ox2:0.#},{oy2:0.#} L {ix1:0.#},{iy1:0.#} A {innerR:0.#},{innerR:0.#} 0 {largeArc},0 {ix2:0.#},{iy2:0.#} Z\" fill=\"{color}\" opacity=\"{sliceOpacity}\"/>");
                 }
             }
             else
@@ -1125,14 +1144,18 @@ internal partial class ChartSvgRenderer
                 var x1 = cx0 + r * Math.Cos(startAngle); var y1 = cy0 + r * Math.Sin(startAngle);
                 var x2 = cx0 + r * Math.Cos(endAngle); var y2 = cy0 + r * Math.Sin(endAngle);
                 var largeArc = sliceAngle > Math.PI ? 1 : 0;
-                sb.AppendLine($"        <path d=\"M {cx0:0.#},{cy0:0.#} L {x1:0.#},{y1:0.#} A {r:0.#},{r:0.#} 0 {largeArc},1 {x2:0.#},{y2:0.#} Z\" fill=\"{color}\" opacity=\"0.85\"/>");
+                sb.AppendLine($"        <path d=\"M {cx0:0.#},{cy0:0.#} L {x1:0.#},{y1:0.#} A {r:0.#},{r:0.#} 0 {largeArc},1 {x2:0.#},{y2:0.#} Z\" fill=\"{color}\" opacity=\"{sliceOpacity}\"/>");
             }
             startAngle = endAngle;
         }
         if (showDataLabels)
         {
-            var labelAngle = -Math.PI / 2;
-            var labelR = holeRatio > 0 ? r * (1 + holeRatio) / 2 : r * 0.65;
+            var labelAngle = -Math.PI / 2 + firstSliceOffset;
+            // <c:dLblPos val="outEnd"> places labels just beyond the pie edge along
+            // each slice bisector; inEnd/ctr/bestFit keep them inside the slice.
+            var labelOutside = DataLabelPos == "outEnd";
+            var labelR = labelOutside ? r * 1.12
+                : holeRatio > 0 ? r * (1 + holeRatio) / 2 : r * 0.65;
             for (int i = 0; i < values.Length; i++)
             {
                 var sliceAngle = 2 * Math.PI * values[i] / total;
@@ -1158,8 +1181,11 @@ internal partial class ChartSvgRenderer
                 // "Category, value, pct"). Honored independently of val/percent.
                 if (showCatName && pct >= 5 && i < categories.Length && !string.IsNullOrEmpty(categories[i]))
                     label = string.IsNullOrEmpty(label) ? categories[i] : $"{categories[i]}, {label}";
+                // Outside labels sit on the plot background, not on a colored
+                // slice — use a dark fill (white is invisible there).
+                var labelFill = labelOutside ? "#444" : "#fff";
                 if (!string.IsNullOrEmpty(label))
-                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{lx:0.#}\" y=\"{ly:0.#}\" fill=\"#fff\" font-size=\"{DataLabelFontPx}\" font-weight=\"bold\" text-anchor=\"middle\" dominant-baseline=\"central\">{label}</text>");
+                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{lx:0.#}\" y=\"{ly:0.#}\" fill=\"{labelFill}\" font-size=\"{DataLabelFontPx}\" font-weight=\"bold\" text-anchor=\"middle\" dominant-baseline=\"central\">{label}</text>");
                 labelAngle += sliceAngle;
             }
         }
@@ -1221,7 +1247,7 @@ internal partial class ChartSvgRenderer
                     bottomPoints.Add($"{px:0.#},{oy + ph - (bottomVal / niceMax) * ph:0.#}");
                 }
                 bottomPoints.Reverse();
-                sb.AppendLine($"        <polygon points=\"{string.Join(" ", topPoints)} {string.Join(" ", bottomPoints)}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
+                sb.AppendLine($"        <polygon points=\"{string.Join(" ", topPoints)} {string.Join(" ", bottomPoints)}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
             }
         }
         else
@@ -1240,7 +1266,7 @@ internal partial class ChartSvgRenderer
                 var firstX = ox + (catCount > 1 ? 0 : pw / 2.0);
                 var lastIdx = Math.Min(series[s].values.Length - 1, catCount - 1);
                 var lastX = ox + (catCount > 1 ? (double)pw * lastIdx / (catCount - 1) : pw / 2.0);
-                sb.AppendLine($"        <polygon points=\"{firstX:0.#},{baseY:0.#} {string.Join(" ", topPoints)} {lastX:0.#},{baseY:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
+                sb.AppendLine($"        <polygon points=\"{firstX:0.#},{baseY:0.#} {string.Join(" ", topPoints)} {lastX:0.#},{baseY:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
             }
         }
         for (int c = 0; c < catCount; c++)
@@ -1505,7 +1531,7 @@ internal partial class ChartSvgRenderer
                 {
                     var val = seriesList[s].values[c];
                     var barH = (val / axMax) * ph;
-                    sb.AppendLine($"        <rect x=\"{ox + c * groupW + gap + bi * barW:0.#}\" y=\"{oy + ph - barH:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.85\"/>");
+                    sb.AppendLine($"        <rect x=\"{ox + c * groupW + gap + bi * barW:0.#}\" y=\"{oy + ph - barH:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
                 }
             }
         }
@@ -1734,6 +1760,12 @@ internal partial class ChartSvgRenderer
         // series-level c:explosion (applies to all points) and/or per-point
         // c:dPt/c:explosion overrides.
         public List<double> Explosions { get; set; } = [];
+        // <c:firstSliceAng> — degrees clockwise to rotate the first pie/doughnut
+        // slice's start edge from 12 o'clock. 0 = top (default).
+        public int FirstSliceAngle { get; set; }
+        // Per-series fill opacity parsed from the series spPr <a:alpha>. Index =
+        // series index (pie/doughnut: per data point). null = no explicit alpha.
+        public List<double?> SeriesFillOpacities { get; set; } = [];
         public bool IsStacked { get; set; }
         public bool IsPercent { get; set; }
         public bool IsWaterfall { get; set; }
@@ -1995,6 +2027,19 @@ internal partial class ChartSvgRenderer
                 if (expl.Any(e => e > 0)) info.Explosions = expl;
             }
         }
+
+        // <c:firstSliceAng> — rotate the pie/doughnut start angle clockwise.
+        if (isPieType)
+        {
+            var fsaEl = chartTypeEl?.Elements().FirstOrDefault(e => e.LocalName == "firstSliceAng");
+            if (fsaEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value is string fsav
+                && int.TryParse(fsav, out var fsa))
+                info.FirstSliceAngle = ((fsa % 360) + 360) % 360;
+        }
+
+        // Per-series fill opacity from <a:solidFill><a:alpha val="…"/>. Pie/doughnut
+        // alpha lives on per-point dPt spPr; other charts on the series spPr.
+        info.SeriesFillOpacities = ExtractFillOpacities(serElements, info.Series, isPieType);
 
         // Axis info
         var valAxes = plotArea.Elements().Where(e => e.LocalName == "valAx").ToList();
@@ -2396,6 +2441,51 @@ internal partial class ChartSvgRenderer
         return colors;
     }
 
+    /// <summary>Extract per-series fill opacity from the series spPr
+    /// (pie/doughnut: per data-point dPt spPr) <a:solidFill><a:alpha val="…"/>.
+    /// Returns null per entry when no explicit alpha is declared, so the
+    /// renderer keeps its 0.85 default for that series.</summary>
+    private static List<double?> ExtractFillOpacities(List<OpenXmlElement> serElements,
+        List<(string name, double[] values)> series, bool isPieType)
+    {
+        var opacities = new List<double?>();
+        if (isPieType && serElements.Count > 0)
+        {
+            var ser = serElements[0];
+            var dPts = ser.Elements().Where(e => e.LocalName == "dPt").ToList();
+            var catCount = series.FirstOrDefault().values?.Length ?? 0;
+            for (int i = 0; i < catCount; i++)
+            {
+                var dPt = dPts.FirstOrDefault(d =>
+                    d.Elements().FirstOrDefault(e => e.LocalName == "idx")
+                        ?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value == i.ToString());
+                opacities.Add(ExtractFillAlpha(dPt?.Elements().FirstOrDefault(e => e.LocalName == "spPr")));
+            }
+        }
+        else
+        {
+            for (int i = 0; i < series.Count; i++)
+                opacities.Add(i < serElements.Count
+                    ? ExtractFillAlpha(serElements[i].Elements().FirstOrDefault(e => e.LocalName == "spPr"))
+                    : null);
+        }
+        return opacities;
+    }
+
+    /// <summary>Extract the alpha (0..1) from solidFill > srgbClr/schemeClr >
+    /// a:alpha (val is /100000) inside an spPr. Null when absent.</summary>
+    private static double? ExtractFillAlpha(OpenXmlElement? spPr)
+    {
+        if (spPr == null) return null;
+        var solidFill = spPr.Elements().FirstOrDefault(e => e.LocalName == "solidFill");
+        var clr = solidFill?.Elements().FirstOrDefault(e => e.LocalName is "srgbClr" or "schemeClr");
+        var alphaEl = clr?.Elements().FirstOrDefault(e => e.LocalName == "alpha");
+        if (alphaEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value is string av
+            && int.TryParse(av, out var a) && a >= 0 && a <= 100000)
+            return a / 100000.0;
+        return null;
+    }
+
     /// <summary>Extract hex color (without #) from solidFill > srgbClr inside an spPr or ln element.</summary>
     private static string? ExtractFillColor(OpenXmlElement? container)
     {
@@ -2461,6 +2551,8 @@ internal partial class ChartSvgRenderer
         if (info.AxisLineColor != null) AxisLineColor = info.AxisLineColor;
         DataLabelFontPx = info.DataLabelFontPx;
         DataLabelPos = info.DataLabelPos;
+        FirstSliceAngle = info.FirstSliceAngle;
+        SeriesFillOpacities = info.SeriesFillOpacities;
 
         // Increase right margin for long axis labels (e.g. "$1,000,000")
         if (!string.IsNullOrEmpty(info.ValNumFmt) && marginRight < 30)
