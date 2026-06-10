@@ -60,6 +60,11 @@ internal partial class ChartSvgRenderer
     public string AxisColor { get; set; } = "#B0B8C0";
     public string SecondaryAxisColor { get; set; } = "#aaa";
     public string GridColor { get; set; } = "#333";
+    // Whether the chart XML declared <c:majorGridlines> on the value/category axis.
+    // Gridlines are emitted only when present (real PowerPoint draws none otherwise).
+    // Default true so paths that don't parse axis info keep prior behavior.
+    public bool ShowValGridlines { get; set; } = true;
+    public bool ShowCatGridlines { get; set; } = true;
     public string AxisLineColor { get; set; } = "#555";
     public int ValFontPx { get; set; } = 9;
     public int CatFontPx { get; set; } = 9;
@@ -184,6 +189,7 @@ internal partial class ChartSvgRenderer
 
             // Zero-baseline X coordinate within the plot (== plotOx when niceMin==0).
             var plotZeroX = plotOx + zeroFrac * plotPw;
+            if (ShowValGridlines)
             for (int t = 0; t <= nTicks; t++)
             {
                 var gx = plotOx + (double)plotPw * t / nTicks;
@@ -364,6 +370,7 @@ internal partial class ChartSvgRenderer
 
             // Zero-baseline Y coordinate within the plot (== oy+ph when niceMin==0).
             var plotZeroY = oy + ph - zeroFrac * ph;
+            if (ShowValGridlines)
             for (int t = 0; t <= nTicks; t++)
             {
                 var gy = oy + ph - (double)ph * t / nTicks;
@@ -668,6 +675,7 @@ internal partial class ChartSvgRenderer
         }
 
         // Gridlines
+        if (ShowValGridlines)
         for (int t = 1; t <= nTicks; t++)
         {
             double tickVal = isLog ? niceMin + t : niceMin + tickStep * t;
@@ -1190,6 +1198,7 @@ internal partial class ChartSvgRenderer
         double DataToY(double v) => oy + ph - (v - niceMin) / axisRange * ph;
         double ZeroY() => DataToY(0.0);
 
+        if (ShowValGridlines)
         for (int t = 1; t <= tickCount; t++)
         {
             var gy = oy + ph - (double)ph * t / tickCount;
@@ -1363,6 +1372,7 @@ internal partial class ChartSvgRenderer
         var bubbleScale = bubbleScaleEl?.Val?.HasValue == true ? bubbleScaleEl.Val.Value / 100.0 : 1.0;
         var maxRadius = Math.Min(pw, ph) * 0.12 * bubbleScale;
 
+        if (ShowValGridlines)
         for (int t = 1; t <= 4; t++)
         {
             var gy = oy + ph - (double)ph * t / 4;
@@ -1762,6 +1772,10 @@ internal partial class ChartSvgRenderer
         public string? ValNumFmt { get; set; }
         public string? TitleFontColor { get; set; }
         public string? GridlineColor { get; set; }
+        /// <summary>True when the value axis has &lt;c:majorGridlines&gt; (horizontal gridlines).</summary>
+        public bool ValMajorGridlines { get; set; }
+        /// <summary>True when the category axis has &lt;c:majorGridlines&gt; (vertical gridlines).</summary>
+        public bool CatMajorGridlines { get; set; }
         public string? AxisLineColor { get; set; }
         public int DataLabelFontPx { get; set; } = 8;
         /// <summary>Reference-line overlays (horizontal dashed lines at constant values).
@@ -2044,6 +2058,7 @@ internal partial class ChartSvgRenderer
 
             // Gridline color
             var majorGridlines = valAxis.Elements().FirstOrDefault(e => e.LocalName == "majorGridlines");
+            info.ValMajorGridlines = majorGridlines != null;
             var gridSpPr = majorGridlines?.Elements().FirstOrDefault(e => e.LocalName == "spPr");
             info.GridlineColor = ExtractLineColor(gridSpPr);
 
@@ -2059,6 +2074,7 @@ internal partial class ChartSvgRenderer
         }
         if (catAxis != null)
         {
+            info.CatMajorGridlines = catAxis.Elements().Any(e => e.LocalName == "majorGridlines");
             var catTitleEl = catAxis.Elements().FirstOrDefault(e => e.LocalName == "title");
             info.CatAxisTitle = catTitleEl?.Descendants<Drawing.Text>().FirstOrDefault()?.Text;
             var catTitleRPr = catTitleEl?.Descendants<Drawing.RunProperties>().FirstOrDefault();
@@ -2440,6 +2456,8 @@ internal partial class ChartSvgRenderer
         if (info.ValFontColor != null) AxisColor = info.ValFontColor;
         if (info.CatFontColor != null) CatColor = info.CatFontColor;
         if (info.GridlineColor != null) GridColor = info.GridlineColor;
+        ShowValGridlines = info.ValMajorGridlines;
+        ShowCatGridlines = info.CatMajorGridlines;
         if (info.AxisLineColor != null) AxisLineColor = info.AxisLineColor;
         DataLabelFontPx = info.DataLabelFontPx;
         DataLabelPos = info.DataLabelPos;
@@ -2807,6 +2825,7 @@ internal partial class ChartSvgRenderer
             var gap = groupH * 0.2;
 
             // Gridlines
+            if (ShowValGridlines)
             for (int t = 1; t <= tickCount; t++)
             {
                 var gx = plotOx + (double)plotPw * t / tickCount;
@@ -2868,6 +2887,7 @@ internal partial class ChartSvgRenderer
             var gapW = (groupW - (stacked || percentStacked ? barW : barW * serCount)) / 2;
 
             // Gridlines
+            if (ShowValGridlines)
             for (int t = 1; t <= tickCount; t++)
             {
                 var gy = oy + ph - (double)ph * t / tickCount;
@@ -3144,6 +3164,7 @@ internal partial class ChartSvgRenderer
         var plotH = (int)(ph + totalDepthY); // totalDepthY is negative
 
         // Axes & gridlines on the front plane
+        if (ShowValGridlines)
         for (int t = 1; t <= 4; t++)
         {
             var gy = oy + plotH - (double)plotH * t / 4;
