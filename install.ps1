@@ -80,9 +80,16 @@ if (Fetch-WithFallback "$mirrorAssetBase/$asset" "$githubAssetBase/$asset" $temp
     $checksumFile = "$env:TEMP\officecli-SHA256SUMS"
     if (Fetch-WithFallback "$mirrorAssetBase/SHA256SUMS" "$githubAssetBase/SHA256SUMS" $checksumFile) {
         $checksumContent = Get-Content $checksumFile
-        $expectedLine = $checksumContent | Where-Object { $_ -match $asset }
-        if ($expectedLine) {
-            $expected = ($expectedLine -split '\s+')[0]
+        # Match the filename column EXACTLY (not a regex/substring): `-match` is
+        # an unanchored regex where `.`/`-` are metacharacters, so it could match
+        # the wrong manifest line (or several) and pick a wrong hash — failing an
+        # otherwise-valid update. Mirrors the C# self-updater's MatchChecksumManifest.
+        $expected = $null
+        foreach ($line in $checksumContent) {
+            $parts = ($line.Trim() -split '\s+')
+            if ($parts.Length -ge 2 -and $parts[1] -eq $asset) { $expected = $parts[0]; break }
+        }
+        if ($expected) {
             $actual = (Get-FileHash -Path $tempFile -Algorithm SHA256).Hash.ToLower()
             if ($expected -eq $actual) {
                 $checksumOk = $true

@@ -122,7 +122,12 @@ if fetch_with_fallback \
             "$MIRROR_ASSET_BASE/SHA256SUMS" \
             "$GITHUB_ASSET_BASE/SHA256SUMS" \
             "/tmp/officecli-SHA256SUMS"; then
-        EXPECTED=$(grep "$ASSET" "/tmp/officecli-SHA256SUMS" | awk '{print $1}')
+        # Match the filename column EXACTLY (field 2), not a substring: a
+        # `grep "$ASSET"` could match several lines if one asset name is a
+        # substring of another, yielding a multi-line EXPECTED that can never
+        # equal ACTUAL — failing an otherwise-valid update. Mirrors the C#
+        # self-updater's MatchChecksumManifest (exact filename column).
+        EXPECTED=$(awk -v a="$ASSET" '$2 == a { print $1; exit }' "/tmp/officecli-SHA256SUMS")
         if [ -n "$EXPECTED" ]; then
             if command -v sha256sum >/dev/null 2>&1; then
                 ACTUAL=$(sha256sum "/tmp/$BINARY_NAME" | awk '{print $1}')
