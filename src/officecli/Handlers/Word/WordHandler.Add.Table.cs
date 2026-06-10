@@ -1362,6 +1362,69 @@ public partial class WordHandler
             }
         }
 
+        // CONSISTENCY(add-set-symmetry): valign, align, textdirection, cnfstyle
+        // were Set-only in SetElementTableCell; mirror them here so AddCell
+        // accepts the same vocabulary without false UNSUPPORTED warnings.
+        if (properties.TryGetValue("valign", out var valignAddVal))
+        {
+            var tcPr = newCell.GetFirstChild<TableCellProperties>()
+                ?? newCell.PrependChild(new TableCellProperties());
+            tcPr.TableCellVerticalAlignment = new TableCellVerticalAlignment
+            {
+                Val = valignAddVal.ToLowerInvariant() switch
+                {
+                    "top"    => TableVerticalAlignmentValues.Top,
+                    "center" => TableVerticalAlignmentValues.Center,
+                    "bottom" => TableVerticalAlignmentValues.Bottom,
+                    _ => throw new ArgumentException($"Invalid valign value: '{valignAddVal}'. Valid values: top, center, bottom.")
+                }
+            };
+        }
+        if (properties.TryGetValue("align", out var cellAlignAddVal)
+            || properties.TryGetValue("alignment", out cellAlignAddVal)
+            || properties.TryGetValue("halign", out cellAlignAddVal))
+        {
+            var alignVal = ParseJustification(cellAlignAddVal);
+            foreach (var cellAlignPara in newCell.Elements<Paragraph>())
+            {
+                var cpProps = cellAlignPara.ParagraphProperties ?? cellAlignPara.PrependChild(new ParagraphProperties());
+                cpProps.Justification = new Justification { Val = alignVal };
+            }
+        }
+        if (properties.TryGetValue("textdirection", out var textDirAddVal)
+            || properties.TryGetValue("textdir", out textDirAddVal))
+        {
+            var tcPr = newCell.GetFirstChild<TableCellProperties>()
+                ?? newCell.PrependChild(new TableCellProperties());
+            tcPr.TextDirection = new TextDirection
+            {
+                Val = textDirAddVal.ToLowerInvariant() switch
+                {
+                    "btlr" or "vertical"       => TextDirectionValues.BottomToTopLeftToRight,
+                    "tbrl" or "vertical-rl"    => TextDirectionValues.TopToBottomRightToLeft,
+                    "lrtb" or "horizontal"     => TextDirectionValues.LefToRightTopToBottom,
+                    "tbrl-r" or "tb-rl-rotated" => TextDirectionValues.TopToBottomRightToLeftRotated,
+                    "lrtb-r" or "lr-tb-rotated" => TextDirectionValues.LefttoRightTopToBottomRotated,
+                    "tblr-r" or "tb-lr-rotated" => TextDirectionValues.TopToBottomLeftToRightRotated,
+                    _ => throw new ArgumentException($"Invalid textDirection value: '{textDirAddVal}'. Valid values: lrtb, btlr, tbrl, horizontal, vertical.")
+                }
+            };
+        }
+        if (properties.TryGetValue("cnfstyle", out var cnfAddVal))
+        {
+            if (!string.IsNullOrEmpty(cnfAddVal))
+            {
+                var cnfVal = ValidateCnfStyleBitmask(cnfAddVal);
+                var tcPr = newCell.GetFirstChild<TableCellProperties>()
+                    ?? newCell.PrependChild(new TableCellProperties());
+                var cnf = tcPr.GetFirstChild<ConditionalFormatStyle>();
+                if (cnf == null)
+                    tcPr.PrependChild(new ConditionalFormatStyle { Val = cnfVal });
+                else
+                    cnf.Val = cnfVal;
+            }
+        }
+
         // Dotted-key fallback for tcPr-level attrs (shd.fill, etc.) not
         // modeled by hand-rolled blocks. Lazy-create tcPr if any dotted
         // attr binds. CONSISTENCY(add-set-symmetry).
