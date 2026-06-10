@@ -452,6 +452,7 @@ public static partial class WordBatchEmitter
         if (!xml.Contains("<w:abstractNum") && !xml.Contains("<w:num "))
             return;
         xml = StripDanglingPicBullets(xml);
+        xml = ReorderLvlChildren(xml);
 
         items.Add(new BatchItem
         {
@@ -461,6 +462,72 @@ public static partial class WordBatchEmitter
             Action = "replace",
             Xml = xml
         });
+    }
+
+    // BUG-DUMP-R28-3: a source <w:lvl> may store its children in an order that
+    // is tolerated by Word but violates the CT_Lvl schema sequence — most
+    // commonly <w:legacy> emitted BEFORE <w:suff>/<w:lvlText> (legacy list
+    // templates from older Word exports). The dump round-trips numbering.xml
+    // verbatim via raw-set, so the out-of-order children reach the rebuilt
+    // part unchanged; the SDK validator then rejects the FIRST element that
+    // appears after the schema state machine has advanced past its slot
+    // (e.g. "<w:suff> unexpected" once <w:legacy> has been seen). Real Word is
+    // lenient, but `validate` and strict consumers fail. Reorder each <w:lvl>'s
+    // children into the canonical CT_Lvl sequence so the rebuilt numbering.xml
+    // validates. Unknown/unlisted children keep their relative order and sort
+    // after the known ones (defensive — CT_Lvl has no extension point, but a
+    // future/vendor element shouldn't be dropped). Mirrors StripDanglingPicBullets'
+    // parse-edit-reserialize shape.
+    private static readonly string[] _ctLvlChildOrder =
+    {
+        "start", "numFmt", "lvlRestart", "pStyle", "isLgl", "suff",
+        "lvlText", "lvlPicBulletId", "legacy", "lvlJc", "pPr", "rPr"
+    };
+
+    private static string ReorderLvlChildren(string numberingXml)
+    {
+        if (string.IsNullOrEmpty(numberingXml) || !numberingXml.StartsWith("<")) return numberingXml;
+        if (!numberingXml.Contains("<w:lvl")) return numberingXml; // fast path
+        try
+        {
+            var doc = System.Xml.Linq.XDocument.Parse(numberingXml);
+            if (doc.Root == null) return numberingXml;
+            var wNs = (System.Xml.Linq.XNamespace)"http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            int RankOf(System.Xml.Linq.XElement e)
+            {
+                if (e.Name.Namespace != wNs) return _ctLvlChildOrder.Length;
+                int idx = Array.IndexOf(_ctLvlChildOrder, e.Name.LocalName);
+                return idx < 0 ? _ctLvlChildOrder.Length : idx;
+            }
+            var changed = false;
+            foreach (var lvl in doc.Descendants(wNs + "lvl").ToList())
+            {
+                var kids = lvl.Elements().ToList();
+                if (kids.Count < 2) continue;
+                // Stable sort by CT_Lvl rank; only rewrite when order differs.
+                var sorted = kids
+                    .Select((el, i) => (el, i))
+                    .OrderBy(t => RankOf(t.el))
+                    .ThenBy(t => t.i)
+                    .Select(t => t.el)
+                    .ToList();
+                bool reordered = false;
+                for (int i = 0; i < kids.Count; i++)
+                {
+                    if (!ReferenceEquals(kids[i], sorted[i])) { reordered = true; break; }
+                }
+                if (!reordered) continue;
+                foreach (var k in kids) k.Remove();
+                foreach (var s in sorted) lvl.Add(s);
+                changed = true;
+            }
+            if (!changed) return numberingXml;
+            return doc.Root.ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+        }
+        catch
+        {
+            return numberingXml;
+        }
     }
 
     private static void EmitHeadersFooters(WordHandler word, List<BatchItem> items,
