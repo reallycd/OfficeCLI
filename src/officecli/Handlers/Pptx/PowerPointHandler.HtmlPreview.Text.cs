@@ -354,93 +354,108 @@ public partial class PowerPointHandler
             if (rp.Italic?.Value == true)
                 styles.Add("font-style:italic");
 
-            // Underline
+            // Underline + Strikethrough — both map to CSS text-decoration, which
+            // is a single property: emitting it twice makes the cascade keep only
+            // the last (dropping the first line). Build the combined line keyword
+            // set ("underline", "line-through") plus an optional decoration STYLE
+            // (double/wavy/dotted/dashed) and a thickness, then emit ONE
+            // `text-decoration` declaration. text-decoration-style applies to all
+            // lines, so a strike+underline mix where one wants double/wavy is a
+            // known CSS limitation — the common single-line strike+underline case
+            // renders both lines correctly.
+            var decoLines = new List<string>();
+            string? decoStyle = null;
+            string? decoThickness = null;
             if (rp.Underline?.HasValue == true && rp.Underline.Value != Drawing.TextUnderlineValues.None)
             {
+                decoLines.Add("underline");
                 var u = rp.Underline.Value;
                 if (u == Drawing.TextUnderlineValues.Double)
                 {
                     // CONSISTENCY(underline-variants): mirrors WordHandler's
                     // emitter. Chromium renders this as two distinct lines at
                     // common font sizes (verified via Word HTML preview at 18pt).
-                    // Earlier R6 polyfill removed — see git history if the
-                    // PPTX-specific cascade breaks this in the future.
-                    styles.Add("text-decoration:underline");
-                    styles.Add("text-decoration-style:double");
+                    decoStyle = "double";
                 }
                 else if (u == Drawing.TextUnderlineValues.Wavy)
                 {
-                    styles.Add("text-decoration:underline wavy");
+                    decoStyle = "wavy";
                 }
-                else if (u == Drawing.TextUnderlineValues.WavyHeavy)
-                {
-                    styles.Add("text-decoration:underline wavy");
-                    styles.Add("text-decoration-thickness:2px");
-                }
-                else if (u == Drawing.TextUnderlineValues.WavyDouble)
+                else if (u == Drawing.TextUnderlineValues.WavyHeavy
+                    || u == Drawing.TextUnderlineValues.WavyDouble)
                 {
                     // best-effort: CSS has no wavy+double; emit wavy thicker.
-                    styles.Add("text-decoration:underline wavy");
-                    styles.Add("text-decoration-thickness:2px");
+                    decoStyle = "wavy";
+                    decoThickness = "2px";
                 }
                 else if (u == Drawing.TextUnderlineValues.Dotted)
                 {
-                    styles.Add("text-decoration:underline dotted");
+                    decoStyle = "dotted";
                 }
                 else if (u == Drawing.TextUnderlineValues.HeavyDotted)
                 {
-                    styles.Add("text-decoration:underline dotted");
-                    styles.Add("text-decoration-thickness:2px");
+                    decoStyle = "dotted";
+                    decoThickness = "2px";
                 }
                 else if (u == Drawing.TextUnderlineValues.Dash
                     || u == Drawing.TextUnderlineValues.DashLong)
                 {
-                    styles.Add("text-decoration:underline dashed");
+                    decoStyle = "dashed";
                 }
                 else if (u == Drawing.TextUnderlineValues.DashHeavy
                     || u == Drawing.TextUnderlineValues.DashLongHeavy
                     || u == Drawing.TextUnderlineValues.DotDashHeavy
                     || u == Drawing.TextUnderlineValues.DotDotDashHeavy)
                 {
-                    styles.Add("text-decoration:underline dashed");
-                    styles.Add("text-decoration-thickness:2px");
+                    decoStyle = "dashed";
+                    decoThickness = "2px";
                 }
                 else if (u == Drawing.TextUnderlineValues.DotDash
                     || u == Drawing.TextUnderlineValues.DotDotDash)
                 {
                     // TODO CONSISTENCY(underline-variants): CSS has no dot-dash
                     // pattern; approximate with dashed.
-                    styles.Add("text-decoration:underline dashed");
+                    decoStyle = "dashed";
                 }
                 else if (u == Drawing.TextUnderlineValues.Heavy)
                 {
-                    styles.Add("text-decoration:underline solid");
-                    styles.Add("text-decoration-thickness:2px");
+                    decoStyle = "solid";
+                    decoThickness = "2px";
                 }
-                else
+                // else: exotic combos (Words, HeavyWords, etc.) fall back to plain underline.
+            }
+
+            if (rp.Strike?.HasValue == true && rp.Strike.Value != Drawing.TextStrikeValues.NoStrike)
+            {
+                decoLines.Add("line-through");
+                if (rp.Strike.Value == Drawing.TextStrikeValues.DoubleStrike && decoStyle == null)
                 {
-                    // TODO CONSISTENCY(underline-variants): exotic combos
-                    // (Words, HeavyWords, etc.) fall back to plain underline.
-                    styles.Add("text-decoration:underline");
+                    // CONSISTENCY(underline-variants): like underline `double`,
+                    // `line-through double` may render visually identical to
+                    // single at typical font sizes in Chromium. Known limitation.
+                    decoStyle = "double";
                 }
             }
 
-            // Strikethrough
-            if (rp.Strike?.HasValue == true && rp.Strike.Value != Drawing.TextStrikeValues.NoStrike)
+            if (decoLines.Count > 0)
             {
-                if (rp.Strike.Value == Drawing.TextStrikeValues.DoubleStrike)
+                styles.Add($"text-decoration:{string.Join(" ", decoLines)}");
+                if (decoStyle != null) styles.Add($"text-decoration-style:{decoStyle}");
+                if (decoThickness != null) styles.Add($"text-decoration-thickness:{decoThickness}");
+
+                // Underline color (a:uFill). When distinct from the text color,
+                // PowerPoint paints the underline in its own color; emit
+                // text-decoration-color so the line isn't drawn in the text color.
+                var uFill = rp.GetFirstChild<Drawing.UnderlineFill>();
+                if (uFill != null)
                 {
-                    // CONSISTENCY(underline-variants): like `text-decoration:underline
-                    // double`, `line-through double` may render visually identical
-                    // to single at typical font sizes in Chromium. Unlike underline
-                    // we don't polyfill: line-through sits through the glyph, so
-                    // a background-image trick would either be occluded or misplaced.
-                    // Known limitation; kept for forward-compat once engines improve.
-                    styles.Add("text-decoration:line-through double");
-                }
-                else
-                {
-                    styles.Add("text-decoration:line-through");
+                    var uColor = ResolveFillColor(uFill.GetFirstChild<Drawing.SolidFill>(), themeColors);
+                    if (uColor != null)
+                    {
+                        var textColor = ResolveFillColor(rp.GetFirstChild<Drawing.SolidFill>(), themeColors);
+                        if (!string.Equals(uColor, textColor, StringComparison.OrdinalIgnoreCase))
+                            styles.Add($"text-decoration-color:{uColor}");
+                    }
                 }
             }
 
