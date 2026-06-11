@@ -479,28 +479,13 @@ public partial class WordHandler
                 : (pProps.SpacingBetweenLines?.BeforeLines?.Value
                    ?? styleSpacing?.BeforeLines?.Value);
 
-            // Word collapses adjacent spaceBefore/spaceAfter: max(prev.after, cur.before)
-            // instead of adding them. CSS flexbox doesn't collapse margins, so we subtract
-            // the overlap from spaceBefore when the previous sibling has spaceAfter.
-            double prevSpaceAfterPt = 0;
-            if (prevPara != null && !suppressBefore)
-            {
-                var prevPProps = prevPara.ParagraphProperties;
-                var prevSId = prevPProps?.ParagraphStyleId?.Val?.Value;
-                var prevStyleSpacing = ResolveSpacingFromStyle(prevSId);
-                var prevAfterAutoRaw = (prevPProps?.SpacingBetweenLines?.AfterAutoSpacing?.Value
-                                        ?? prevStyleSpacing?.AfterAutoSpacing?.Value) == true;
-                // Same-cell suppression mirrors the cur side.
-                var prevAfterAuto = prevAfterAutoRaw && !prevInSameCell;
-                var prevAfter = prevAfterAuto ? AutospacingTwips
-                    : (prevAfterAutoRaw && prevInSameCell ? "0"
-                       : (prevPProps?.SpacingBetweenLines?.After?.Value
-                          ?? prevStyleSpacing?.After?.Value));
-                var prevAfterLines = prevAfterAuto || prevAfterAutoRaw ? null
-                    : (prevPProps?.SpacingBetweenLines?.AfterLines?.Value
-                       ?? prevStyleSpacing?.AfterLines?.Value);
-                prevSpaceAfterPt = ResolveSpacingPt(prevAfter, prevAfterLines) ?? 0;
-            }
+            // Word collapses adjacent spaceBefore/spaceAfter to max(prev.after, cur.before)
+            // instead of adding them. The HTML paragraphs are normal block-flow siblings,
+            // so their vertical margins ALSO collapse (CSS takes the max of adjacent
+            // margins). We therefore emit each paragraph's OWN spaceBefore/spaceAfter in
+            // full and let CSS margin-collapse reproduce Word's max() naturally.
+            // (Subtracting the previous sibling's spaceAfter here was wrong: collapse
+            // takes the max, not the sum, so the subtraction UNDERSTATED the gap.)
 
             // Word suppresses spaceBefore at the TOP of a page: the document's
             // first body paragraph renders flush at the top margin (verified
@@ -517,12 +502,8 @@ public partial class WordHandler
             else
             {
                 var beforePt = ResolveSpacingPt(beforeVal, beforeLinesVal);
-                if (beforePt is double bp)
-                {
-                    // Collapse: effective spaceBefore = max(0, spaceBefore - prevSpaceAfter)
-                    if (prevSpaceAfterPt > 0) bp = Math.Max(0, bp - prevSpaceAfterPt);
-                    if (bp > 0) parts.Add($"{vSpacingPropBefore}:{bp:0.##}pt");
-                }
+                if (beforePt is double bp && bp > 0)
+                    parts.Add($"{vSpacingPropBefore}:{bp:0.##}pt");
             }
 
             var afterAutoRaw = (pProps.SpacingBetweenLines?.AfterAutoSpacing?.Value
@@ -632,28 +613,18 @@ public partial class WordHandler
             bool suppressAfter = hasContextualSpacing && nextPara != null
                 && (nextStyleId ?? "") == (styleId ?? "");
 
-            // Margin collapse: subtract previous sibling's effective spaceAfter
-            // from this paragraph's spaceBefore (CSS flexbox doesn't collapse).
-            double prevAfterPt = 0;
-            if (prevPara != null && !suppressBefore)
-            {
-                var prevSId = prevStyleId;
-                var prevSpacing = prevPara.ParagraphProperties?.SpacingBetweenLines
-                                  ?? ResolveSpacingFromStyle(prevSId);
-                if (prevSpacing?.After?.Value is string pa && int.TryParse(pa, out var paT))
-                    prevAfterPt = paT / 20.0;
-                else if (ResolveBuiltInStyleDefaults(prevSId) is { } prevBuiltIn)
-                    prevAfterPt = prevBuiltIn.After;
-                else if (DocCarriesNormalDefaults())
-                    prevAfterPt = BuiltInStyleDefaults["Normal"].After;
-            }
+            // Word collapses adjacent spaceBefore/spaceAfter to max(prev.after, cur.before).
+            // The HTML paragraphs are normal block-flow siblings, so their vertical margins
+            // ALSO collapse to the max — we therefore emit each paragraph's own spaceBefore
+            // in full and let CSS margin-collapse reproduce Word's max() naturally. (The old
+            // subtraction of the previous sibling's spaceAfter understated the gap.)
 
             var paraFontDef = ResolveParaFontForLineHeight(para);
             var ratioDef = FontMetricsReader.GetRatio(paraFontDef);
 
             if (builtIn != null)
             {
-                var beforePt = suppressBefore ? 0 : Math.Max(0, builtIn.Before - prevAfterPt);
+                var beforePt = suppressBefore ? 0 : builtIn.Before;
                 if (beforePt > 0)
                     parts.Add($"{vSpacingPropBefore}:{beforePt:0.##}pt");
                 var afterPt = suppressAfter ? 0 : builtIn.After;
