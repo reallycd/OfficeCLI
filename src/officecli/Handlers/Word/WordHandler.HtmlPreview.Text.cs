@@ -51,6 +51,18 @@ public partial class WordHandler
     {
         // Use <div> instead of <p> when paragraph contains block-level elements (text boxes, charts, shapes)
         var tag = HasBlockLevelDrawing(para) ? "div" : "p";
+        sb.Append(BuildParagraphOpenTag(para, tag));
+        RenderParagraphContentHtml(sb, para);
+        sb.AppendLine($"</{tag}>");
+    }
+
+    // Builds the paragraph's opening tag (with class/style attributes). Shared
+    // by RenderParagraphHtml and the mid-paragraph page-break handler, which
+    // must reopen an identical <p> after closing the one interrupted by the
+    // page-transition divs (otherwise </div> would close inside an open <p>).
+    private string BuildParagraphOpenTag(Paragraph para, string tag)
+    {
+        var sb = new StringBuilder();
         sb.Append($"<{tag}");
         // Add CSS class for TOC paragraphs (suppress hyperlink styling)
         var styleId = para.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
@@ -72,8 +84,7 @@ public partial class WordHandler
         if (!string.IsNullOrEmpty(pStyle))
             sb.Append($" style=\"{pStyle}\"");
         sb.Append(">");
-        RenderParagraphContentHtml(sb, para);
-        sb.AppendLine($"</{tag}>");
+        return sb.ToString();
     }
 
     private void RenderParagraphContentHtml(StringBuilder sb, Paragraph para)
@@ -341,7 +352,22 @@ public partial class WordHandler
             if (child is Break brk)
             {
                 if (brk.Type?.Value == BreakValues.Page)
+                {
+                    // The PAGE_BREAK marker is later split on and replaced by
+                    // page-transition </div>...<div> markup. If emitted while
+                    // the run <span> and paragraph <p> are still open, those
+                    // </div>s would close inside an open <p>/<span> (invalid
+                    // nesting). Close the span + paragraph first, emit the
+                    // marker, then reopen an identical <p> (and the span) for
+                    // any remaining runs on the new page. Mirrors the column
+                    // break branch below.
+                    var pTag = HasBlockLevelDrawing(para) ? "div" : "p";
+                    if (needsSpan) sb.Append("</span>");
+                    sb.Append($"</{pTag}>");
                     sb.Append("<!--PAGE_BREAK-->");
+                    sb.Append(BuildParagraphOpenTag(para, pTag));
+                    if (needsSpan) sb.Append($"<span style=\"{style}\">");
+                }
                 else if (brk.Type?.Value == BreakValues.Column)
                 {
                     // Close current span/paragraph, insert block-level column break, reopen
