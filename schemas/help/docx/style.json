@@ -266,6 +266,36 @@
       "readback": "unit-qualified",
       "enforcement": "report"
     },
+    "spaceBeforeAuto": {
+      "type": "boolean",
+      "aliases": [
+        "beforeAutospacing"
+      ],
+      "add": true,
+      "set": true,
+      "get": true,
+      "description": "w:spacing @beforeAutospacing — Word's 'automatic spacing between paragraphs of the same style' toggle for the space BEFORE paragraphs using this style (e.g. the built-in 'Normal (Web)' style). Surfaced on get only when present.",
+      "examples": [
+        "--prop spaceBeforeAuto=true"
+      ],
+      "readback": "true|false",
+      "enforcement": "report"
+    },
+    "spaceAfterAuto": {
+      "type": "boolean",
+      "aliases": [
+        "afterAutospacing"
+      ],
+      "add": true,
+      "set": true,
+      "get": true,
+      "description": "w:spacing @afterAutospacing — automatic spacing toggle for the space AFTER paragraphs using this style. See spaceBeforeAuto.",
+      "examples": [
+        "--prop spaceAfterAuto=true"
+      ],
+      "readback": "true|false",
+      "enforcement": "report"
+    },
     "font": {
       "type": "string",
       "add": true,

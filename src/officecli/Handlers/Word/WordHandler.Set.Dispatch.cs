@@ -1702,6 +1702,21 @@ public partial class WordHandler
                     var sp3 = pPr3.SpacingBetweenLines ?? (pPr3.SpacingBetweenLines = new SpacingBetweenLines());
                     sp3.After = SpacingConverter.ParseWordSpacing(value).ToString();
                     break;
+                // BUG-DUMP-R46-1: style-level auto-spacing toggles (mirror BUG-DUMP-R44-4 paragraph path)
+                case "spacebeforeauto" or "spaceBeforeAuto" or "beforeautospacing":
+                {
+                    var pPrBa = style.StyleParagraphProperties ?? EnsureStyleParagraphProperties(style);
+                    var spBa = pPrBa.SpacingBetweenLines ?? (pPrBa.SpacingBetweenLines = new SpacingBetweenLines());
+                    spBa.BeforeAutoSpacing = OnOffValue.FromBoolean(IsTruthy(value));
+                    break;
+                }
+                case "spaceafterauto" or "spaceAfterAuto" or "afterautospacing":
+                {
+                    var pPrAa = style.StyleParagraphProperties ?? EnsureStyleParagraphProperties(style);
+                    var spAa = pPrAa.SpacingBetweenLines ?? (pPrAa.SpacingBetweenLines = new SpacingBetweenLines());
+                    spAa.AfterAutoSpacing = OnOffValue.FromBoolean(IsTruthy(value));
+                    break;
+                }
                 case "linespacing" or "lineSpacing":
                 {
                     var pPr4 = style.StyleParagraphProperties ?? EnsureStyleParagraphProperties(style);

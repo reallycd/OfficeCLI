@@ -1047,6 +1047,21 @@ public partial class WordHandler
             sp.After = SpacingConverter.ParseWordSpacing(sSAfter).ToString();
             hasPPr = true;
         }
+        // BUG-DUMP-R46-1: style-level auto-spacing toggles (mirror BUG-DUMP-R44-4 paragraph path)
+        if (properties.TryGetValue("spacebeforeauto", out var sSBAuto) || properties.TryGetValue("spaceBeforeAuto", out sSBAuto)
+            || properties.TryGetValue("beforeautospacing", out sSBAuto))
+        {
+            var sp = stylePPr.SpacingBetweenLines ?? (stylePPr.SpacingBetweenLines = new SpacingBetweenLines());
+            sp.BeforeAutoSpacing = OnOffValue.FromBoolean(IsTruthy(sSBAuto));
+            hasPPr = true;
+        }
+        if (properties.TryGetValue("spaceafterauto", out var sSAAuto) || properties.TryGetValue("spaceAfterAuto", out sSAAuto)
+            || properties.TryGetValue("afterautospacing", out sSAAuto))
+        {
+            var sp = stylePPr.SpacingBetweenLines ?? (stylePPr.SpacingBetweenLines = new SpacingBetweenLines());
+            sp.AfterAutoSpacing = OnOffValue.FromBoolean(IsTruthy(sSAAuto));
+            hasPPr = true;
+        }
         if (properties.TryGetValue("spacebeforelines", out var sSBL) || properties.TryGetValue("spaceBeforeLines", out sSBL))
         {
             var sp = stylePPr.SpacingBetweenLines ?? (stylePPr.SpacingBetweenLines = new SpacingBetweenLines());
