@@ -5225,6 +5225,37 @@ public partial class WordHandler
                 if (tcPrev != null && tcPrev.HasChildren)
                     node.Format["tcPrChange.beforeXml"] = tcPrev.OuterXml;
             }
+            // BUG-DUMP-R51-2: cell-level tracked insertion/deletion
+            // (<w:tcPr><w:cellIns>/<w:cellDel>) — marks a whole table cell as
+            // inserted/deleted under Track Changes (distinct from row-level
+            // <w:trPr><w:ins>/<w:del> and from run-level revisions on the cell's
+            // content). Previously unread, so a tracked cell insert/delete was
+            // dropped on dump→batch while row-level trIns/trDel survived. Surface
+            // it as cellRevision.type=ins|del + cellRevision.author/.date/.id so
+            // the Table emitter can re-stamp the marker; a distinct key namespace
+            // keeps it clear of the run-content revision.* on the cell's runs.
+            var cellIns = tcPr.GetFirstChild<CellInsertion>();
+            var cellDel = cellIns == null ? tcPr.GetFirstChild<CellDeletion>() : null;
+            if (cellIns != null)
+            {
+                node.Format["cellRevision.type"] = "ins";
+                if (!string.IsNullOrEmpty(cellIns.Author?.Value))
+                    node.Format["cellRevision.author"] = cellIns.Author!.Value!;
+                if (cellIns.Date?.Value is DateTime cellInsDate)
+                    node.Format["cellRevision.date"] = cellInsDate.ToString("o");
+                if (cellIns.Id?.Value is { } cellInsId)
+                    node.Format["cellRevision.id"] = cellInsId.ToString();
+            }
+            else if (cellDel != null)
+            {
+                node.Format["cellRevision.type"] = "del";
+                if (!string.IsNullOrEmpty(cellDel.Author?.Value))
+                    node.Format["cellRevision.author"] = cellDel.Author!.Value!;
+                if (cellDel.Date?.Value is DateTime cellDelDate)
+                    node.Format["cellRevision.date"] = cellDelDate.ToString("o");
+                if (cellDel.Id?.Value is { } cellDelId)
+                    node.Format["cellRevision.id"] = cellDelId.ToString();
+            }
             // Borders (including diagonal)
             var cb = tcPr.TableCellBorders;
             if (cb != null)
