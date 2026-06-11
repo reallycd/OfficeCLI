@@ -458,6 +458,12 @@ public partial class ExcelHandler
             {
                 RejectCrossWorkbookFormula(value);
                 ValidateFormulaCellRefs(value);
+                // CONSISTENCY(value-child-uniqueness): a <c> may hold at most
+                // one value child. Drop any stale <is> placeholder (table
+                // header cells emit <is><t>ColumnN</t></is>) before writing
+                // the formula; a cell with both <f>/<v> and <is> is invalid
+                // OOXML that real Excel rejects with 0x800A03EC.
+                cell.RemoveAllChildren<InlineString>();
                 cell.CellFormula = new CellFormula(Core.PivotTableHelper.SanitizeXmlText(Core.ModernFunctionQualifier.Qualify(Core.ModernFunctionQualifier.AutoQuoteSheetRefs(value.TrimStart('=')))));
                 cell.CellValue = null;
             }
@@ -468,6 +474,11 @@ public partial class ExcelHandler
                 // the old formula re-evaluates on open / in html preview
                 // and overrides the literal the caller just set.
                 cell.CellFormula = null;
+                // CONSISTENCY(value-child-uniqueness): also drop any stale
+                // <is> inline-string child (table header placeholders write
+                // <is><t>ColumnN</t></is>). A cell carrying both <v> and <is>
+                // is invalid OOXML — real Excel refuses to open it (0x800A03EC).
+                cell.RemoveAllChildren<InlineString>();
                 // R2-2: strip XML-illegal chars (e.g. U+0000) from the cell
                 // value before it gets serialized to sheet1.xml. Without
                 // this, a NUL byte from upstream data would crash every
@@ -506,6 +517,10 @@ public partial class ExcelHandler
                 addCellFormula.FormulaType = CellFormulaValues.Array;
                 addCellFormula.Reference = cell.CellReference.Value;
             }
+            // CONSISTENCY(value-child-uniqueness): clear any stale <is> so the
+            // cell never carries both a formula and an inline string (invalid
+            // OOXML, 0x800A03EC in real Excel).
+            cell.RemoveAllChildren<InlineString>();
             cell.CellFormula = addCellFormula;
             cell.CellValue = null;
         }
@@ -619,6 +634,9 @@ public partial class ExcelHandler
             // arrRef so the array formula spills correctly; otherwise default
             // to the single cellRef.
             var arrRef = arrayFormulaRefRange ?? properties.GetValueOrDefault("ref", cellRef);
+            // CONSISTENCY(value-child-uniqueness): drop any stale <is> placeholder
+            // so the cell holds a single value child (invalid otherwise).
+            cell.RemoveAllChildren<InlineString>();
             cell.CellFormula = new CellFormula(Core.PivotTableHelper.SanitizeXmlText(Core.ModernFunctionQualifier.Qualify(Core.ModernFunctionQualifier.AutoQuoteSheetRefs(arrFormula.TrimStart('=')))))
             {
                 FormulaType = CellFormulaValues.Array,
@@ -743,6 +761,11 @@ public partial class ExcelHandler
         // for tables flagged with autoExpand=true. Matches Excel's
         // "type below a table → table grows" UX.
         MaybeExpandTablesForCell(cellWorksheet, cellRef);
+
+        // DATA-CORRUPTION(xlsx/table-header-name): if this write landed on a
+        // table header cell, keep <tableColumn name> in sync with the header
+        // text — Excel rejects the file otherwise.
+        MaybeSyncTableHeaderName(cellWorksheet, cellRef);
 
         // R20-02: accept `merge=A1:C3` on cell Add (parity with `set`).
         // This is the same merge logic used by Set range action; we

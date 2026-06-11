@@ -304,6 +304,10 @@ public partial class ExcelHandler
         // only fires when the cell still carries a value/formula after prune.
         if (cell.Parent != null && (cell.CellValue != null || cell.CellFormula != null || cell.InlineString != null))
             MaybeExpandTablesForCell(worksheet, cellRef);
+        // DATA-CORRUPTION(xlsx/table-header-name): keep <tableColumn name> in
+        // sync with a header cell's text after Set — Excel rejects mismatches.
+        if (cell.Parent != null)
+            MaybeSyncTableHeaderName(worksheet, cellRef);
         // Any mutation to a cell (value, formula, clear) can invalidate the calc chain
         DeleteCalcChainIfPresent();
         SaveWorksheet(worksheet);
@@ -418,6 +422,12 @@ public partial class ExcelHandler
                             $"Warning: Cell {cell.CellReference?.Value ?? cellRef} has formula \"={oldFormula}\"; replacing with literal value. Use --prop formula=… to update the formula instead.");
                     }
                     cell.CellFormula = null; // Clear formula when explicit value is set
+                    // CONSISTENCY(value-child-uniqueness): drop any stale <is>
+                    // inline-string child before writing <v>. Table header cells
+                    // carry an <is><t>ColumnN</t></is> placeholder; leaving both
+                    // <v> and <is> on one <c> is invalid OOXML and real Excel
+                    // refuses to open the file (0x800A03EC).
+                    cell.RemoveAllChildren<InlineString>();
                     // If cell is already boolean type, convert true/false to 1/0
                     if (cell.DataType?.Value == CellValues.Boolean)
                     {
@@ -542,6 +552,9 @@ public partial class ExcelHandler
                         setCellFormula.FormulaType = CellFormulaValues.Array;
                         setCellFormula.Reference = cell.CellReference.Value;
                     }
+                    // CONSISTENCY(value-child-uniqueness): drop any stale <is>
+                    // placeholder so the cell holds a single value child.
+                    cell.RemoveAllChildren<InlineString>();
                     cell.CellFormula = setCellFormula;
                     // Try to evaluate and cache the result immediately
                     var evalSheetData = GetSheet(worksheet).GetFirstChild<SheetData>();
@@ -663,6 +676,7 @@ public partial class ExcelHandler
                     // matching `set`'s overall merge semantics.
                     cell.CellValue = null;
                     cell.CellFormula = null;
+                    cell.RemoveAllChildren<InlineString>();
                     cell.DataType = null;
                     break;
                 case "arrayformula":
@@ -675,6 +689,7 @@ public partial class ExcelHandler
                         Reference = arrRef
                     };
                     cell.CellValue = null;
+                    cell.RemoveAllChildren<InlineString>();
                     break;
                 }
                 // CONSISTENCY(xlsx-hyperlink-cell-backed): `query hyperlink` emits

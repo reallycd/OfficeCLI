@@ -495,4 +495,78 @@ public partial class ExcelHandler
             }
         }
     }
+
+    // DATA-CORRUPTION(xlsx/table-header-name): Excel requires each
+    // <tableColumn name="..."> to EXACTLY match the visible text of its
+    // header-row cell; a mismatch makes the file unopenable
+    // (0x800A03EC). When `add table` runs over empty header cells the
+    // columns get auto names (Column1, Column2, ...). If the user later
+    // overwrites a header cell with a real value, the worksheet says
+    // "Product" while the table still says "Column1". This pass — called
+    // after every cell value write — re-syncs the matching tableColumn's
+    // name to the header cell's text. Mirrors the naming/escaping logic
+    // in AddTable (GetCellDisplayValue + Column{n} fallback + uniqueness).
+    private void MaybeSyncTableHeaderName(WorksheetPart worksheet, string cellRef)
+    {
+        var (cellCol, cellRow) = ParseCellReference(cellRef.ToUpperInvariant());
+        var cellColIdx = ColumnNameToIndex(cellCol);
+
+        foreach (var tdp in worksheet.TableDefinitionParts.ToList())
+        {
+            var table = tdp.Table;
+            if (table == null) continue;
+            // Tables with no header row (HeaderRowCount=0) have no column
+            // names tied to cells — skip them.
+            if (table.HeaderRowCount != null && table.HeaderRowCount.Value == 0) continue;
+            if (table.Reference?.Value is not string rangeRef || !rangeRef.Contains(':')) continue;
+
+            var parts = rangeRef.Split(':');
+            var (startColName, startRow) = ParseCellReference(parts[0]);
+            var (endColName, _) = ParseCellReference(parts[1]);
+            var startColIdx = ColumnNameToIndex(startColName);
+            var endColIdx = ColumnNameToIndex(endColName);
+
+            // Header row is the first row of the table reference. Only act
+            // when the written cell is on that row and within the span.
+            if (cellRow != (int)startRow) continue;
+            if (cellColIdx < startColIdx || cellColIdx > endColIdx) continue;
+
+            var tableColumns = table.GetFirstChild<TableColumns>();
+            if (tableColumns == null) continue;
+            var cols = tableColumns.Elements<TableColumn>().ToList();
+            int colOffset = cellColIdx - startColIdx; // 0-based position in table
+            if (colOffset < 0 || colOffset >= cols.Count) continue;
+            var targetCol = cols[colOffset];
+
+            // Read the header cell's current display text.
+            var sheetData = worksheet.Worksheet.GetFirstChild<SheetData>();
+            var hdrRow = sheetData?.Elements<Row>()
+                .FirstOrDefault(r => r.RowIndex?.Value == startRow);
+            var headerCell = hdrRow?.Elements<Cell>()
+                .FirstOrDefault(c => string.Equals(c.CellReference?.Value, cellRef, StringComparison.OrdinalIgnoreCase));
+            var text = headerCell != null ? GetCellDisplayValue(headerCell) : null;
+
+            // Excel rejects empty/duplicate column names. If the header was
+            // cleared, keep the existing (prior/auto) name to stay valid —
+            // never write an empty name.
+            if (string.IsNullOrEmpty(text)) continue;
+
+            // Already in sync — nothing to do.
+            if (string.Equals(targetCol.Name?.Value, text, StringComparison.Ordinal)) continue;
+
+            // Uniqueness: if another column already uses this name, leave the
+            // current name to avoid producing a duplicate (pre-existing edge);
+            // at minimum this never produces a header/column mismatch worse
+            // than before.
+            var used = new HashSet<string>(
+                cols.Where(c => !ReferenceEquals(c, targetCol))
+                    .Select(c => c.Name?.Value ?? "")
+                    .Where(n => !string.IsNullOrEmpty(n)),
+                StringComparer.OrdinalIgnoreCase);
+            if (used.Contains(text)) continue;
+
+            targetCol.Name = text;
+            table.Save();
+        }
+    }
 }
