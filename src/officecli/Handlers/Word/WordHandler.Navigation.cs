@@ -3700,6 +3700,23 @@ public partial class WordHandler
                     if (start != null)
                         node.Format["start"] = start.Value;
                 }
+                // BUG-DUMP-R49-1: <w:numPr><w:ins .../> is a tracked insertion
+                // of the list-numbering assignment (Reviewing pane: "Formatted: List
+                // Paragraph"). Surface as numPrIns.* so the batch emitter can
+                // replay <w:numPr><w:ins> via a raw-set after the paragraph is
+                // created (no first-class Add/Set vocabulary for numPr tracked
+                // changes exists; verbatim is the safest round-trip). Mirrors the
+                // paraMarkIns.* readback pattern for paragraph-mark tracked changes.
+                var numPrIns = numProps.GetFirstChild<Inserted>();
+                if (numPrIns != null)
+                {
+                    if (!string.IsNullOrEmpty(numPrIns.Author?.Value))
+                        node.Format["numPrIns.author"] = numPrIns.Author!.Value!;
+                    if (numPrIns.Date?.Value is DateTime npiDate)
+                        node.Format["numPrIns.date"] = npiDate.ToString("o");
+                    if (numPrIns.Id?.Value is { } npiId)
+                        node.Format["numPrIns.id"] = npiId.ToString();
+                }
             }
             else
             {

@@ -1058,7 +1058,12 @@ public partial class WordHandler
             if (key.StartsWith("paraMarkDel.", StringComparison.OrdinalIgnoreCase)
                 || key.StartsWith("paramarkdel.", StringComparison.OrdinalIgnoreCase)
                 || key.StartsWith("paraMarkIns.", StringComparison.OrdinalIgnoreCase)
-                || key.StartsWith("paramarkins.", StringComparison.OrdinalIgnoreCase))
+                || key.StartsWith("paramarkins.", StringComparison.OrdinalIgnoreCase)
+                // BUG-DUMP-R49-1: numPrIns.* — consumed at end-of-function by
+                // the numPrIns block (mirrors paraMarkIns.* handling). Skip here
+                // so they don't hit UNSUPPORTED via the dotted-fallback paths.
+                || key.StartsWith("numPrIns.", StringComparison.OrdinalIgnoreCase)
+                || key.StartsWith("numprins.", StringComparison.OrdinalIgnoreCase))
                 continue;
             if (!key.Contains('.'))
             {
@@ -1419,6 +1424,38 @@ public partial class WordHandler
                     Date = date,
                     Id = !string.IsNullOrEmpty(pmdId) ? pmdId : GenerateRevisionId(),
                 });
+            }
+        }
+        // BUG-DUMP-R49-1: numPrIns.*: <w:numPr><w:ins .../> records that the
+        // paragraph's list-numbering assignment was inserted as a tracked change
+        // (Reviewing pane: "Formatted: List Paragraph"). Stamp the <w:ins> child
+        // inside the existing w:numPr so the revision is faithfully round-tripped.
+        // Mirrors the paraMarkIns.* approach: no wrapping of text, only a marker
+        // inside the structural element. Added after numId/numLevel (which must
+        // be in numPr before this fires), so the w:ins sibling is present.
+        {
+            string? npiAuthor = null, npiDate = null, npiId = null;
+            bool hasNpiNs = properties.TryGetValue("numPrIns.author", out npiAuthor);
+            hasNpiNs |= properties.TryGetValue("numPrIns.date", out npiDate);
+            hasNpiNs |= properties.TryGetValue("numPrIns.id", out npiId);
+            if (hasNpiNs)
+            {
+                var numPr = pProps.NumberingProperties;
+                if (numPr != null && numPr.GetFirstChild<Inserted>() == null)
+                {
+                    var author = string.IsNullOrEmpty(npiAuthor) ? "OfficeCLI" : npiAuthor!;
+                    DateTime date = !string.IsNullOrEmpty(npiDate)
+                        && DateTime.TryParse(npiDate, null, System.Globalization.DateTimeStyles.RoundtripKind, out var npiDt)
+                        ? npiDt : DateTime.UtcNow;
+                    // CT_NumPr schema order: ilvl?, numId?, ins? — append after
+                    // ilvl/numId so the element lands at the correct position.
+                    numPr.AppendChild(new Inserted
+                    {
+                        Author = author,
+                        Date = date,
+                        Id = !string.IsNullOrEmpty(npiId) ? npiId : GenerateRevisionId(),
+                    });
+                }
             }
         }
         return resultPath;
