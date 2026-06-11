@@ -391,6 +391,13 @@ public partial class WordHandler
                 $"{activeLayout.MarginBottomPt.ToString("0.#", ci)}pt " +
                 $"{activeLayout.MarginLeftPt.ToString("0.#", ci)}pt;" +
                 pageBgCss;
+            // Page border (<w:pgBorders> in the active section's sectPr).
+            // Real Word boxes the whole page; emit per-side border on the
+            // .page div so partial (some-sides-only) borders also work.
+            if (activeSectionIdx >= 0 && activeSectionIdx < sections.Count)
+                pageStyle += BuildPageBorderCss(sections[activeSectionIdx]);
+            else if (sections.Count > 0)
+                pageStyle += BuildPageBorderCss(sections[^1]);
             // #1: lnNumType — read per-section line-number settings and
             // expose them as data-* attributes so the JS paginator can
             // inject line numbers after layout settles. Only applies when
@@ -1217,6 +1224,66 @@ public partial class WordHandler
         return new PageLayout(
             wTwips * c, hTwips * c, tTwips * c, bTwips * c, lTwips * c, rTwips * c, hdTwips * c, fdTwips * c,
             wTwips * p, hTwips * p, tTwips * p, bTwips * p, lTwips * p, rTwips * p, hdTwips * p, fdTwips * p);
+    }
+
+    /// <summary>
+    /// Build the per-side CSS for a section's page border (<w:pgBorders>).
+    /// Real Word draws a box around the whole page; we map each present
+    /// side element (top/left/bottom/right) to a border-&lt;side&gt; rule.
+    ///   sz   — 1/8 pt → pt
+    ///   color — ST_HexColor (auto → black) → #hex
+    ///   val  — single/thick/etc. → solid; the *Thick*Gap / double-ish
+    ///          variants → double (best-effort, OOXML art borders collapse).
+    /// offsetFrom is approximated: page-relative borders (the common case)
+    /// hug the page edge, so we leave the border on the .page box itself
+    /// (which sits at the page edge). text-relative would inset to the
+    /// margin, but the box-on-page rendering is the close-enough default.
+    /// Returns "" when no pgBorders / no sides present.
+    /// </summary>
+    private static string BuildPageBorderCss(SectionProperties? sectPr)
+    {
+        var pb = sectPr?.GetFirstChild<PageBorders>();
+        if (pb == null) return "";
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        var sb = new System.Text.StringBuilder();
+        void Emit(BorderType? b, string side)
+        {
+            if (b == null) return;
+            // val: "none"/"nil" means no border on that side.
+            var val = b.Val?.InnerText ?? "single";
+            if (val.Equals("none", StringComparison.OrdinalIgnoreCase)
+                || val.Equals("nil", StringComparison.OrdinalIgnoreCase))
+                return;
+            // sz is in eighths of a point; default ~4 (0.5pt) when absent.
+            double szEighths = 4;
+            if (b.Size?.Value is { } szv) szEighths = szv;
+            else if (b.Size?.InnerText is { Length: > 0 } szt
+                     && double.TryParse(szt, System.Globalization.NumberStyles.Any, ci, out var szp))
+                szEighths = szp;
+            var widthPt = szEighths / 8.0;
+            if (widthPt <= 0) widthPt = 0.5;
+            // color: ST_HexColor; "auto" or empty → black.
+            var rawColor = b.Color?.InnerText;
+            string color = string.IsNullOrEmpty(rawColor)
+                || rawColor.Equals("auto", StringComparison.OrdinalIgnoreCase)
+                ? "#000000"
+                : ParseHelpers.FormatHexColor(rawColor);
+            // style: the "...Gap" double-line art variants → double; the
+            // explicit double → double; everything else → solid.
+            var style = val.IndexOf("double", StringComparison.OrdinalIgnoreCase) >= 0
+                || val.IndexOf("Gap", StringComparison.OrdinalIgnoreCase) >= 0
+                ? "double"
+                : "solid";
+            // CSS double needs >=3px to show two lines; bump the doubled
+            // art borders so both rules render instead of collapsing.
+            if (style == "double" && widthPt < 3) widthPt = 3;
+            sb.Append($"border-{side}:{widthPt.ToString("0.##", ci)}pt {style} {color};");
+        }
+        Emit(pb.TopBorder, "top");
+        Emit(pb.LeftBorder, "left");
+        Emit(pb.BottomBorder, "bottom");
+        Emit(pb.RightBorder, "right");
+        return sb.ToString();
     }
 
     /// <summary>
