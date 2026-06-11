@@ -2708,7 +2708,17 @@ public partial class ExcelHandler
         // more than 11 significant digits / character columns: large magnitudes
         // (exp >= 11) and very small magnitudes (exp <= -5 — values below 1e-4).
         bool useScientific = exp >= 11 || exp <= -5;
-        if (!useScientific) return rawValue;
+        if (!useScientific)
+        {
+            // Excel's General format rounds the number to ~15 significant digits
+            // for display: it never surfaces IEEE-754 float noise such as
+            // 99.98999999999999 (shows 99.99) or 8.880000000000001 (shows 8.88).
+            // The shortest round-trippable rawValue keeps that noise for computed/
+            // imported/round-tripped <v> values, so re-render through G15 (which
+            // stays fixed-point for this magnitude range). Already-clean values and
+            // integers round-trip unchanged.
+            return value.ToString("G15", System.Globalization.CultureInfo.InvariantCulture);
+        }
 
         // Mantissa with up to 5 fractional digits (Excel General caps at ~6
         // significant figures in scientific), trailing zeros trimmed.
