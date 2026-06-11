@@ -452,6 +452,14 @@ public static partial class WordBatchEmitter
                 // cell's prop-set step (mirrors the row branch above).
                 var cellProps = ExtractCellOnlyProps(cellNode.Format, tableIsAutofit);
                 bool cellHadRevision = FoldRevisionIntoProps(cellNode.Format, "tcPrChange", cellProps);
+                // BUG-DUMP-R51-2: carry a cell-level tracked insert/delete marker
+                // (<w:tcPr><w:cellIns>/<w:cellDel>) onto the cell's `set` step so
+                // SetElementTableCell re-stamps it. Distinct from tcPrChange (a
+                // cell-property change) and from row-level trIns/trDel — the
+                // reader surfaces it under cellRevision.* (see ReadCellProps).
+                foreach (var crk in new[] { "cellRevision.type", "cellRevision.author", "cellRevision.date", "cellRevision.id" })
+                    if (cellNode.Format.TryGetValue(crk, out var crv) && crv != null)
+                        cellProps[crk] = crv.ToString()!;
                 if (cellProps.Count > 0 || cellHadRevision)
                 {
                     // CONSISTENCY(tblgrid-preserve): tcW values in the source

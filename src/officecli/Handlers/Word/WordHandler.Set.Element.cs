@@ -1345,6 +1345,33 @@ public partial class WordHandler
                     // here so dump→batch replay doesn't flag the emitter-
                     // injected skipGridSync=true as UNSUPPORTED.
                     break;
+                case "cellrevision.type":
+                {
+                    // BUG-DUMP-R51-2: re-stamp a cell-level tracked insert/delete
+                    // marker (<w:tcPr><w:cellIns>/<w:cellDel>). The author/date/id
+                    // arrive as sibling cellRevision.* keys (consumed below).
+                    // Mirrors SetElementTableRow's row-level ins/del wrap.
+                    string crAuthor = properties.TryGetValue("cellRevision.author", out var cra) && !string.IsNullOrEmpty(cra)
+                        ? cra : "OfficeCLI";
+                    string? crDateRaw = properties.TryGetValue("cellRevision.date", out var crd) ? crd : null;
+                    DateTime crDate = !string.IsNullOrEmpty(crDateRaw)
+                        && DateTime.TryParse(crDateRaw, null, System.Globalization.DateTimeStyles.RoundtripKind, out var crdt)
+                        ? crdt : DateTime.UtcNow;
+                    string crId = properties.TryGetValue("cellRevision.id", out var cri) && !string.IsNullOrEmpty(cri)
+                        ? cri : GenerateRevisionId();
+                    tcPr.RemoveAllChildren<CellInsertion>();
+                    tcPr.RemoveAllChildren<CellDeletion>();
+                    if (string.Equals(value, "del", StringComparison.OrdinalIgnoreCase))
+                        tcPr.AppendChild(new CellDeletion { Author = crAuthor, Date = crDate, Id = crId });
+                    else
+                        tcPr.AppendChild(new CellInsertion { Author = crAuthor, Date = crDate, Id = crId });
+                    break;
+                }
+                case "cellrevision.author":
+                case "cellrevision.date":
+                case "cellrevision.id":
+                    // Consumed by the cellrevision.type case (sibling lookups).
+                    break;
                 case "text":
                     // Defer text handling until after formatting is applied
                     deferredText = value;
