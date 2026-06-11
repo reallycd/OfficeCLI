@@ -160,11 +160,11 @@ public partial class ExcelHandler
         var renderer = new ChartSvgRenderer
         {
             ThemeAccentColors = ChartSvgRenderer.BuildThemeAccentColors(GetExcelThemeColors()),
-            ValueColor = info.ValFontColor ?? "#333",
-            CatColor = info.CatFontColor ?? "#555",
-            AxisColor = info.ValFontColor ?? "#666",
-            GridColor = info.GridlineColor ?? "#ddd",
-            AxisLineColor = info.AxisLineColor ?? "#999",
+            ValueColor = info.ValFontColor != null ? ChartSvgRenderer.CssHexColor(info.ValFontColor) : "#333",
+            CatColor = info.CatFontColor != null ? ChartSvgRenderer.CssHexColor(info.CatFontColor) : "#555",
+            AxisColor = info.ValFontColor != null ? ChartSvgRenderer.CssHexColor(info.ValFontColor) : "#666",
+            GridColor = info.GridlineColor != null ? ChartSvgRenderer.CssHexColor(info.GridlineColor) : "#ddd",
+            AxisLineColor = info.AxisLineColor != null ? ChartSvgRenderer.CssHexColor(info.AxisLineColor) : "#999",
             ValFontPx = info.ValFontPx,
             CatFontPx = info.CatFontPx
         };
@@ -189,11 +189,11 @@ public partial class ExcelHandler
         var chartDataPath = chartIdx > 0 && !string.IsNullOrEmpty(sheetName) ? $" data-path=\"/{HtmlEncode(sheetName)}/chart[{chartIdx}]\"" : "";
         sb.AppendLine($"<div class=\"chart-container\"{chartDataPath} style=\"max-width:max({svgW}pt,100%);flex:1;min-width:200pt;{bgStyle}\">");
 
-        var titleColor = info.TitleFontColor ?? "#333";
+        var titleColor = info.TitleFontColor != null ? ChartSvgRenderer.CssHexColor(info.TitleFontColor) : "#333";
         if (!string.IsNullOrEmpty(info.Title))
             sb.AppendLine($"  <div style=\"text-align:center;font-size:{info.TitleFontSize};font-weight:bold;padding:6px 0;color:{titleColor}\">{HtmlEncode(info.Title)}</div>");
 
-        var legendColor = info.LegendFontColor ?? "#555";
+        var legendColor = info.LegendFontColor != null ? ChartSvgRenderer.CssHexColor(info.LegendFontColor) : "#555";
         // Legend position drives the plot+legend container layout, mirroring the
         // Word path. right="r" → row, legend after plot; left="l" → row, legend
         // before; top="t"/"tr" → column, legend before; bottom (default) → below.
@@ -466,11 +466,11 @@ public partial class ExcelHandler
         var renderer = new ChartSvgRenderer
         {
             ThemeAccentColors = ChartSvgRenderer.BuildThemeAccentColors(GetExcelThemeColors()),
-            ValueColor = info.ValFontColor ?? "#333",
-            CatColor = info.CatFontColor ?? "#555",
-            AxisColor = info.ValFontColor ?? "#666",
-            GridColor = info.GridlineColor ?? "#ddd",
-            AxisLineColor = info.AxisLineColor ?? "#999",
+            ValueColor = info.ValFontColor != null ? ChartSvgRenderer.CssHexColor(info.ValFontColor) : "#333",
+            CatColor = info.CatFontColor != null ? ChartSvgRenderer.CssHexColor(info.CatFontColor) : "#555",
+            AxisColor = info.ValFontColor != null ? ChartSvgRenderer.CssHexColor(info.ValFontColor) : "#666",
+            GridColor = info.GridlineColor != null ? ChartSvgRenderer.CssHexColor(info.GridlineColor) : "#ddd",
+            AxisLineColor = info.AxisLineColor != null ? ChartSvgRenderer.CssHexColor(info.AxisLineColor) : "#999",
             ValFontPx = info.ValFontPx,
             CatFontPx = info.CatFontPx,
         };
@@ -487,7 +487,7 @@ public partial class ExcelHandler
         var cxChartDataPath = chartIdx > 0 && !string.IsNullOrEmpty(sheetName) ? $" data-path=\"/{HtmlEncode(sheetName)}/chart[{chartIdx}]\"" : "";
         sb.AppendLine($"<div class=\"chart-container\"{cxChartDataPath} style=\"max-width:max({svgW}pt,100%);flex:1;min-width:200pt\">");
 
-        var titleColor = info.TitleFontColor ?? "#333";
+        var titleColor = info.TitleFontColor != null ? ChartSvgRenderer.CssHexColor(info.TitleFontColor) : "#333";
         if (!string.IsNullOrEmpty(info.Title))
             sb.AppendLine($"  <div style=\"text-align:center;font-size:{info.TitleFontSize};font-weight:bold;padding:6px 0;color:{titleColor}\">{HtmlEncode(info.Title)}</div>");
 

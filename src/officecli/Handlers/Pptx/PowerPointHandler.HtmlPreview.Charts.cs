@@ -117,9 +117,13 @@ public partial class PowerPointHandler
         var bgStyle = info.ChartFillColor != null ? $"background:#{info.ChartFillColor};" : "background:transparent;";
         sb.AppendLine($"    <div class=\"shape\"{dataPathAttr} style=\"left:{x}pt;top:{y}pt;width:{w}pt;height:{h}pt;{bgStyle}display:flex;flex-direction:column;overflow:hidden\">");
 
-        // Title
+        // Title — honor the chart's own title run color when present (raw OOXML
+        // hex, needs '#' for valid CSS); otherwise fall back to the theme text color.
         if (!string.IsNullOrEmpty(info.Title))
-            sb.AppendLine($"      <div style=\"text-align:center;font-size:{info.TitleFontSize};font-weight:bold;padding:4px;flex-shrink:0;color:{chartTextColor}\">{ChartSvgRenderer.HtmlEncode(info.Title)}</div>");
+        {
+            var titleColor = info.TitleFontColor != null ? ChartSvgRenderer.CssHexColor(info.TitleFontColor) : chartTextColor;
+            sb.AppendLine($"      <div style=\"text-align:center;font-size:{info.TitleFontSize};font-weight:bold;padding:4px;flex-shrink:0;color:{titleColor}\">{ChartSvgRenderer.HtmlEncode(info.Title)}</div>");
+        }
 
         // Legend position drives the plot+legend layout, mirroring the Word/Excel
         // paths. right="r" → row, legend after plot; left="l" → row, legend before;

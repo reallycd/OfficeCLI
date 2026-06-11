@@ -2659,6 +2659,14 @@ internal partial class ChartSvgRenderer
         return v;
     }
 
+    /// <summary>Normalize a chart color for direct emission into an SVG
+    /// fill/stroke attribute or CSS color. Bare OOXML hex ("FF0000") gets a
+    /// '#' prefix; values already '#'-prefixed or non-hex (named/scheme
+    /// colors handled upstream) pass through unchanged so we never double the
+    /// '#'. Mirrors the $"#{rgb}" pattern used by ExtractColors.</summary>
+    internal static string CssHexColor(string v)
+        => HexOrNull(v) != null ? "#" + v : v;
+
     /// <summary>Render the chart SVG content (inside an already-opened svg tag) based on ChartInfo.</summary>
     public void RenderChartSvgContent(StringBuilder sb, ChartInfo info, int svgW, int svgH,
         int marginLeft = 45, int marginTop = 10, int marginRight = 15, int marginBottom = 30)
@@ -2666,12 +2674,16 @@ internal partial class ChartSvgRenderer
         // Sync instance font sizes and colors from ChartInfo
         ValFontPx = info.ValFontPx;
         CatFontPx = info.CatFontPx;
-        if (info.ValFontColor != null) AxisColor = info.ValFontColor;
-        if (info.CatFontColor != null) CatColor = info.CatFontColor;
-        if (info.GridlineColor != null) GridColor = info.GridlineColor;
+        // These ChartInfo colors are stored as raw OOXML hex (no '#'); the SVG
+        // fill/stroke attributes need '#'-prefixed CSS hex or browsers render
+        // the element black. Route every one through CssHexColor so a bare
+        // "FF0000" becomes "#FF0000" while named/already-#'d values pass through.
+        if (info.ValFontColor != null) AxisColor = CssHexColor(info.ValFontColor);
+        if (info.CatFontColor != null) CatColor = CssHexColor(info.CatFontColor);
+        if (info.GridlineColor != null) GridColor = CssHexColor(info.GridlineColor);
         ShowValGridlines = info.ValMajorGridlines;
         ShowCatGridlines = info.CatMajorGridlines;
-        if (info.AxisLineColor != null) AxisLineColor = info.AxisLineColor;
+        if (info.AxisLineColor != null) AxisLineColor = CssHexColor(info.AxisLineColor);
         DataLabelFontPx = info.DataLabelFontPx;
         DataLabelPos = info.DataLabelPos;
         FirstSliceAngle = info.FirstSliceAngle;
@@ -2837,7 +2849,7 @@ internal partial class ChartSvgRenderer
     public void RenderLegendHtml(StringBuilder sb, ChartInfo info, string fontColor = "#555")
     {
         if (!info.HasLegend) return;
-        var legendColor = info.LegendFontColor ?? fontColor;
+        var legendColor = info.LegendFontColor != null ? CssHexColor(info.LegendFontColor) : fontColor;
         var isPieType = info.ChartType.Contains("pie") || info.ChartType.Contains("doughnut");
         // #7f: legendPos "r" / "l" / "tr" stack swatches vertically; "b" / "t"
         // keep the horizontal row layout but the caller wraps with flex so
