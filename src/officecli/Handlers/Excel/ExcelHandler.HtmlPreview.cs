@@ -1637,14 +1637,28 @@ public partial class ExcelHandler
             return result?.BoolValue == true || (result?.NumericValue != null && result.NumericValue != 0);
         }
 
-        if (ruleType == ConditionalFormatValues.CellIs && cellValue.HasValue)
+        if (ruleType == ConditionalFormatValues.CellIs)
         {
             var op = rule.Operator?.Value;
             var f1 = rule.Elements<Formula>().FirstOrDefault()?.Text;
             var f2 = rule.Elements<Formula>().Skip(1).FirstOrDefault()?.Text;
             double? v1 = f1 != null ? evaluator.TryEvaluate(f1) ?? (double.TryParse(f1, out var p1) ? p1 : null) : null;
             double? v2 = f2 != null ? evaluator.TryEvaluate(f2) ?? (double.TryParse(f2, out var p2) ? p2 : null) : null;
-            if (v1 == null) return false;
+
+            // String comparison for equal/notEqual when the cell value and/or the
+            // rule operand are non-numeric (Excel stores string operands as "Apple").
+            if ((op == ConditionalFormattingOperatorValues.Equal || op == ConditionalFormattingOperatorValues.NotEqual)
+                && (!cellValue.HasValue || v1 == null))
+            {
+                var hay = cell != null ? GetCellDisplayValue(cell) : "";
+                var needle = (f1 ?? "").Trim();
+                if (needle.Length >= 2 && needle.StartsWith("\"") && needle.EndsWith("\""))
+                    needle = needle.Substring(1, needle.Length - 2);
+                bool eq = string.Equals(hay, needle, StringComparison.OrdinalIgnoreCase);
+                return op == ConditionalFormattingOperatorValues.Equal ? eq : !eq;
+            }
+
+            if (!cellValue.HasValue || v1 == null) return false;
             if (op == ConditionalFormattingOperatorValues.GreaterThan) return cellValue > v1;
             if (op == ConditionalFormattingOperatorValues.LessThan) return cellValue < v1;
             if (op == ConditionalFormattingOperatorValues.GreaterThanOrEqual) return cellValue >= v1;
