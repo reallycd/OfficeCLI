@@ -365,7 +365,11 @@ public partial class WordHandler : IDocumentHandler
     // rewrites the run's r:id refs, so the control needs no external files.
     internal sealed record ActiveXPartData(
         string RelId, byte[] Bytes, string ContentType, List<ActiveXPartData> Children);
-    internal sealed record ActiveXEmitData(string RunXml, List<ActiveXPartData> Parts);
+    // Externals: relationships with TargetMode=External (hyperlinks inside a
+    // VML textbox, linked content) — no part bytes, just type + target URI.
+    internal sealed record ActiveXExternalData(string RelId, string Type, string Target);
+    internal sealed record ActiveXEmitData(
+        string RunXml, List<ActiveXPartData> Parts, List<ActiveXExternalData> Externals);
 
     /// <summary>
     /// dump→batch: extract the verbatim run XML and all referenced parts for an
@@ -405,6 +409,28 @@ public partial class WordHandler : IDocumentHandler
         return CollectInlinedPartsEmitData(run, drawing);
     }
 
+    /// <summary>
+    /// dump→batch: extract the verbatim run XML and all referenced parts /
+    /// external relationships for a legacy VML shape run (&lt;w:pict&gt;).
+    /// Covers textbox content carrying hyperlinks (external rels) and
+    /// v:imagedata image parts. Returns null when the run hosts no pict or a
+    /// reference can't be resolved.
+    /// </summary>
+    internal ActiveXEmitData? GetVmlShapeEmitData(string runPath)
+    {
+        OpenXmlElement? element;
+        try { element = NavigateToElement(ParsePath(runPath)); }
+        catch { return null; }
+        if (element is not Run run) return null;
+        // LibreOffice/Word export VML textboxes wrapped in mc:AlternateContent
+        // (Choice = modern wps drawing, Fallback = w:pict) — probe the whole
+        // run subtree, and collect rel refs from the whole run so the Choice
+        // branch's references resolve on replay too.
+        if (!run.Descendants<DocumentFormat.OpenXml.Wordprocessing.Picture>().Any())
+            return null;
+        return CollectInlinedPartsEmitData(run, run);
+    }
+
     // Shared collector for the `add activex` / `add diagram` carriers: every
     // relationship-namespace attribute in the subtree (r:id, r:dm, r:lo, …)
     // names a part on the run's host part; ship each part's bytes plus its
@@ -425,6 +451,7 @@ public partial class WordHandler : IDocumentHandler
         if (relIds.Count == 0) return null;
 
         var parts = new List<ActiveXPartData>();
+        var externals = new List<ActiveXExternalData>();
         for (int idx = 0; idx < relIds.Count; idx++)
         {
             var relId = relIds[idx];
@@ -435,7 +462,27 @@ public partial class WordHandler : IDocumentHandler
                 part = hostPart.GetPartById(relId);
                 bytes = ReadPartBytes(part);
             }
-            catch { return null; }
+            catch
+            {
+                // Not a part — maybe an EXTERNAL relationship (a hyperlink
+                // inside a VML textbox, linked content). Those carry no bytes;
+                // ship type + target so the apply side recreates the rel.
+                var hyper = hostPart.HyperlinkRelationships.FirstOrDefault(h => h.Id == relId);
+                if (hyper != null)
+                {
+                    externals.Add(new ActiveXExternalData(
+                        relId, hyper.RelationshipType, hyper.Uri.OriginalString));
+                    continue;
+                }
+                var ext = hostPart.ExternalRelationships.FirstOrDefault(x => x.Id == relId);
+                if (ext != null)
+                {
+                    externals.Add(new ActiveXExternalData(
+                        relId, ext.RelationshipType, ext.Uri.OriginalString));
+                    continue;
+                }
+                return null;
+            }
             var children = new List<ActiveXPartData>();
             foreach (var child in part.Parts)
             {
@@ -468,7 +515,10 @@ public partial class WordHandler : IDocumentHandler
                 }
             }
         }
-        return new ActiveXEmitData(run.OuterXml, parts);
+        // A run that references ONLY external rels (a VML textbox whose sole
+        // refs are hyperlinks) is still a valid carrier.
+        if (parts.Count == 0 && externals.Count == 0) return null;
+        return new ActiveXEmitData(run.OuterXml, parts, externals);
     }
 
     private static byte[] ReadPartBytes(OpenXmlPart part)

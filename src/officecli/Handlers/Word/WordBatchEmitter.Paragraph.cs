@@ -1952,7 +1952,7 @@ public static partial class WordBatchEmitter
             // <mc:AlternateContent>, so they reach this "run"-typed branch.
             string? attachParaAc = sharedAttachPara
                 ?? (parentPath.Contains("/tc[", StringComparison.Ordinal) ? paraTargetPath : null);
-            if (isTextbox && TryEmitTextbox(word, run, probeXml, parentPath, items, ctx, attachParaAc))
+            if (isTextbox && TryEmitTextbox(word, run, probeXml, parentPath, items, ctx, attachParaAc, paraTargetPath))
                 return true;
             // AlternateContent-wrapped non-textbox shapes — connector lines
             // (<wps:cNvCnPr>, e.g. a letterhead separator), autoshapes, groups
@@ -2214,7 +2214,7 @@ public static partial class WordBatchEmitter
             // host) first; otherwise fall back to paraTargetPath for cells.
             string? attachPara = sharedAttachPara
                 ?? (parentPath.Contains("/tc[", StringComparison.Ordinal) ? paraTargetPath : null);
-            if (TryEmitTextbox(word, run, rawXml, parentPath, items, ctx, attachPara))
+            if (TryEmitTextbox(word, run, rawXml, parentPath, items, ctx, attachPara, paraTargetPath))
                 return true;
         }
         // BUG-R3 (linked external image): a <w:drawing> carrying an
@@ -2444,7 +2444,7 @@ public static partial class WordBatchEmitter
     /// </summary>
     private static bool TryEmitTextbox(WordHandler word, DocumentNode run, string rawXml,
                                        string parentPath, List<BatchItem> items, BodyEmitContext? ctx,
-                                       string? attachParaPath = null)
+                                       string? attachParaPath = null, string? paraTargetPath = null)
     {
         if (ctx == null) return false;
 
@@ -2471,6 +2471,23 @@ public static partial class WordBatchEmitter
             // (fillcolor/strokecolor, no r:id) still round-trip verbatim.
             if (HasExternalRelRef(rawXml))
             {
+                // The rel refs are resolvable (hyperlinks inside the textbox
+                // content, v:imagedata image parts): ship them through the
+                // inlined-parts carrier so the shape round-trips with its
+                // relationships recreated — previously warn-dropped.
+                var vmlParent = attachParaPath ?? paraTargetPath;
+                var vmlData = vmlParent != null ? word.GetVmlShapeEmitData(run.Path) : null;
+                if (vmlData != null)
+                {
+                    items.Add(new BatchItem
+                    {
+                        Command = "add",
+                        Parent = vmlParent,
+                        Type = "vmlshape",
+                        Props = PackInlinedPartsProps(vmlData),
+                    });
+                    return true;
+                }
                 ctx.Warnings.Add(new DocxUnsupportedWarning(
                     Element: "textbox.vmlContent",
                     Path: run.Path,
@@ -2946,6 +2963,14 @@ public static partial class WordBatchEmitter
                 props[$"part{pi}.child{ci}.data"] =
                     $"data:{child.ContentType};base64,{Convert.ToBase64String(child.Bytes)}";
             }
+        }
+        int ei = 0;
+        foreach (var ext in data.Externals)
+        {
+            ei++;
+            props[$"ext{ei}.relId"] = ext.RelId;
+            props[$"ext{ei}.type"] = ext.Type;
+            props[$"ext{ei}.target"] = ext.Target;
         }
         return props;
     }

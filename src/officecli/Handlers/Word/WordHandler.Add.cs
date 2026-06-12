@@ -186,6 +186,7 @@ public partial class WordHandler
             "ole" or "oleobject" or "object" or "embed" => AddOle(parent, parentPath, index, properties),
             "activex" => AddActiveX(parent, parentPath, properties),
             "diagram" or "smartart" => AddDiagram(parent, parentPath, properties),
+            "vmlshape" => AddVmlShape(parent, parentPath, properties),
             "comment" => AddComment(parent, parentPath, index, properties),
             "bookmark" => AddBookmark(parent, parentPath, index, properties),
             "permstart" or "permend" => AddPerm(parent, parentPath, index, properties, type),
@@ -410,6 +411,7 @@ public partial class WordHandler
                 case "activex":
                 case "diagram":
                 case "smartart":
+                case "vmlshape":
                     break;
                 // BUG-FIX(B2): bookmark is an inline-level construct, but
                 // AddBookmark redirects into the cell's first paragraph

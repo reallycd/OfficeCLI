@@ -723,6 +723,17 @@ public partial class WordHandler
         return AddInlinedPartsRun(parent, parentPath, properties, "diagram");
     }
 
+    // Legacy VML shape run (<w:pict>) — textboxes whose content carries
+    // hyperlinks (external rels) or v:imagedata image parts. Same carrier.
+    private string AddVmlShape(OpenXmlElement parent, string parentPath, Dictionary<string, string> properties)
+    {
+        properties ??= new Dictionary<string, string>();
+        if (!properties.TryGetValue("runXml", out var vmlMarker) || string.IsNullOrEmpty(vmlMarker)
+            || !vmlMarker.Contains("<w:pict", StringComparison.Ordinal))
+            throw new ArgumentException("vmlshape requires --prop runXml containing a <w:pict> element");
+        return AddInlinedPartsRun(parent, parentPath, properties, "vmlshape");
+    }
+
     private string AddInlinedPartsRun(OpenXmlElement parent, string parentPath, Dictionary<string, string> properties, string opName)
     {
         var runXml = properties["runXml"];
@@ -767,6 +778,24 @@ public partial class WordHandler
                 ?? throw new ArgumentException($"{opName} part{pi}: unsupported content type '{ct}'");
             pending.Add((created, bytes, ct, pi));
             idMap.Add((oldRelId!, hostPart.GetIdOfPart(created)));
+        }
+
+        // External relationships (hyperlinks inside a VML textbox, linked
+        // content): no part bytes — recreate the rel on the host part with a
+        // fresh id and route the source id through the same rewrite map.
+        const string HyperlinkRelType =
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+        for (int ei = 1; properties.TryGetValue($"ext{ei}.relId", out var extOldId); ei++)
+        {
+            var extType = properties.GetValueOrDefault($"ext{ei}.type");
+            var extTarget = properties.GetValueOrDefault($"ext{ei}.target");
+            if (string.IsNullOrEmpty(extOldId) || string.IsNullOrEmpty(extType) || string.IsNullOrEmpty(extTarget))
+                throw new ArgumentException($"{opName} ext{ei} requires relId, type and target");
+            var extUri = new Uri(extTarget, UriKind.RelativeOrAbsolute);
+            var newExtId = extType == HyperlinkRelType
+                ? hostPart.AddHyperlinkRelationship(extUri, true).Id
+                : hostPart.AddExternalRelationship(extType, extUri).Id;
+            idMap.Add((extOldId!, newExtId));
         }
 
         // Two-phase rewrite (shared by the run XML and every inlined XML
