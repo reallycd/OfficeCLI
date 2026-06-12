@@ -214,7 +214,11 @@ public partial class WordHandler
             "column" => DW.HorizontalRelativePositionValues.Column,
             "character" => DW.HorizontalRelativePositionValues.Character,
             "margin" => DW.HorizontalRelativePositionValues.Margin,
-            _ => throw new ArgumentException($"Invalid horizontal relative position: '{value}'. Valid values: margin, page, column, character.")
+            "leftmargin" => DW.HorizontalRelativePositionValues.LeftMargin,
+            "rightmargin" => DW.HorizontalRelativePositionValues.RightMargin,
+            "insidemargin" => DW.HorizontalRelativePositionValues.InsideMargin,
+            "outsidemargin" => DW.HorizontalRelativePositionValues.OutsideMargin,
+            _ => throw new ArgumentException($"Invalid horizontal relative position: '{value}'. Valid values: margin, page, column, character, leftMargin, rightMargin, insideMargin, outsideMargin.")
         };
 
     private static DW.VerticalRelativePositionValues ParseVerticalRelative(string value) =>
@@ -224,7 +228,11 @@ public partial class WordHandler
             "paragraph" => DW.VerticalRelativePositionValues.Paragraph,
             "line" => DW.VerticalRelativePositionValues.Line,
             "margin" => DW.VerticalRelativePositionValues.Margin,
-            _ => throw new ArgumentException($"Invalid vertical relative position: '{value}'. Valid values: margin, page, paragraph, line.")
+            "topmargin" => DW.VerticalRelativePositionValues.TopMargin,
+            "bottommargin" => DW.VerticalRelativePositionValues.BottomMargin,
+            "insidemargin" => DW.VerticalRelativePositionValues.InsideMargin,
+            "outsidemargin" => DW.VerticalRelativePositionValues.OutsideMargin,
+            _ => throw new ArgumentException($"Invalid vertical relative position: '{value}'. Valid values: margin, page, paragraph, line, topMargin, bottomMargin, insideMargin, outsideMargin.")
         };
 
     private static string GetDrawingInfo(Drawing drawing)
