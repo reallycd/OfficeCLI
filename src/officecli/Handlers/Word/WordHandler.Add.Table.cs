@@ -269,6 +269,11 @@ public partial class WordHandler
         // If not, fall back to the surrounding section's bidi state below
         // (CONSISTENCY(rtl-cascade) — same intent as the paragraph cascade).
         bool explicitDirection = false;
+        // BUG-DUMP-R36-2: band sizes are collected during the prop loop and
+        // materialized once afterwards (see the mc:AlternateContent guard
+        // below) — CT_TblPr has no slot for them, so they cannot be inserted
+        // directly like the other tblPr children.
+        int? rowBandSize = null, colBandSize = null;
         // Set of keys the switch below consumes. Used to mark a key as
         // accessed via ContainsKey only when a case actually matched, so
         // genuine typos still fall through to the tracker's UnusedKeys.
@@ -547,15 +552,12 @@ public partial class WordHandler
                 // Mirrors the Navigation readback; without these the emitter's
                 // `add table` carried rowBandSize/colBandSize but AddTable dropped
                 // them, flattening the visible striping. CONSISTENCY(add-set-symmetry).
+                // Collected here, written after the loop (mc guard below).
                 case "rowbandsize":
-                    tblProps.RemoveAllChildren<TableStyleRowBandSize>();
-                    if (int.TryParse(tv, out var rbs))
-                        InsertTblPrChildInOrder(tblProps, new TableStyleRowBandSize { Val = rbs });
+                    if (int.TryParse(tv, out var rbs)) rowBandSize = rbs;
                     break;
                 case "colbandsize" or "columnbandsize":
-                    tblProps.RemoveAllChildren<TableStyleColumnBandSize>();
-                    if (int.TryParse(tv, out var cbs))
-                        InsertTblPrChildInOrder(tblProps, new TableStyleColumnBandSize { Val = cbs });
+                    if (int.TryParse(tv, out var cbs)) colBandSize = cbs;
                     break;
                 // BUG-R4-02/08: tblLook props at Add time. Mirrors the Set.Element.cs
                 // tblLook switch — accepts lowercase + camelCase aliases as input.
@@ -617,19 +619,44 @@ public partial class WordHandler
             }
         }
 
-        // BUG-DUMP-R36-2: tblStyleRowBandSize / tblStyleColBandSize precede tblW
-        // in CT_TblPr (rank 4/5 < 6). When `width=` is processed AFTER the band
-        // keys in the (unordered) prop dict, the SDK's typed `.TableWidth` setter
-        // re-anchors tblW ahead of the already-inserted band elements, producing
-        // a schema-invalid order. Re-place the band elements through the
-        // order-aware inserter once all tblPr props are applied so they land in
-        // their canonical slot regardless of dict iteration order.
-        foreach (var bandEl in tblProps.ChildElements
-                     .Where(c => c is TableStyleRowBandSize or TableStyleColumnBandSize)
-                     .ToList())
+        // BUG-DUMP-R36-2: materialize tblStyleRowBandSize / tblStyleColBandSize.
+        // The document-level CT_TblPr particle (SDK ground truth — see the
+        // generated TableProperties class) does NOT admit these elements in ANY
+        // position; they are only schema-valid inside a table STYLE's tblPr
+        // (CT_TblPrStyle). Inserting them bare therefore always validates as
+        // "invalid child element 'tblStyleRowBandSize'", no matter the order.
+        // wml-aware consumers (Word, LibreOffice — whose DOCX export writes
+        // them document-side at the CT_TblPrBase rank-4/5 slot) DO honor the
+        // elements, so we keep them document-side but wrap them in an
+        // mc:AlternateContent guard with Requires="w": every wordprocessingml
+        // consumer selects the Choice (the band sizes resolve in place, in
+        // their canonical pre-tblW slot), while strict schema validators skip
+        // MC content and stay green. Navigation's table readback unwraps the
+        // guard, so Get/dump still surface rowBandSize/colBandSize and the
+        // dump→batch round-trip regenerates this exact shape.
+        if (rowBandSize.HasValue || colBandSize.HasValue)
         {
-            bandEl.Remove();
-            InsertTblPrChildInOrder(tblProps, bandEl);
+            var bandChoice = new AlternateContentChoice { Requires = "w" };
+            if (rowBandSize is int rbv)
+                bandChoice.Append(new TableStyleRowBandSize { Val = rbv });
+            if (colBandSize is int cbv)
+                bandChoice.Append(new TableStyleColumnBandSize { Val = cbv });
+            var bandGuard = new AlternateContent(bandChoice, new AlternateContentFallback());
+            // Place the guard where the band sizes themselves belong
+            // (CT_TblPrBase rank 4/5: after tblStyle/tblpPr/tblOverlap/
+            // bidiVisual, before tblW) so the MC-resolved document keeps
+            // canonical order for order-sensitive consumers.
+            OpenXmlElement? bandSuccessor = null;
+            foreach (var child in tblProps.ChildElements)
+            {
+                if (child is TableStyle or TablePositionProperties or TableOverlap or BiDiVisual) continue;
+                bandSuccessor = child;
+                break;
+            }
+            if (bandSuccessor != null)
+                bandSuccessor.InsertBeforeSelf(bandGuard);
+            else
+                tblProps.AppendChild(bandGuard);
         }
 
         // Auto-RTL: when the user didn't pin direction explicitly and the

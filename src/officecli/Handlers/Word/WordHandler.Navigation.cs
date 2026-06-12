@@ -2726,7 +2726,17 @@ public partial class WordHandler
             // CT_TblPr these elements precede tblW, and real-world producers that
             // emit them AFTER tblW make the strict SDK parser type them as
             // OpenXmlUnknownElement (the typed accessor then returns null).
-            foreach (var tpChild in tp.ChildElements)
+            // Our own AddTable writes them inside an mc:AlternateContent
+            // Requires="w" guard (CT_TblPr has no slot for them — see
+            // AddTable's band-guard comment), so additionally unwrap one
+            // level of direct AlternateContent/Choice. Scoped unwrap, not
+            // Descendants(): a tblPrChange snapshot must not leak its
+            // prior band sizes onto the live table.
+            foreach (var tpChild in tp.ChildElements.SelectMany(c =>
+                         c is AlternateContent
+                             ? c.ChildElements.OfType<AlternateContentChoice>()
+                                .SelectMany(ch => ch.ChildElements)
+                             : new[] { c }.AsEnumerable()))
             {
                 var ln = tpChild.LocalName;
                 if (ln is not ("tblStyleRowBandSize" or "tblStyleColBandSize")) continue;

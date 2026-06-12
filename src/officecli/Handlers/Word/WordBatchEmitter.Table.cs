@@ -481,12 +481,19 @@ public static partial class WordBatchEmitter
                 // BUG-DUMP-R32-3: re-apply a <w:cellMerge> tracked-change marker
                 // (cell split/merge under Track Changes) verbatim. It is not a
                 // curated tcPr Set key, so it round-trips via raw-set into the
-                // cell's <w:tcPr>. The SDK reorders tcPr children to schema order
-                // on save, so appending is safe regardless of insertion point.
+                // cell's <w:tcPr>. Appending INTO an existing tcPr is safe
+                // (cellMerge ranks near the end of CT_TcPr), but a fresh tcPr
+                // must be PREPENDED to the cell: CT_Tc requires tcPr as the
+                // first child, and raw-set does not reorder tc children —
+                // appending placed it after <w:p>, which the schema validator
+                // rejects ("unexpected child element tcPr").
+                // CONSISTENCY(tcpr-first): mirrors the
+                // `cell.PrependChild(new TableCellProperties())` pattern used
+                // by every tcPr-creation site in Add.Table/Set.Element.
                 // When the cell already got a tcPr from the cellProps `set` above
                 // (emitted earlier in item order), append into that existing
-                // tcPr; otherwise wrap the marker in a fresh <w:tcPr> appended to
-                // the cell. Guarded to body-hosted tables (cellRawXPath != null),
+                // tcPr; otherwise wrap the marker in a fresh <w:tcPr> prepended
+                // to the cell. Guarded to body-hosted tables (cellRawXPath != null),
                 // matching the cell-SDT raw-set restriction; header/footer cells
                 // emit a warning instead so the loss is never silent.
                 if (cellNode.Format.TryGetValue("cellMerge.xml", out var cellMergeRaw)
@@ -509,7 +516,7 @@ public static partial class WordBatchEmitter
                                 Command = "raw-set",
                                 Part = "/document",
                                 Xpath = cellRawXPath,
-                                Action = "append",
+                                Action = "prepend",
                                 Xml = $"<w:tcPr>{cellMergeXml}</w:tcPr>",
                             });
                     }
