@@ -188,6 +188,13 @@ public static partial class WordBatchEmitter
         {
             if (runs.Count == 1)
             {
+                // BUG-DUMP-R35-2: a wrapper-flattened run that collapses into the
+                // paragraph's own `text` prop bypasses EmitPlainOrHyperlinkRun, so
+                // the deterministic smartTag/customXml flatten warning never fired
+                // for a single-run wrapped paragraph (text survived, loss silent).
+                // CONSISTENCY(wrapper-flatten-warning): same emit as
+                // EmitPlainOrHyperlinkRun's _wrapperFlattened branch.
+                WarnWrapperFlattened(runs[0], ctx);
                 var runProps = FilterEmittableProps(runs[0].Format);
                 foreach (var (k, v) in runProps)
                 {
@@ -2938,6 +2945,24 @@ public static partial class WordBatchEmitter
         return NoteRefKind.None;
     }
 
+    // BUG-DUMP-R35-2: deterministic flatten warning for a run synthesized from
+    // inside a <w:smartTag>/<w:customXml> wrapper (Navigation marks it with
+    // Format["_wrapperFlattened"]). Shared by the per-run emit path
+    // (EmitPlainOrHyperlinkRun) and the single-run paragraph collapse path so
+    // the wrapper loss is never silent regardless of which shape the
+    // paragraph takes. CONSISTENCY(wrapper-flatten-warning).
+    private static void WarnWrapperFlattened(DocumentNode run, BodyEmitContext? ctx)
+    {
+        if (run.Format.TryGetValue("_wrapperFlattened", out var wfObj)
+            && wfObj is bool wfB && wfB && ctx != null)
+        {
+            ctx.Warnings.Add(new DocxUnsupportedWarning(
+                Element: "smartTag/customXml",
+                Path: run.Path,
+                Reason: "inline smartTag/customXml wrapper flattened on dump→batch round-trip; the wrapped run text and formatting are preserved, only the wrapper element is dropped"));
+        }
+    }
+
     private static void EmitPlainOrHyperlinkRun(DocumentNode run, string paraTargetPath, List<BatchItem> items, BodyEmitContext? ctx = null, int hlBaseline = 0)
     {
         // BUG-R12A(BUG1): a hyperlink wrapper with >1 run or any per-run rPr was
@@ -2964,14 +2989,7 @@ public static partial class WordBatchEmitter
         // consistent with how Word often strips these and with the project's
         // flatten precedents. Surface a deterministic warning so the wrapper
         // loss isn't silent (matches the external-rel / picBullet convention).
-        if (run.Format.TryGetValue("_wrapperFlattened", out var wfObj)
-            && wfObj is bool wfB && wfB && ctx != null)
-        {
-            ctx.Warnings.Add(new DocxUnsupportedWarning(
-                Element: "smartTag/customXml",
-                Path: run.Path,
-                Reason: "inline smartTag/customXml wrapper flattened on dump→batch round-trip; the wrapped run text and formatting are preserved, only the wrapper element is dropped"));
-        }
+        WarnWrapperFlattened(run, ctx);
         // CONSISTENCY(move-range-markers): a moveFrom/moveTo run's own w:id in
         // the source usually differs from its paired half (the pairing lives on
         // the bracketing range markers' shared w:name, not on the run id). Rewrite

@@ -4526,6 +4526,15 @@ public partial class WordHandler
                 if (entry.kind == "run")
                 {
                     var runNode = ElementToNode(entry.el, $"{path}/r[{runIdx + 1}]", depth - 1);
+                    // BUG-DUMP-R35-2: unlike <w:smartTag> (OpenXmlUnknownElement in
+                    // this SDK build — handled by the unknown-subtree synthesizer
+                    // below), a run-level <w:customXml> parses as a TYPED
+                    // CustomXmlRun, so its inner runs arrive here via GetAllRuns
+                    // and the wrapper is flattened by the typed path. Mark them so
+                    // the emitter surfaces the same deterministic flatten warning.
+                    // CONSISTENCY(wrapper-flatten-warning).
+                    if (entry.el.Ancestors<CustomXmlRun>().FirstOrDefault() != null)
+                        runNode.Format["_wrapperFlattened"] = true;
                     // BUG-DUMP18-02: surface a hyperlink-scoped subpath on
                     // runs that are direct children of <w:hyperlink>. The
                     // canonical Path stays flat (/…/r[N]) for back-compat
