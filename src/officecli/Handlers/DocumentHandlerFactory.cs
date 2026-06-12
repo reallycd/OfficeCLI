@@ -58,6 +58,18 @@ public static class DocumentHandlerFactory
             FixXmlEncoding(filePath);
             return OpenHandler(filePath, ext, editable);
         }
+        catch (Exception ex) when (IsDanglingPartException(ex))
+        {
+            // Some producers strip a part (e.g. a sensitivity-label
+            // docMetadata/LabelInfo.xml) but leave its relationship behind.
+            // The SDK throws "Part: X doesn't exist in the package" on the
+            // first part-graph walk, so EVERY command failed on the file even
+            // though Word opens it fine (it ignores the dangling rel). Remove
+            // the dangling internal relationships in-place and retry — mirrors
+            // the FixXmlEncoding repair-and-retry path above.
+            StripDanglingPackageRels(filePath);
+            return OpenHandler(filePath, ext, editable);
+        }
         catch (DocumentFormat.OpenXml.Packaging.OpenXmlPackageException ex)
         {
             throw new CliException($"Cannot open {Path.GetFileName(filePath)}: {ex.Message}", ex)
@@ -274,6 +286,77 @@ public static class DocumentHandlerFactory
                 return true;
         }
         return false;
+    }
+
+    private static bool IsDanglingPartException(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e.Message.Contains("doesn't exist in the package", StringComparison.OrdinalIgnoreCase)
+                || e.Message.Contains("Specified part does not exist", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Remove internal (non-External) relationships whose target part is
+    /// missing from the package. Word tolerates such dangling rels; the SDK
+    /// refuses to open the file. Only .rels entries are touched, and only the
+    /// dangling Relationship nodes are dropped.
+    /// </summary>
+    private static void StripDanglingPackageRels(string filePath)
+    {
+        using var zip = ZipFile.Open(filePath, ZipArchiveMode.Update);
+        var names = new HashSet<string>(zip.Entries.Select(e => e.FullName), StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in zip.Entries.ToList())
+        {
+            if (!entry.FullName.EndsWith(".rels", StringComparison.OrdinalIgnoreCase)) continue;
+            string content;
+            using (var reader = new StreamReader(entry.Open(), Encoding.UTF8))
+                content = reader.ReadToEnd();
+
+            System.Xml.Linq.XDocument xdoc;
+            try { xdoc = System.Xml.Linq.XDocument.Parse(content); }
+            catch { continue; }
+            var ns = (System.Xml.Linq.XNamespace)"http://schemas.openxmlformats.org/package/2006/relationships";
+            // Base directory the .rels' relative targets resolve against:
+            // "x/_rels/y.xml.rels" -> "x"; the root "_rels/.rels" -> "".
+            var relsDir = (Path.GetDirectoryName(entry.FullName) ?? "").Replace('\\', '/');
+            var baseDir = relsDir.EndsWith("_rels", StringComparison.OrdinalIgnoreCase)
+                ? relsDir.Substring(0, relsDir.Length - "_rels".Length).TrimEnd('/')
+                : relsDir;
+            bool changed = false;
+            foreach (var rel in xdoc.Root!.Elements(ns + "Relationship").ToList())
+            {
+                if (string.Equals((string?)rel.Attribute("TargetMode"), "External", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var target = (string?)rel.Attribute("Target");
+                if (string.IsNullOrEmpty(target)) continue;
+                var resolved = target.StartsWith("/")
+                    ? target.TrimStart('/')
+                    : (baseDir.Length > 0 ? baseDir + "/" + target : target);
+                var segs = new List<string>();
+                foreach (var seg in resolved.Split('/'))
+                {
+                    if (seg == "..") { if (segs.Count > 0) segs.RemoveAt(segs.Count - 1); }
+                    else if (seg != "." && seg.Length > 0) segs.Add(seg);
+                }
+                resolved = string.Join("/", segs);
+                if (!names.Contains(resolved))
+                {
+                    rel.Remove();
+                    changed = true;
+                }
+            }
+            if (!changed) continue;
+            entry.Delete();
+            var newEntry = zip.CreateEntry(entry.FullName, CompressionLevel.Optimal);
+            using var writer = new StreamWriter(newEntry.Open(), new UTF8Encoding(false));
+            writer.Write(xdoc.Declaration != null
+                ? xdoc.Declaration + xdoc.ToString(System.Xml.Linq.SaveOptions.DisableFormatting)
+                : xdoc.ToString(System.Xml.Linq.SaveOptions.DisableFormatting));
+        }
     }
 
     /// <summary>

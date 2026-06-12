@@ -156,13 +156,26 @@ public partial class WordHandler : IDocumentHandler
         var share = editable ? FileShare.Read : FileShare.ReadWrite;
         var access = editable ? FileAccess.ReadWrite : FileAccess.Read;
         _backingStream = new FileStream(filePath, FileMode.Open, access, share);
-        _doc = WordprocessingDocument.Open(_backingStream, editable);
-        WordStrictAttributeSanitizer.Sanitize(_doc);
-        if (editable)
+        try
         {
-            EnsureAllParaIds();
-            EnsureDocPropIds();
-            EnsureSdtIds();
+            _doc = WordprocessingDocument.Open(_backingStream, editable);
+            WordStrictAttributeSanitizer.Sanitize(_doc);
+            if (editable)
+            {
+                EnsureAllParaIds();
+                EnsureDocPropIds();
+                EnsureSdtIds();
+            }
+        }
+        catch
+        {
+            // A failed open must not leak the backing FileStream — the
+            // factory's repair-and-retry paths (FixXmlEncoding /
+            // StripDanglingPackageRels) reopen the file for in-place fixes
+            // and would hit "file is being used by another process".
+            _doc?.Dispose();
+            _backingStream.Dispose();
+            throw;
         }
     }
 
