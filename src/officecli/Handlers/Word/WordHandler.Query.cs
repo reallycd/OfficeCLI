@@ -760,6 +760,22 @@ public partial class WordHandler
                 var charSp = rPr.GetFirstChild<Spacing>();
                 if (charSp?.Val?.Value is int charSpVal)
                     styleNode.Format["charSpacing"] = $"{charSpVal / 20.0:0.##}pt";
+                // BUG-DUMP-STYLE-LANG: a style's rPr <w:lang> (val=latin /
+                // eastAsia / bidi) drives proofing language and — for the
+                // eastAsia slot — East-Asian line breaking and font fallback.
+                // Word writes it on web/imported styles (Normal (Web) carries
+                // lang val="en-CA"; List Paragraph lang eastAsia="en-GB"). The
+                // reader never surfaced it, so AddStyle rebuilt the style with
+                // no <w:lang> and the slot was lost on dump→batch. Mirror the
+                // run-level lang.latin/lang.ea/lang.cs vocabulary that
+                // ApplyRunFormatting already consumes.
+                var sLang = rPr.GetFirstChild<Languages>();
+                if (sLang != null)
+                {
+                    if (sLang.Val?.Value != null) styleNode.Format["lang.latin"] = sLang.Val.Value;
+                    if (sLang.EastAsia?.Value != null) styleNode.Format["lang.ea"] = sLang.EastAsia.Value;
+                    if (sLang.Bidi?.Value != null) styleNode.Format["lang.cs"] = sLang.Bidi.Value;
+                }
             }
 
             // Read paragraph properties
