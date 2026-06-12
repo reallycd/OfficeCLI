@@ -1414,6 +1414,24 @@ public static partial class WordBatchEmitter
             EmitPlainOrHyperlinkRun(run, paraTargetPath, items, null, hlBaseline);
             return;
         }
+        // Tab-only run (<w:r><w:tab/></w:r>, Type=="tab", empty Text): the
+        // generic path below emitted an EMPTY run and the tab vanished,
+        // shifting every footnote/endnote/comment line that aligns its text
+        // after the reference mark. Mirror the body walker's TryEmitTabRun:
+        // AddText splits "\t" back into a TabChar.
+        if (run.Type == "tab")
+        {
+            var tabProps = FilterEmittableProps(run.Format);
+            tabProps["text"] = "\t";
+            items.Add(new BatchItem
+            {
+                Command = "add",
+                Parent = paraTargetPath,
+                Type = "r",
+                Props = tabProps
+            });
+            return;
+        }
         var rProps = FilterEmittableProps(run.Format);
         if (!string.IsNullOrEmpty(run.Text))
             rProps["text"] = run.Text!;
@@ -1836,6 +1854,10 @@ public static partial class WordBatchEmitter
     // text run; only a text-less ref mark is dropped.
     private static bool IsRoundTrippableNoteRun(WordHandler word, DocumentNode run)
     {
+        // Tab-only runs align note text after the reference mark; EmitCommentRun
+        // round-trips them as `add r text="\t"`. Excluding them silently
+        // de-indented every footnote that tabs before its content.
+        if (run.Type == "tab") return true;
         if (run.Type != "run" && run.Type != "r") return false;
         var raw = word.GetElementXml(run.Path);
         if (!string.IsNullOrEmpty(raw)
