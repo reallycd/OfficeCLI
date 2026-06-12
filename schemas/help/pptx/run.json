@@ -36,6 +36,20 @@
       "readback": "signed number (e.g. 30, -25, 0)",
       "enforcement": "strict"
     },
+    "highlight": {
+      "type": "color",
+      "description": "text highlight color behind the glyphs (a:highlight). Unlike Word's fixed named-color list, accepts any color (hex, named, rgb(), scheme names like accent1). 'none'/'false' removes the highlight on set.",
+      "add": true,
+      "set": true,
+      "get": true,
+      "examples": [
+        "--prop highlight=FFFF00",
+        "--prop highlight=accent1",
+        "--prop highlight=none"
+      ],
+      "readback": "#RRGGBB hex (or scheme color name)",
+      "enforcement": "report"
+    },
     "kern": {
       "type": "int",
       "description": "minimum font size (in hundredths of a point) at which character kerning is applied. ECMA-376 §21.1.2.3.9 a:rPr/@kern. 0 disables; 1 enables for all sizes; e.g. 1200 = kern from 12pt up.",

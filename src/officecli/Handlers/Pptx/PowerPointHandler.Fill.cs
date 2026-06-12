@@ -86,6 +86,21 @@ public partial class PowerPointHandler
         return null;
     }
 
+    /// <summary>
+    /// Read a color value from an a:highlight element, returning either hex RGB
+    /// or scheme color name. CONSISTENCY(highlight): the highlight's color child
+    /// has the same shape as a solidFill's (srgbClr / schemeClr), so wrap it in
+    /// a throwaway SolidFill to reuse ReadColorFromFill — same trick as the
+    /// HtmlPreview.Text.cs renderer.
+    /// </summary>
+    internal static string? ReadColorFromHighlight(Drawing.Highlight? highlight)
+    {
+        var colorChild = highlight?.GetFirstChild<Drawing.RgbColorModelHex>()
+            ?? (OpenXmlElement?)highlight?.GetFirstChild<Drawing.SchemeColor>();
+        if (colorChild == null) return null;
+        return ReadColorFromFill(new Drawing.SolidFill(colorChild.CloneNode(true)));
+    }
+
     // R8-4: encode a:lumMod / a:lumOff / a:shade / a:tint / a:satMod / a:satOff /
     // a:hueMod / a:hueOff color transforms as a chained "+name<intPercent>"
     // suffix on the canonical color string so they survive Get → Add/Set

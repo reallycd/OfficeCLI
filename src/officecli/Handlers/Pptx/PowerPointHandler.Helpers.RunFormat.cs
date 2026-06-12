@@ -452,6 +452,11 @@ public partial class PowerPointHandler
                     var hl = new Drawing.Highlight();
                     hl.AppendChild(BuildSolidFillColor(value));
                     rPr.AppendChild(hl);
+                    // CONSISTENCY(highlight): pin the CT_TextCharacterProperties
+                    // slot (after effectLst, before uLn/uFill/latin) — same as
+                    // the Set path in ShapeProperties.cs; PowerPoint silently
+                    // drops out-of-order rPr children.
+                    ReorderDrawingRunProperties(rPr);
                 }
                 break;
         }

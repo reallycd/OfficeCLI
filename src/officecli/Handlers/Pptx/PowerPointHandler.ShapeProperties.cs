@@ -411,6 +411,30 @@ public partial class PowerPointHandler
                     break;
                 }
 
+                case "highlight":
+                {
+                    // CONSISTENCY(highlight): same a:highlight write as the
+                    // find/replace formatting path (ApplyPptRunFormatting in
+                    // Helpers.RunFormat.cs). ReorderDrawingRunProperties pins
+                    // the schema slot — CT_TextCharacterProperties requires
+                    // highlight after effectLst and before uLn/uFill/latin;
+                    // PowerPoint silently drops out-of-order children.
+                    foreach (var run in runs)
+                    {
+                        var rProps = run.RunProperties ?? (run.RunProperties = new Drawing.RunProperties());
+                        rProps.RemoveAllChildren<Drawing.Highlight>();
+                        if (!string.Equals(value, "none", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var hl = new Drawing.Highlight();
+                            hl.AppendChild(BuildSolidFillColor(value));
+                            rProps.AppendChild(hl);
+                            ReorderDrawingRunProperties(rProps);
+                        }
+                    }
+                    break;
+                }
+
                 case "textfill" or "textgradient":
                 {
                     // Build fill before removing old one (atomic: no data loss on invalid value)

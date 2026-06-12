@@ -792,6 +792,19 @@ public partial class PowerPointHandler
                 if (properties.TryGetValue("color", out var rColor)
                     || properties.TryGetValue("font.color", out rColor))
                     rProps.AppendChild(BuildSolidFill(rColor));
+                // CONSISTENCY(highlight): a:highlight slot sits between the fill
+                // and latin/ea in CT_TextCharacterProperties — appending here
+                // (after solidFill, before the font branches below) lands it in
+                // schema position. Same write as the Set case in
+                // ShapeProperties.cs / ApplyPptRunFormatting.
+                if (properties.TryGetValue("highlight", out var rHighlight)
+                    && !rHighlight.Equals("none", StringComparison.OrdinalIgnoreCase)
+                    && !rHighlight.Equals("false", StringComparison.OrdinalIgnoreCase))
+                {
+                    var rHl = new Drawing.Highlight();
+                    rHl.AppendChild(BuildColorElement(rHighlight));
+                    rProps.AppendChild(rHl);
+                }
                 if (properties.TryGetValue("font", out var rFont)
                     || properties.TryGetValue("font.name", out rFont))
                 {

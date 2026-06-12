@@ -173,6 +173,20 @@
       "readback": "single | double | none. Boolean `true` on add/set is accepted as an alias for `single`.",
       "enforcement": "report"
     },
+    "highlight": {
+      "type": "color",
+      "description": "text highlight color behind the glyphs (a:highlight). Unlike Word's fixed named-color list, accepts any color (hex, named, rgb(), scheme names like accent1). 'none'/'false' removes the highlight.",
+      "add": true,
+      "set": true,
+      "get": true,
+      "examples": [
+        "--prop highlight=FFFF00",
+        "--prop highlight=accent1",
+        "--prop highlight=none"
+      ],
+      "readback": "#RRGGBB hex (or scheme color name) read from the first run's a:highlight",
+      "enforcement": "report"
+    },
     "cap": {
       "type": "enum",
       "description": "letter-case rendering mode for shape text (rPr/cap).",

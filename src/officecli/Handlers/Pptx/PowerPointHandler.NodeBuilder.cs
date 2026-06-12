@@ -1207,6 +1207,11 @@ public partial class PowerPointHandler
                     _ => "single",
                 };
             }
+            // CONSISTENCY(highlight): mirror the run-level a:highlight reader at
+            // shape level so `Add shape highlight=…` (first-run write) surfaces
+            // on shape-level Get, same pattern as uFill/uLn/textOutline above.
+            var firstRunHighlight = ReadColorFromHighlight(firstRun.RunProperties.GetFirstChild<Drawing.Highlight>());
+            if (firstRunHighlight != null) node.Format["highlight"] = firstRunHighlight;
 
             // Character spacing on first run
             if (firstRun.RunProperties.Spacing?.HasValue == true)
@@ -2089,6 +2094,10 @@ public partial class PowerPointHandler
             if (runFillColor != null) node.Format["color"] = runFillColor;
             var runGrad = run.RunProperties.GetFirstChild<Drawing.GradientFill>();
             if (runGrad != null) node.Format["textFill"] = ReadGradientString(runGrad);
+            // CONSISTENCY(highlight): a:highlight readback — Add/Set write it
+            // via SetRunOrShapeProperties; Get must surface it for round-trip.
+            var runHighlight = ReadColorFromHighlight(run.RunProperties.GetFirstChild<Drawing.Highlight>());
+            if (runHighlight != null) node.Format["highlight"] = runHighlight;
             // Hyperlink (link + tooltip — round-trips Add/Set 'tooltip=…').
             if (part != null)
             {

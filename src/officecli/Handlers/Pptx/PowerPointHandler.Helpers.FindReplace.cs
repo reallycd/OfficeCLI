@@ -493,12 +493,15 @@ public partial class PowerPointHandler
 
     /// <summary>
     /// Build a color element for PPT highlight from a color value.
+    /// CONSISTENCY(highlight): delegate to the canonical DrawingML color
+    /// builder — the previous NormalizeArgbColor form wrote an 8-digit
+    /// AARRGGBB into a:srgbClr@val (ST_HexColorRGB is 6 hex digits), which
+    /// PowerPoint and the HTML renderer both misread. BuildColorElement
+    /// emits a 6-digit srgbClr (+ a:alpha child when alpha given) or a
+    /// schemeClr for theme names.
     /// </summary>
-    private static Drawing.RgbColorModelHex BuildSolidFillColor(string value)
-    {
-        var hex = ParseHelpers.NormalizeArgbColor(value);
-        return new Drawing.RgbColorModelHex { Val = hex };
-    }
+    private static OpenXmlElement BuildSolidFillColor(string value)
+        => BuildColorElement(value);
 
     /// <summary>
     /// Add an element at a text-find position within a PPT paragraph.

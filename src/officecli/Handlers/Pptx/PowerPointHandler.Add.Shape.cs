@@ -836,7 +836,12 @@ public partial class PowerPointHandler
                       // BUG2: text outline — Set handles all three key variants
                       "textOutline", "textoutline",
                       "textOutline.width", "textoutline.width",
-                      "textOutline.color", "textoutline.color" };
+                      "textOutline.color", "textoutline.color",
+                      // CONSISTENCY(highlight): a:highlight — Set's curated case
+                      // in SetRunOrShapeProperties writes it; route Add through
+                      // the same fan-out so both paths support it (root
+                      // CLAUDE.md Feature Implementation Checklist).
+                      "highlight" };
                 // CONSISTENCY(tracking-prop): explicit TryGetValue per known
                 // key instead of `.Where(...)` iteration. Foreach over the
                 // TrackingPropertyDictionary marks every entry as consumed
