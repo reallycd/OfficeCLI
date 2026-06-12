@@ -705,10 +705,16 @@ public partial class WordHandler
                 if (rPr.GetFirstChild<FontSizeComplexScript>()?.Val?.Value is string szCsVal
                     && int.TryParse(szCsVal, out var szCsHalfPt))
                     styleNode.Format["size.cs"] = $"{szCsHalfPt / 2.0:0.##}pt";
-                if (rPr.Bold != null) styleNode.Format["bold"] = true;
-                if (rPr.GetFirstChild<BoldComplexScript>() != null) styleNode.Format["bold.cs"] = true;
-                if (rPr.Italic != null) styleNode.Format["italic"] = true;
-                if (rPr.GetFirstChild<ItalicComplexScript>() != null) styleNode.Format["italic.cs"] = true;
+                // Toggle elements carry tri-state semantics: absent (inherit),
+                // present with no val (ON), present with val=0/false (explicit
+                // OFF — overrides an inherited ON). Presence-only readback
+                // collapsed explicit-off to true, so a style whose rPr said
+                // <w:strike w:val="0"/> round-tripped as <w:strike/> and the
+                // rebuilt document struck through every paragraph bound to it.
+                if (rPr.Bold != null) styleNode.Format["bold"] = IsToggleOn(rPr.Bold);
+                if (rPr.GetFirstChild<BoldComplexScript>() is { } bcs) styleNode.Format["bold.cs"] = bcs.Val == null || bcs.Val.Value;
+                if (rPr.Italic != null) styleNode.Format["italic"] = IsToggleOn(rPr.Italic);
+                if (rPr.GetFirstChild<ItalicComplexScript>() is { } ics) styleNode.Format["italic.cs"] = ics.Val == null || ics.Val.Value;
                 // BUG-DUMP-R43-3: a style's run color may carry a theme linkage
                 // (<w:color w:val="4F81BD" w:themeColor="accent1"/>) — the hex is
                 // a baked snapshot of the theme slot, and dropping w:themeColor
@@ -723,14 +729,14 @@ public partial class WordHandler
                 if (rPr.Underline?.Val != null) styleNode.Format["underline"] = rPr.Underline.Val.InnerText;
                 // CONSISTENCY(underline-color): underline.color not yet exposed by paragraph/run Get; backfill there too.
                 if (rPr.Underline?.Color?.Value != null) styleNode.Format["underline.color"] = ParseHelpers.FormatHexColor(rPr.Underline.Color.Value);
-                if (rPr.Strike != null) styleNode.Format["strike"] = true;
+                if (rPr.Strike != null) styleNode.Format["strike"] = IsToggleOn(rPr.Strike);
                 // Schema-driven readback for the rest of the rPr surface
                 // (CONSISTENCY: schema-contract — schemas/help/docx/style.json
                 // declares these get:true).
-                if (rPr.GetFirstChild<DoubleStrike>() != null) styleNode.Format["dstrike"] = true;
-                if (rPr.GetFirstChild<Caps>() != null) styleNode.Format["caps"] = true;
-                if (rPr.GetFirstChild<SmallCaps>() != null) styleNode.Format["smallCaps"] = true;
-                if (rPr.GetFirstChild<Vanish>() != null) styleNode.Format["vanish"] = true;
+                if (rPr.GetFirstChild<DoubleStrike>() is { } ds) styleNode.Format["dstrike"] = IsToggleOn(ds);
+                if (rPr.GetFirstChild<Caps>() is { } cp) styleNode.Format["caps"] = IsToggleOn(cp);
+                if (rPr.GetFirstChild<SmallCaps>() is { } sc) styleNode.Format["smallCaps"] = IsToggleOn(sc);
+                if (rPr.GetFirstChild<Vanish>() is { } vn) styleNode.Format["vanish"] = IsToggleOn(vn);
                 // R21-fuzz-1: character-style direction lives in rPr/<w:rtl/>
                 // (character styles cannot carry pPr). Surface as canonical
                 // 'direction' key for character styles; keep legacy `rtl` flag
