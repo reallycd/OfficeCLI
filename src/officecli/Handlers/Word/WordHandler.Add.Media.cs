@@ -434,7 +434,23 @@ public partial class WordHandler
             // their distinct stacking order instead of collapsing to 1U.
             uint relHeight = properties.TryGetValue("relativeHeight", out var relHeightStr)
                 && uint.TryParse(relHeightStr, out var rh) ? rh : 1U;
-            imgRun = CreateAnchorImageRun(relId, cxEmu, cyEmu, altText, wrapType, hPos, vPos, hRel, vRel, behind, imgDocPropId, pictureName, hAlign, vAlign, relHeight, effectExtent);
+            // Wrap distances (gap between the float and the text wrapping around
+            // it): "T,B,L,R" EMU prop captured by the dump. Absent → null →
+            // CreateAnchorImageRun keeps the interactive defaults.
+            (uint T, uint B, uint L, uint R)? wrapDist = null;
+            if (properties.TryGetValue("wrapDist", out var wdStr) && !string.IsNullOrWhiteSpace(wdStr))
+            {
+                var wd = wdStr.Split(',');
+                if (wd.Length == 4
+                    && uint.TryParse(wd[0].Trim(), out var wdT)
+                    && uint.TryParse(wd[1].Trim(), out var wdB)
+                    && uint.TryParse(wd[2].Trim(), out var wdL)
+                    && uint.TryParse(wd[3].Trim(), out var wdR))
+                {
+                    wrapDist = (wdT, wdB, wdL, wdR);
+                }
+            }
+            imgRun = CreateAnchorImageRun(relId, cxEmu, cyEmu, altText, wrapType, hPos, vPos, hRel, vRel, behind, imgDocPropId, pictureName, hAlign, vAlign, relHeight, effectExtent, wrapDist);
         }
         else
         {

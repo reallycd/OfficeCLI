@@ -2152,6 +2152,25 @@ public static partial class WordBatchEmitter
                     System.Text.RegularExpressions.RegexOptions.Singleline);
                 if (spPrWhole.Success)
                     picProps["spPrXml"] = spPrWhole.Value;
+                // Anchor wrap distances (distT/distB/distL/distR — the gap
+                // between a floating image and the text wrapping around it).
+                // CreateAnchorImageRun hardcodes T/B=0, L/R=114300; a figure
+                // with asymmetric distances shifted every adjacent line.
+                // Capture as "T,B,L,R" so AddPicture restores them. Inline
+                // pictures have no <wp:anchor>, so the match simply won't fire.
+                var anchorMatch = System.Text.RegularExpressions.Regex.Match(
+                    picXml, @"<wp:anchor\b([^>]*)>");
+                if (anchorMatch.Success)
+                {
+                    string DistAttr(string n) =>
+                        System.Text.RegularExpressions.Regex.Match(
+                            anchorMatch.Groups[1].Value, n + "=\"(\\d+)\"") is { Success: true } mm
+                            ? mm.Groups[1].Value : "0";
+                    var wt = DistAttr("distT"); var wb = DistAttr("distB");
+                    var wl = DistAttr("distL"); var wr = DistAttr("distR");
+                    if (!(wt == "0" && wb == "0" && wl == "114300" && wr == "114300"))
+                        picProps["wrapDist"] = $"{wt},{wb},{wl},{wr}";
+                }
             }
             items.Add(new BatchItem
             {

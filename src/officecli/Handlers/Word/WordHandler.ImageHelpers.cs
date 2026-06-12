@@ -103,7 +103,8 @@ public partial class WordHandler
         DW.HorizontalRelativePositionValues hRel, DW.VerticalRelativePositionValues vRel,
         bool behindText, uint docPropId, string? pictureName = null,
         string? hAlign = null, string? vAlign = null, uint relativeHeight = 1U,
-        (long L, long T, long R, long B)? effectExtent = null)
+        (long L, long T, long R, long B)? effectExtent = null,
+        (uint T, uint B, uint L, uint R)? wrapDist = null)
     {
         OpenXmlElement wrapElement = wrap.ToLowerInvariant() switch
         {
@@ -182,10 +183,17 @@ public partial class WordHandler
         )
         {
             BehindDoc = behindText,
-            DistanceFromTop = 0U,
-            DistanceFromBottom = 0U,
-            DistanceFromLeft = 114300U,
-            DistanceFromRight = 114300U,
+            // BUG: distT/distB/distL/distR (the gap between a floating image
+            // and the text wrapping around it) were hardcoded — top/bottom to 0
+            // and left/right to 114300 (0.125") regardless of source. A figure
+            // with asymmetric wrap distances (distL=0 distR=71755) came back
+            // with a symmetric 0.125" margin, shifting every line of the
+            // adjacent text. Restore the captured values; default to the old
+            // hardcoded margins when the caller has none (interactive add).
+            DistanceFromTop = wrapDist?.T ?? 0U,
+            DistanceFromBottom = wrapDist?.B ?? 0U,
+            DistanceFromLeft = wrapDist?.L ?? 114300U,
+            DistanceFromRight = wrapDist?.R ?? 114300U,
             SimplePos = false,
             // BUG-DUMP-R26-1: honour the captured z-order instead of the old
             // hardcoded 1U, which collapsed every overlapping float to the same
