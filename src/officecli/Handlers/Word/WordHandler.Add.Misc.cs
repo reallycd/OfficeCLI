@@ -839,8 +839,20 @@ public partial class WordHandler
         {
             hlRProps.Underline = new Underline { Val = UnderlineValues.Single };
         }
+        // Explicit underline color (<w:u w:color="…">): dump emits it as
+        // underline.color next to underline; route through the shared run
+        // case so the attribute lands on the Underline element written above.
+        if (properties.TryGetValue("underline.color", out var hlUlColor))
+            ApplyRunFormatting(hlRProps, "underline.color", hlUlColor);
         if (properties.TryGetValue("font", out var hlFont))
             hlRProps.RunFonts = new RunFonts { Ascii = hlFont, HighAnsi = hlFont };
+        // Ascii-only slot (<w:rFonts w:ascii="…"/> with no hAnsi): dump emits
+        // font.ascii; the bare `font` case above would wrongly stamp hAnsi too.
+        if (properties.TryGetValue("font.ascii", out var hlFontAscii))
+        {
+            hlRProps.RunFonts ??= new RunFonts();
+            hlRProps.RunFonts.Ascii = hlFontAscii;
+        }
         // Dump emits font.latin alongside bare font for hyperlink runs; mirror
         // the bare-font behavior so batch replay doesn't silently drop it.
         if (properties.TryGetValue("font.latin", out var hlFontLatin))

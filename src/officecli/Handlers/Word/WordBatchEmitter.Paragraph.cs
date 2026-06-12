@@ -3144,13 +3144,23 @@ public static partial class WordBatchEmitter
         {
             // AddHyperlink writes its own color/underline defaults from theme;
             // drop the inferred `color: hyperlink` / `underline: single` Get
-            // echoes back so we don't override those defaults.
+            // echoes back so we don't override those defaults. Track the drops:
+            // a dropped key means the SOURCE had an explicit element that the
+            // defaults reproduce — the "inherit" sentinel below must NOT fire
+            // for it, or the explicit single underline / theme color vanishes.
+            bool hlColorDropped = false, hlUnderlineDropped = false;
             if (rProps.TryGetValue("color", out var hlColor)
                 && string.Equals(hlColor, "hyperlink", StringComparison.OrdinalIgnoreCase))
+            {
                 rProps.Remove("color");
+                hlColorDropped = true;
+            }
             if (rProps.TryGetValue("underline", out var hlUl)
                 && string.Equals(hlUl, "single", StringComparison.OrdinalIgnoreCase))
+            {
                 rProps.Remove("underline");
+                hlUnderlineDropped = true;
+            }
             rProps.Remove("isHyperlink");
             // Bare <w:hyperlink> wrapper with no url/anchor/tooltip/tgtFrame
             // /history carries no round-trippable property — AddHyperlink
@@ -3174,8 +3184,8 @@ public static partial class WordBatchEmitter
             // and the dotted leader comes back blue. Injected only on the real
             // `add hyperlink` path — the bare-wrapper fallback above emits a
             // plain `add r`, whose color parser must not see "inherit".
-            if (!rProps.ContainsKey("color")) rProps["color"] = "inherit";
-            if (!rProps.ContainsKey("underline")) rProps["underline"] = "inherit";
+            if (!hlColorDropped && !rProps.ContainsKey("color")) rProps["color"] = "inherit";
+            if (!hlUnderlineDropped && !rProps.ContainsKey("underline")) rProps["underline"] = "inherit";
             items.Add(new BatchItem
             {
                 Command = "add",
