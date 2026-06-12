@@ -703,11 +703,29 @@ public partial class WordHandler
     private string AddActiveX(OpenXmlElement parent, string parentPath, Dictionary<string, string> properties)
     {
         properties ??= new Dictionary<string, string>();
-        if (!properties.TryGetValue("runXml", out var runXml) || string.IsNullOrEmpty(runXml))
-            throw new ArgumentException("activex requires --prop runXml with the verbatim run XML");
-        if (!runXml.Contains("<w:control", StringComparison.Ordinal))
-            throw new ArgumentException("activex runXml must contain a <w:control> element");
+        if (!properties.TryGetValue("runXml", out var axMarker) || string.IsNullOrEmpty(axMarker)
+            || !axMarker.Contains("<w:control", StringComparison.Ordinal))
+            throw new ArgumentException("activex requires --prop runXml containing a <w:control> element");
+        return AddInlinedPartsRun(parent, parentPath, properties, "activex");
+    }
 
+    // SmartArt diagram run — same self-contained carrier as `add activex`:
+    // verbatim run XML (the <w:drawing> whose <dgm:relIds> references the
+    // data / layout / quickStyle / colors parts via r:dm/r:lo/r:qs/r:cs) plus
+    // part{N}.* payloads, including the data part's nested rendered-drawing
+    // child (diagramDrawing+xml, what Word actually rasterizes).
+    private string AddDiagram(OpenXmlElement parent, string parentPath, Dictionary<string, string> properties)
+    {
+        properties ??= new Dictionary<string, string>();
+        if (!properties.TryGetValue("runXml", out var dgMarker) || string.IsNullOrEmpty(dgMarker)
+            || !dgMarker.Contains("relIds", StringComparison.Ordinal))
+            throw new ArgumentException("diagram requires --prop runXml containing a <dgm:relIds> element");
+        return AddInlinedPartsRun(parent, parentPath, properties, "diagram");
+    }
+
+    private string AddInlinedPartsRun(OpenXmlElement parent, string parentPath, Dictionary<string, string> properties, string opName)
+    {
+        var runXml = properties["runXml"];
         var mainPart = _doc.MainDocumentPart!;
         // CONSISTENCY(host-part-rel): same routing as AddOle — parts referenced
         // from a header/footer-hosted run must attach to that part.
@@ -730,23 +748,52 @@ public partial class WordHandler
             }
         }
 
+        // Pass 1: create every top-level part empty, so the complete old→new
+        // id map exists before any content is written. A collected XML part's
+        // bytes can reference a SIBLING part's host-part relationship (the
+        // SmartArt data part's <dsp:dataModelExt relId> points at the
+        // rendered-drawing part), so the rewrite below must cover all ids.
         var idMap = new List<(string OldId, string NewId)>();
+        var pending = new List<(OpenXmlPart Part, byte[] Bytes, string Ct, int Pi)>();
         for (int pi = 1; properties.TryGetValue($"part{pi}.relId", out var oldRelId); pi++)
         {
             var dataUri = properties.GetValueOrDefault($"part{pi}.data");
             if (string.IsNullOrEmpty(oldRelId)
                 || !OfficeCli.Core.OleHelper.TryDecodeDataUri(dataUri, out var bytes, out var ct)
                 || bytes.Length == 0)
-                throw new ArgumentException($"activex part{pi} requires relId and a non-empty data: URI");
+                throw new ArgumentException($"{opName} part{pi} requires relId and a non-empty data: URI");
 
-            OpenXmlPart created;
-            if (string.Equals(ct, "application/vnd.ms-office.activeX+xml", StringComparison.OrdinalIgnoreCase))
-                created = hostPart.AddNewPart<EmbeddedControlPersistencePart>(ct, null);
-            else if (ct.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-                created = hostPart.AddNewPart<ImagePart>(ct, null);
-            else
-                throw new ArgumentException($"activex part{pi}: unsupported content type '{ct}'");
-            using (var ms = new MemoryStream(bytes))
+            var created = CreateInlinedPart(hostPart, ct)
+                ?? throw new ArgumentException($"{opName} part{pi}: unsupported content type '{ct}'");
+            pending.Add((created, bytes, ct, pi));
+            idMap.Add((oldRelId!, hostPart.GetIdOfPart(created)));
+        }
+
+        // Two-phase rewrite (shared by the run XML and every inlined XML
+        // part's bytes): a freshly assigned id can equal a *different* source
+        // id still pending replacement, so route through unique placeholders.
+        string RewriteRelIds(string xml)
+        {
+            for (int i = 0; i < idMap.Count; i++)
+                xml = xml.Replace($"\"{idMap[i].OldId}\"", $"\"__OCLI_AXREL_{i}__\"", StringComparison.Ordinal);
+            for (int i = 0; i < idMap.Count; i++)
+                xml = xml.Replace($"\"__OCLI_AXREL_{i}__\"", $"\"{idMap[i].NewId}\"", StringComparison.Ordinal);
+            return xml;
+        }
+
+        // Pass 2: feed content (XML parts get their host-part rel refs
+        // rewritten; binary parts stay verbatim) and attach child parts.
+        foreach (var (created, bytes, ct, pi) in pending)
+        {
+            var feedBytes = bytes;
+            if (ct.EndsWith("+xml", StringComparison.OrdinalIgnoreCase))
+            {
+                var text = System.Text.Encoding.UTF8.GetString(bytes);
+                var rewrittenText = RewriteRelIds(text);
+                if (!ReferenceEquals(rewrittenText, text))
+                    feedBytes = System.Text.Encoding.UTF8.GetBytes(rewrittenText);
+            }
+            using (var ms = new MemoryStream(feedBytes))
                 created.FeedData(ms);
 
             for (int ci = 1; properties.TryGetValue($"part{pi}.child{ci}.relId", out var childRelId); ci++)
@@ -755,23 +802,15 @@ public partial class WordHandler
                 if (string.IsNullOrEmpty(childRelId)
                     || !OfficeCli.Core.OleHelper.TryDecodeDataUri(childUri, out var cbytes, out var cct)
                     || cbytes.Length == 0)
-                    throw new ArgumentException($"activex part{pi}.child{ci} requires relId and a non-empty data: URI");
-                var childPart = created.AddNewPart<EmbeddedControlPersistenceBinaryDataPart>(cct, childRelId);
+                    throw new ArgumentException($"{opName} part{pi}.child{ci} requires relId and a non-empty data: URI");
+                var childPart = CreateInlinedChildPart(created, cct, childRelId!)
+                    ?? throw new ArgumentException($"{opName} part{pi}.child{ci}: unsupported content type '{cct}'");
                 using var cms = new MemoryStream(cbytes);
                 childPart.FeedData(cms);
             }
-
-            idMap.Add((oldRelId!, hostPart.GetIdOfPart(created)));
         }
 
-        // Two-phase rewrite: a freshly assigned id can equal a *different*
-        // source id still pending replacement, so route through unique
-        // placeholders instead of replacing in place.
-        var rewritten = runXml;
-        for (int i = 0; i < idMap.Count; i++)
-            rewritten = rewritten.Replace($"\"{idMap[i].OldId}\"", $"\"__OCLI_AXREL_{i}__\"", StringComparison.Ordinal);
-        for (int i = 0; i < idMap.Count; i++)
-            rewritten = rewritten.Replace($"\"__OCLI_AXREL_{i}__\"", $"\"{idMap[i].NewId}\"", StringComparison.Ordinal);
+        var rewritten = RewriteRelIds(runXml);
 
         var axRun = new Run(rewritten);
 
@@ -812,6 +851,47 @@ public partial class WordHandler
         }
         return resultPath;
     }
+
+    // Part factory for the inlined-parts carriers. Top-level parts hang off the
+    // run's host part (main document / header / footer); returns null for an
+    // unrecognized content type so the caller surfaces a clear error.
+    private static OpenXmlPart? CreateInlinedPart(OpenXmlPart hostPart, string ct) => ct switch
+    {
+        "application/vnd.ms-office.activeX+xml"
+            => hostPart.AddNewPart<EmbeddedControlPersistencePart>(ct, null),
+        "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml"
+            => hostPart.AddNewPart<DiagramDataPart>(ct, null),
+        "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml"
+            => hostPart.AddNewPart<DiagramLayoutDefinitionPart>(ct, null),
+        "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml"
+            => hostPart.AddNewPart<DiagramStylePart>(ct, null),
+        "application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml"
+            => hostPart.AddNewPart<DiagramColorsPart>(ct, null),
+        // The rendered-drawing part referenced from the data part's
+        // dataModelExt extension — its relationship lives on the MAIN part
+        // (ms diagramDrawing rel type), so it is a top-level part here.
+        "application/vnd.ms-office.drawingml.diagramDrawing+xml"
+            => hostPart.AddNewPart<DiagramPersistLayoutPart>(ct, null),
+        _ when ct.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+            => hostPart.AddNewPart<ImagePart>(ct, null),
+        _ => null,
+    };
+
+    // Child parts keep their SOURCE rel id (scoped to the freshly created
+    // parent part, so the verbatim parent bytes' internal refs resolve).
+    private static OpenXmlPart? CreateInlinedChildPart(OpenXmlPart parent, string ct, string relId) => ct switch
+    {
+        "application/vnd.ms-office.activeX" or "application/vnd.ms-office.activeX+xml"
+            => parent.AddNewPart<EmbeddedControlPersistenceBinaryDataPart>(ct, relId),
+        // The rendered-drawing child of a diagram data part — what Word
+        // actually rasterizes for modern SmartArt.
+        "application/vnd.ms-office.drawingml.diagramDrawing+xml"
+            => parent.AddNewPart<DiagramPersistLayoutPart>(ct, relId),
+        _ when ct.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+            => parent.AddNewPart<ImagePart>(ct, relId),
+        _ => null,
+    };
+
 
     private string AddOle(OpenXmlElement parent, string parentPath, int? index, Dictionary<string, string> properties)
     {

@@ -382,14 +382,42 @@ public partial class WordHandler : IDocumentHandler
         var obj = run.GetFirstChild<EmbeddedObject>();
         if (obj == null) return null;
         if (!obj.Descendants().Any(e => e.LocalName == "control")) return null;
+        return CollectInlinedPartsEmitData(run, obj);
+    }
 
+    /// <summary>
+    /// dump→batch: extract the verbatim run XML and all referenced parts for a
+    /// SmartArt diagram run. The &lt;dgm:relIds&gt; element references the
+    /// data / layout / quickStyle / colors parts via r:dm / r:lo / r:qs / r:cs,
+    /// and the data part nests the rendered-drawing part. Same carrier shape as
+    /// the ActiveX path; returns null when the run hosts no diagram or any
+    /// referenced part can't be resolved.
+    /// </summary>
+    internal ActiveXEmitData? GetDiagramEmitData(string runPath)
+    {
+        OpenXmlElement? element;
+        try { element = NavigateToElement(ParsePath(runPath)); }
+        catch { return null; }
+        if (element is not Run run) return null;
+        var drawing = run.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.Drawing>();
+        if (drawing == null) return null;
+        if (!drawing.Descendants().Any(e => e.LocalName == "relIds")) return null;
+        return CollectInlinedPartsEmitData(run, drawing);
+    }
+
+    // Shared collector for the `add activex` / `add diagram` carriers: every
+    // relationship-namespace attribute in the subtree (r:id, r:dm, r:lo, …)
+    // names a part on the run's host part; ship each part's bytes plus its
+    // direct children (activeX binary blob, diagram rendered drawing).
+    private ActiveXEmitData? CollectInlinedPartsEmitData(Run run, OpenXmlElement subtree)
+    {
         var hostPart = ResolveImageHostPart(run);
         var relIds = new List<string>();
-        foreach (var el in obj.Descendants())
+        foreach (var el in subtree.Descendants())
         {
             foreach (var a in el.GetAttributes())
             {
-                if (a.LocalName == "id" && a.NamespaceUri == RelNs
+                if (a.NamespaceUri == RelNs
                     && !string.IsNullOrEmpty(a.Value) && !relIds.Contains(a.Value!))
                     relIds.Add(a.Value!);
             }
@@ -397,8 +425,9 @@ public partial class WordHandler : IDocumentHandler
         if (relIds.Count == 0) return null;
 
         var parts = new List<ActiveXPartData>();
-        foreach (var relId in relIds)
+        for (int idx = 0; idx < relIds.Count; idx++)
         {
+            var relId = relIds[idx];
             OpenXmlPart part;
             byte[] bytes;
             try
@@ -417,6 +446,27 @@ public partial class WordHandler : IDocumentHandler
                     child.RelationshipId, cb, child.OpenXmlPart.ContentType, new List<ActiveXPartData>()));
             }
             parts.Add(new ActiveXPartData(relId, bytes, part.ContentType, children));
+
+            // A collected XML part's CONTENT can reference further host-part
+            // relationships via bare relId="…" attributes — SmartArt's data
+            // part points at its rendered-drawing part through
+            // <dsp:dataModelExt relId="rId12"> resolved against the MAIN part,
+            // not the data part. Chase those so the rendered drawing ships too.
+            if (part.ContentType.EndsWith("+xml", StringComparison.OrdinalIgnoreCase))
+            {
+                var xmlText = System.Text.Encoding.UTF8.GetString(bytes);
+                foreach (System.Text.RegularExpressions.Match m in
+                         System.Text.RegularExpressions.Regex.Matches(xmlText, "relId=\"([^\"]+)\""))
+                {
+                    var extra = m.Groups[1].Value;
+                    if (!string.IsNullOrEmpty(extra) && !relIds.Contains(extra))
+                    {
+                        try { hostPart.GetPartById(extra); }
+                        catch { continue; }
+                        relIds.Add(extra);
+                    }
+                }
+            }
         }
         return new ActiveXEmitData(run.OuterXml, parts);
     }

@@ -2225,6 +2225,22 @@ public static partial class WordBatchEmitter
         // the SmartArt/non-textbox warn-and-skip on the AlternateContent path
         // above) instead of falling through to a silent raw-set or a silent
         // return.
+        // SmartArt: the diagram's data/layout/quickStyle/colors parts (plus the
+        // data part's rendered-drawing child) ship base64-inlined in a
+        // self-contained `add diagram`, mirroring the `add activex` carrier —
+        // previously the whole diagram was warn-dropped as unreconstructable.
+        if (!string.IsNullOrEmpty(rawXml) && rawXml.Contains("relIds")
+            && word.GetDiagramEmitData(run.Path) is { } dgmData)
+        {
+            items.Add(new BatchItem
+            {
+                Command = "add",
+                Parent = paraTargetPath,
+                Type = "diagram",
+                Props = PackInlinedPartsProps(dgmData),
+            });
+            return true;
+        }
         if (!string.IsNullOrEmpty(rawXml) && DrawingHasUnreconstructableRel(rawXml))
         {
             string detail = rawXml.Contains("r:link")
@@ -2882,32 +2898,12 @@ public static partial class WordBatchEmitter
         var axData = word.GetActiveXEmitData(run.Path);
         if (axData != null)
         {
-            var axProps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["runXml"] = axData.RunXml,
-            };
-            int pi = 0;
-            foreach (var part in axData.Parts)
-            {
-                pi++;
-                axProps[$"part{pi}.relId"] = part.RelId;
-                axProps[$"part{pi}.data"] =
-                    $"data:{part.ContentType};base64,{Convert.ToBase64String(part.Bytes)}";
-                int ci = 0;
-                foreach (var child in part.Children)
-                {
-                    ci++;
-                    axProps[$"part{pi}.child{ci}.relId"] = child.RelId;
-                    axProps[$"part{pi}.child{ci}.data"] =
-                        $"data:{child.ContentType};base64,{Convert.ToBase64String(child.Bytes)}";
-                }
-            }
             items.Add(new BatchItem
             {
                 Command = "add",
                 Parent = paraTargetPath,
                 Type = "activex",
-                Props = axProps,
+                Props = PackInlinedPartsProps(axData),
             });
             return true;
         }
@@ -2924,6 +2920,34 @@ public static partial class WordBatchEmitter
                 Reason: reason));
         }
         return true;
+    }
+
+    // Shared prop packing for the inlined-parts carriers (`add activex`,
+    // `add diagram`): verbatim run XML + one part{N}.relId/part{N}.data pair
+    // per referenced package part, with part{N}.child{M}.* for nested parts.
+    private static Dictionary<string, string> PackInlinedPartsProps(WordHandler.ActiveXEmitData data)
+    {
+        var props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["runXml"] = data.RunXml,
+        };
+        int pi = 0;
+        foreach (var part in data.Parts)
+        {
+            pi++;
+            props[$"part{pi}.relId"] = part.RelId;
+            props[$"part{pi}.data"] =
+                $"data:{part.ContentType};base64,{Convert.ToBase64String(part.Bytes)}";
+            int ci = 0;
+            foreach (var child in part.Children)
+            {
+                ci++;
+                props[$"part{pi}.child{ci}.relId"] = child.RelId;
+                props[$"part{pi}.child{ci}.data"] =
+                    $"data:{child.ContentType};base64,{Convert.ToBase64String(child.Bytes)}";
+            }
+        }
+        return props;
     }
 
     private static bool TryEmitNoteRefRun(WordHandler word, DocumentNode run, string paraTargetPath, List<BatchItem> items, BodyEmitContext? ctx)
