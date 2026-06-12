@@ -47,6 +47,17 @@ public partial class ExcelHandler
         {
             categories = ChartHelper.ParseCategories(properties);
             seriesData = ChartHelper.ParseSeriesData(properties);
+            // CONSISTENCY(chart-series-rangeref-cache): when a series value or
+            // categories arg is given as a cell RANGE (series1=B1:B4,
+            // categories=A1:A4) rather than a literal list, ParseSeriesData/
+            // ParseCategories leave the literal values empty (the range is only
+            // emitted as a numRef/strRef formula). Real Excel — and the
+            // `dataRange=` path here — also snapshot the referenced cells into
+            // a numCache/strCache so the chart renders before the workbook is
+            // re-evaluated (the HTML preview plots only from that cache).
+            // Resolve the ranges against the worksheet now to backfill the
+            // literal values, mirroring ParseDataRangeForChart.
+            BackfillSeriesRangeValues(ref seriesData, ref categories, chartSheetName, properties);
         }
 
         if (seriesData.Count == 0)

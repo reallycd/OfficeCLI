@@ -610,4 +610,104 @@ public partial class ExcelHandler
             $"{catSheetName}!${IndexToColumnName(startColIdx)}${startRow}:${IndexToColumnName(endColIdx)}${endRow}";
         return (labels.ToArray(), categoriesRef);
     }
+
+    /// <summary>
+    /// CONSISTENCY(chart-series-rangeref-cache): backfill literal series values
+    /// and category labels from cell-RANGE references (series{N}=B1:B4,
+    /// series{N}.values=Sheet1!B1:B4, categories=A1:A4) so the chart builder
+    /// seeds a numCache/strCache — exactly like the dataRange= path. The range
+    /// is still emitted as a numRef/strRef formula by ApplySeriesReferences;
+    /// this only fills the cached snapshot the HTML preview (and real Excel,
+    /// pre-recalc) renders from. Cells that are empty/non-numeric resolve to 0
+    /// for values and "" for labels, matching ParseDataRangeForChart.
+    /// </summary>
+    private void BackfillSeriesRangeValues(
+        ref List<(string name, double[] values)> seriesData,
+        ref string[]? categories,
+        string defaultSheetName,
+        Dictionary<string, string> properties)
+    {
+        for (int i = 1; i <= seriesData.Count; i++)
+        {
+            // Already has literal values (e.g. series1=10,20,30) — nothing to do.
+            if (seriesData[i - 1].values.Length > 0) continue;
+
+            string? rangeRef = null;
+            if (properties.TryGetValue($"series{i}.values", out var dotVal)
+                && ChartHelper.IsRangeReference(dotVal))
+                rangeRef = dotVal;
+            else if (properties.TryGetValue($"series{i}", out var legacyVal)
+                && ChartHelper.IsRangeReference(legacyVal))
+                rangeRef = legacyVal;
+            if (rangeRef == null) continue;
+
+            var cells = ResolveRangeToCellValues(rangeRef, defaultSheetName);
+            if (cells == null) continue;
+            var values = cells.Select(v =>
+                double.TryParse(v, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0)
+                .ToArray();
+            seriesData[i - 1] = (seriesData[i - 1].name, values);
+        }
+
+        // categories=<range>: ParseCategories returns null for a range, so the
+        // builder seeds no strLit (=> empty strCache). Resolve the labels here.
+        if ((categories == null || categories.Length == 0)
+            && properties.TryGetValue("categories", out var catStr)
+            && ChartHelper.IsRangeReference(catStr))
+        {
+            var labels = ResolveRangeToCellValues(catStr, defaultSheetName);
+            if (labels != null && labels.Count > 0)
+                categories = labels.ToArray();
+        }
+    }
+
+    /// <summary>
+    /// Reads a single-column (or row) cell range reference into an ordered list
+    /// of display-value strings. Returns null if the reference can't be parsed
+    /// or the sheet is missing/empty. Missing cells in the range yield "".
+    /// </summary>
+    private List<string>? ResolveRangeToCellValues(string rangeRef, string defaultSheetName)
+    {
+        string sheetName = defaultSheetName;
+        string rangePart = rangeRef.Trim();
+        var bangIdx = rangePart.IndexOf('!');
+        if (bangIdx >= 0)
+        {
+            sheetName = rangePart[..bangIdx].Trim('\'');
+            rangePart = rangePart[(bangIdx + 1)..];
+        }
+
+        var cleanRange = rangePart.Replace("$", "");
+        var rangeParts = cleanRange.Split(':');
+        if (rangeParts.Length != 2) return null;
+
+        var (startCol, startRow) = ParseCellReference(rangeParts[0]);
+        var (endCol, endRow) = ParseCellReference(rangeParts[1]);
+        var startColIdx = ColumnNameToIndex(startCol);
+        var endColIdx = ColumnNameToIndex(endCol);
+
+        var ws = FindWorksheet(sheetName);
+        if (ws == null) return null;
+        var sheetData = GetSheet(ws).GetFirstChild<SheetData>();
+        if (sheetData == null) return null;
+
+        var lookup = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in sheetData.Elements<Row>())
+        {
+            var rowIdx = (int)(row.RowIndex?.Value ?? 0);
+            if (rowIdx < startRow || rowIdx > endRow) continue;
+            foreach (var cell in row.Elements<Cell>())
+                if (cell.CellReference?.Value != null)
+                    lookup[cell.CellReference.Value] = GetCellDisplayValue(cell);
+        }
+
+        var result = new List<string>();
+        for (int r = startRow; r <= endRow; r++)
+            for (int c = startColIdx; c <= endColIdx; c++)
+            {
+                lookup.TryGetValue($"{IndexToColumnName(c)}{r}", out var v);
+                result.Add(v ?? "");
+            }
+        return result;
+    }
 }
