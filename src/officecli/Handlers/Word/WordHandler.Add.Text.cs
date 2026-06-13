@@ -2237,6 +2237,14 @@ public partial class WordHandler
                 case "lang.cs":
                 case "lang.complexscript":
                 case "lang.bidi":
+                // BUG-DUMP-R47-1: underline.color (and aliases) must route
+                // through ApplyRunFormatting so the <w:u> lands in CT_RPr
+                // schema order (InsertRunPropInSchemaOrder hoists it before any
+                // w14 extension block). TypedAttributeFallback below appends at
+                // the END of rPr — past an already-emitted <w14:textFill> — which
+                // is schema-invalid ("unexpected child w:u"). Mirrors lang.*.
+                case "underline.color":
+                case "font.underline.color":
                     if (ApplyRunFormatting(newRProps, key, value)) continue;
                     break;
             }
