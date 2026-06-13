@@ -344,6 +344,11 @@ public partial class WordHandler
                 "kept (Word allows it), but addressing by this name resolves to the first match.");
         }
         var text = ciProps.GetValueOrDefault("text", ciProps.GetValueOrDefault("value", ""));
+        // Dump pins `text=""` for a field whose SOURCE has no cached result
+        // run; suppress the NBSP placeholder so the empty field round-trips
+        // without gaining a glyph (it shifts table row heights).
+        bool textPinnedEmpty = (ciProps.ContainsKey("text") || ciProps.ContainsKey("value"))
+            && string.IsNullOrEmpty(text);
 
         // Generate unique bookmark ID
         var existingIds = body.Descendants<BookmarkStart>()
@@ -386,9 +391,16 @@ public partial class WordHandler
             {
                 var checkBox = new CheckBox();
                 // R14-bug3: honor explicit checkBoxSize (half-points) so dump
-                // round-trips a user-customized checkbox size.
-                var cbSize = ciProps.GetValueOrDefault("checkboxsize", "20");
-                checkBox.AppendChild(new FormFieldSize { Val = cbSize });
+                // round-trips a user-customized checkbox size. With no explicit
+                // size, write <w:sizeAuto/> — Word's own default, sizing the
+                // box to the surrounding text. The old fixed size=20 changed
+                // the glyph height versus an auto-sized source, nudging table
+                // row heights and reflowing form pages on dump→batch.
+                var cbSize = ciProps.GetValueOrDefault("checkboxsize");
+                if (!string.IsNullOrEmpty(cbSize))
+                    checkBox.AppendChild(new FormFieldSize { Val = cbSize });
+                else
+                    checkBox.AppendChild(new AutomaticallySizeFormField());
                 var isChecked = ciProps.TryGetValue("checked", out var chkVal) && ParseHelpers.IsTruthy(chkVal);
                 checkBox.AppendChild(new DefaultCheckBoxFormFieldState { Val = new OnOffValue(isChecked) });
                 if (isChecked)
@@ -503,7 +515,7 @@ public partial class WordHandler
             var resultRun = new Run(new Text(text) { Space = SpaceProcessingModeValues.Preserve });
             para.AppendChild(resultRun);
         }
-        else
+        else if (!textPinnedEmpty)
         {
             // Add default placeholder for FORMTEXT
             var resultRun = new Run(new Text("\u00A0") { Space = SpaceProcessingModeValues.Preserve }); // non-breaking space
@@ -513,6 +525,36 @@ public partial class WordHandler
         // End run
         var endRun = new Run(new FieldChar { FieldCharType = FieldCharValues.End });
         para.AppendChild(endRun);
+
+        // Field-run formatting (theme/literal font slots, size, bold, color):
+        // stamp the forwarded rPr onto every run of the rebuilt field so the
+        // form renders in the host face instead of the docDefaults font.
+        {
+            var ffFontKeys = new[]
+            {
+                "font", "font.latin", "font.ascii", "font.hAnsi",
+                "font.asciiTheme", "font.hAnsiTheme", "font.eaTheme", "font.csTheme",
+                "size", "bold", "color",
+            };
+            var ffFmt = ffFontKeys
+                .Where(k => ciProps.ContainsKey(k))
+                .Select(k => (Key: k, Val: ciProps[k]))
+                .Where(t => !string.IsNullOrEmpty(t.Val))
+                .ToList();
+            if (ffFmt.Count > 0)
+            {
+                foreach (var ffRun in para.Elements<Run>())
+                {
+                    if (ffRun.GetFirstChild<FieldChar>() == null
+                        && ffRun.GetFirstChild<FieldCode>() == null
+                        && ffRun.GetFirstChild<Text>() == null)
+                        continue;
+                    var rp = ffRun.RunProperties ?? ffRun.PrependChild(new RunProperties());
+                    foreach (var (k, v) in ffFmt)
+                        ApplyRunFormatting(rp, k, v);
+                }
+            }
+        }
 
         // BookmarkEnd
         var bookmarkEnd = new BookmarkEnd { Id = bkId };

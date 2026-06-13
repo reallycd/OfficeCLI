@@ -1628,10 +1628,27 @@ public static partial class WordBatchEmitter
             if (string.IsNullOrEmpty(sv)) continue;
             props[bare] = sv!;
         }
+        // Field-run formatting forwarded by CollapseFieldChains (theme/literal
+        // fonts, size, bold, …) — AddFormField stamps it on every field run.
+        foreach (var (k, v) in run.Format)
+        {
+            if (v == null) continue;
+            if (!FieldResultFormatKeys.Contains(k) || props.ContainsKey(k)) continue;
+            var s2 = v switch { bool b => b ? "true" : "false", _ => v.ToString() ?? "" };
+            if (s2.Length > 0) props[k] = s2;
+        }
         // Preserve cached display text where AddFormField would otherwise
         // emit the placeholder symbol (text input) or "false" (checkbox).
-        if (!string.IsNullOrEmpty(run.Text) && !props.ContainsKey("text"))
-            props["text"] = run.Text!;
+        if (!props.ContainsKey("text"))
+        {
+            if (!string.IsNullOrEmpty(run.Text))
+                props["text"] = run.Text!;
+            else
+                // Explicit empty pin: the source field has NO cached result
+                // run; without the pin AddFormField fabricates an NBSP
+                // placeholder and every empty form row gains a glyph.
+                props["text"] = "";
+        }
         items.Add(new BatchItem
         {
             Command = "add",

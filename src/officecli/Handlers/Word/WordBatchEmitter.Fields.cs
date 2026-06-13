@@ -336,6 +336,16 @@ public static partial class WordBatchEmitter
                     if (fk.StartsWith("ff", StringComparison.OrdinalIgnoreCase))
                         ffSynth.Format[fk] = fv;
                 }
+                // Field-run formatting (theme/literal fonts, size, bold, …):
+                // the form field's begin/instr/result/end runs carry the host
+                // rPr (a form bound to majorBidi); dropping it re-rendered
+                // the field in the docDefaults face and nudged row heights.
+                foreach (var (fk, fv) in c.Format)
+                {
+                    if (fv == null) continue;
+                    if (FieldResultFormatKeys.Contains(fk) && !ffSynth.Format.ContainsKey(fk))
+                        ffSynth.Format[fk] = fv;
+                }
                 result.Add(ffSynth);
                 i = end;
                 continue;
