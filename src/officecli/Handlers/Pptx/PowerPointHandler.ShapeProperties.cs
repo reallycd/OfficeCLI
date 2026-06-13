@@ -2796,6 +2796,7 @@ public partial class PowerPointHandler
                     string? borderColor = null;
                     long? borderWidth = null;
                     string? borderDash = null;
+                    Drawing.CompoundLineValues? borderCompound = null;
                     // Sub-key axis selectors: border.width / border.color /
                     // border.dash (and the edge-qualified .left.width etc).
                     // Without this routing, "border.width=-5" fell through to
@@ -2807,9 +2808,28 @@ public partial class PowerPointHandler
                     bool isWidthOnly = k.EndsWith(".width", StringComparison.Ordinal);
                     bool isColorOnly = k.EndsWith(".color", StringComparison.Ordinal);
                     bool isDashOnly = k.EndsWith(".dash", StringComparison.Ordinal);
-                    if (!isNone && (isWidthOnly || isColorOnly || isDashOnly))
+                    // Compound line style sub-key (.compound). The NodeBuilder
+                    // readback emits the raw OOXML cmpd attr value (sng/dbl/
+                    // thickThin/thinThick/tri). Without this routing it fell
+                    // through to the space-split path, where "sng" failed the
+                    // pt/dash checks and the color parser uppercased it to
+                    // "SNG" → "Invalid color value: 'SNG'", aborting the op.
+                    bool isCompoundOnly = k.EndsWith(".compound", StringComparison.Ordinal);
+                    if (!isNone && (isWidthOnly || isColorOnly || isDashOnly || isCompoundOnly))
                     {
-                        if (isWidthOnly)
+                        if (isCompoundOnly)
+                        {
+                            borderCompound = value.ToLowerInvariant() switch
+                            {
+                                "sng" or "single" => Drawing.CompoundLineValues.Single,
+                                "dbl" or "double" => Drawing.CompoundLineValues.Double,
+                                "thickthin" => Drawing.CompoundLineValues.ThickThin,
+                                "thinthick" => Drawing.CompoundLineValues.ThinThick,
+                                "tri" or "triple" => Drawing.CompoundLineValues.Triple,
+                                _ => throw new ArgumentException($"Invalid border compound value: '{value}'. Valid values: sng, dbl, thickThin, thinThick, tri.")
+                            };
+                        }
+                        else if (isWidthOnly)
                         {
                             // ParseLineWidth treats bare numbers as pt,
                             // routes through ParseEmuAsInt which rejects
@@ -2951,6 +2971,11 @@ public partial class PowerPointHandler
                             var wAttr = lineProps.GetAttributes().FirstOrDefault(a => a.LocalName == "w");
                             lineProps.SetAttribute(new OpenXmlAttribute("", "w", null!, borderWidth.Value.ToString()));
                         }
+                        // Set compound line style (cmpd attr on the line element).
+                        if (borderCompound.HasValue && lineProps is Drawing.LinePropertiesType lpCmpd)
+                        {
+                            lpCmpd.CompoundLineType = borderCompound.Value;
+                        }
                         // Set color (build before removing for atomicity)
                         if (borderColor != null)
                         {
@@ -2995,12 +3020,12 @@ public partial class PowerPointHandler
                     // border to all four straight edges instead.
                     var edges = k switch
                     {
-                        "border.left" or "border.left.width" or "border.left.color" or "border.left.dash" => new[] { "left" },
-                        "border.right" or "border.right.width" or "border.right.color" or "border.right.dash" => new[] { "right" },
-                        "border.top" or "border.top.width" or "border.top.color" or "border.top.dash" => new[] { "top" },
-                        "border.bottom" or "border.bottom.width" or "border.bottom.color" or "border.bottom.dash" => new[] { "bottom" },
-                        "border.tl2br" or "border.tl2br.width" or "border.tl2br.color" or "border.tl2br.dash" => new[] { "tl2br" },
-                        "border.tr2bl" or "border.tr2bl.width" or "border.tr2bl.color" or "border.tr2bl.dash" => new[] { "tr2bl" },
+                        "border.left" or "border.left.width" or "border.left.color" or "border.left.dash" or "border.left.compound" => new[] { "left" },
+                        "border.right" or "border.right.width" or "border.right.color" or "border.right.dash" or "border.right.compound" => new[] { "right" },
+                        "border.top" or "border.top.width" or "border.top.color" or "border.top.dash" or "border.top.compound" => new[] { "top" },
+                        "border.bottom" or "border.bottom.width" or "border.bottom.color" or "border.bottom.dash" or "border.bottom.compound" => new[] { "bottom" },
+                        "border.tl2br" or "border.tl2br.width" or "border.tl2br.color" or "border.tl2br.dash" or "border.tl2br.compound" => new[] { "tl2br" },
+                        "border.tr2bl" or "border.tr2bl.width" or "border.tr2bl.color" or "border.tr2bl.dash" or "border.tr2bl.compound" => new[] { "tr2bl" },
                         "bordertoplefttobottomright"
                           or "bordertoplefttobottomright.width"
                           or "bordertoplefttobottomright.color"

@@ -291,9 +291,9 @@ public partial class PowerPointHandler
             bool isDiag = key.StartsWith("border.tl2br") || key.StartsWith("border.tr2bl")
                        || key.StartsWith("border.diagdown") || key.StartsWith("border.diagup");
 
-            // Split-form suffix preserved on cell-level key (e.g. ".width" / ".color" / ".dash").
+            // Split-form suffix preserved on cell-level key (e.g. ".width" / ".color" / ".dash" / ".compound").
             string splitSuffix = "";
-            foreach (var s in new[] { ".width", ".color", ".dash" })
+            foreach (var s in new[] { ".width", ".color", ".dash", ".compound" })
                 if (key.EndsWith(s)) { splitSuffix = s; break; }
 
             void ApplyToCell(Drawing.TableCell cell, string edgeKey)
