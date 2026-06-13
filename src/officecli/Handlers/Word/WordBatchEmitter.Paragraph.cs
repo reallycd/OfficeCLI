@@ -607,6 +607,16 @@ public static partial class WordBatchEmitter
                     Props = sectPProps
                 });
             }
+            // BUG-R12C: the section-carrier paragraph holds its own custom tab
+            // stops in Format["tabs"], which the `set` above can't express (tab
+            // stops round-trip as separate `add tab` ops, never as a pPr prop).
+            // A title-page paragraph that centres its text by tabbing to a
+            // centre-aligned tab stop (jc=left + <w:tab w:val="center"/>) lost
+            // the stop here and the text fell back to the default left tab —
+            // "YEAR OF SUBMISSION" rendered left-aligned instead of centred.
+            // Mirror the normal paragraph path's EmitTabStops at line 287.
+            pNode.Format.TryGetValue("tabs", out var carrierTabs);
+            EmitTabStops("/body/p[last()]", carrierTabs, items);
             // BUG-DUMP4-04: a section-break paragraph can also carry visible
             // text runs (the carrier paragraph is just a regular paragraph
             // with sectPr in its pPr). AddSection appends a fresh paragraph
@@ -617,6 +627,13 @@ public static partial class WordBatchEmitter
                 {
                     // BUG-DUMP7-11: include inline w:sdt carrier children.
                     if (c.Type == "sdt") return true;
+                    // BUG-R12C: a tab / positional-tab run surfaces as type
+                    // "tab"/"ptab" with empty Text, so the !IsNullOrEmpty(Text)
+                    // gate below dropped it. A title-page paragraph that centres
+                    // its content by tabbing to a centre tab stop (jc=left +
+                    // leading <w:tab/>) then rendered left-aligned. Keep the tab
+                    // run; the loop emits it via TryEmitTabRun/TryEmitPtabRun.
+                    if (c.Type == "tab" || c.Type == "ptab") return true;
                     // Spanning bookmarks anchored on the section paragraph:
                     // dropping the start leaves the matching end dangling
                     // (replay fails with "no matching open bookmarkStart").
@@ -655,10 +672,27 @@ public static partial class WordBatchEmitter
                         TryEmitBookmarkRun(run, carrierPath, items, ctx);
                         continue;
                     }
+                    // BUG-R12C: tab / positional-tab runs round-trip through the
+                    // same helpers the main run loop uses, so a leading centre
+                    // tab survives on the section-carrier paragraph.
+                    if (TryEmitTabRun(run, carrierPath, items)) continue;
+                    if (TryEmitPtabRun(run, carrierPath, items)) continue;
                     // BUG-DUMP7-11: inline SDT carrier — same prop whitelist
                     // as the body-paragraph inline-SDT branch.
                     if (run.Type == "sdt")
                     {
+                        // BUG-R12C: a rich inline SDT (per-run rPr/color,
+                        // multi-run, nested, or special sdtPr) must round-trip
+                        // verbatim here too. The section-carrier branch only had
+                        // the flat `add sdt text=` path, which dropped the sdtPr
+                        // rStyle/placeholder and the content runs' formatting —
+                        // a title-page "year OF SUBMISSION" control styled by a
+                        // smallCaps character style came back as literal lowercase
+                        // text. Mirror EmitInlineSdt: try the rich raw-set first,
+                        // fall through to the flat emit when it isn't rich (or the
+                        // host isn't raw-set-addressable).
+                        if (TryEmitRichInlineSdt(word, run, parentPath, items, ctx))
+                            continue;
                         var sdtCarrierProps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                         foreach (var key in new[] { "type", "alias", "tag", "items", "format" })
                         {
