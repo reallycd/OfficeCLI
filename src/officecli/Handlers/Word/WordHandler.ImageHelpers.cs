@@ -452,8 +452,11 @@ public partial class WordHandler
                 for (int ci = 0; ci < 4; ci++)
                 {
                     cv[ci] = ParseHelpers.SafeParseDouble(StripPct(parts[ci]), "crop");
-                    if (cv[ci] < 0 || cv[ci] > 100)
-                        throw new ArgumentException($"Invalid 'crop' value: '{parts[ci].Trim()}'. Crop percentage must be between 0 and 100.");
+                    // Negative srcRect values are legal (ST_Percentage): they
+                    // EXPAND the canvas beyond the bitmap (Word's "crop out").
+                    // Real documents carry e.g. -2.934; mirror the pptx range.
+                    if (cv[ci] < -1000 || cv[ci] > 1000)
+                        throw new ArgumentException($"Invalid 'crop' value: '{parts[ci].Trim()}'. Crop percentage must be between -1000 and 1000.");
                 }
                 srcRect.Left = (int)(cv[0] * 1000);
                 srcRect.Top = (int)(cv[1] * 1000);
@@ -463,8 +466,8 @@ public partial class WordHandler
             else if (parts.Length == 1)
             {
                 if (!double.TryParse(StripPct(value), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var cv1)
-                    || cv1 < 0 || cv1 > 100)
-                    throw new ArgumentException($"Invalid 'crop' value: '{value}'. Expected percentage 0-100.");
+                    || cv1 < -1000 || cv1 > 1000)
+                    throw new ArgumentException($"Invalid 'crop' value: '{value}'. Expected percentage -1000..1000.");
                 var pctAll = (int)(cv1 * 1000);
                 srcRect.Left = pctAll; srcRect.Top = pctAll;
                 srcRect.Right = pctAll; srcRect.Bottom = pctAll;
