@@ -613,6 +613,16 @@ public partial class WordHandler
                 ApplyRunFormatting(markRPr, key.Substring("markRPr.".Length), value);
                 continue;
             }
+            // BUG-DUMP: an explicit empty `style` means the source note paragraph
+            // had no pStyle. Strip AddFootnote/AddEndnote's hard-coded
+            // FootnoteText/EndnoteText default so the note inherits the document
+            // default paragraph style (and its spacing) like the source did.
+            if (key.Equals("style", StringComparison.OrdinalIgnoreCase)
+                && string.IsNullOrEmpty(value))
+            {
+                pProps.RemoveAllChildren<ParagraphStyleId>();
+                continue;
+            }
             if (ApplyParagraphLevelProperty(pProps, key, value)) continue;
             bool runApplied = false;
             foreach (var run in contentRuns)

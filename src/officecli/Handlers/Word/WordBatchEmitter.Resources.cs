@@ -1566,11 +1566,19 @@ public static partial class WordBatchEmitter
         // the note's hanging indent / size / line-number suppression. Forward the
         // source style id so ApplyFootnoteEndnoteFormatKeys -> ApplyParagraph
         // LevelProperty overrides the hardcoded default with the real style.
-        if (bodyParas.Count > 0
-            && bodyParas[0].Format.TryGetValue("style", out var noteStyle)
-            && noteStyle != null && !string.IsNullOrEmpty(noteStyle.ToString()))
+        if (bodyParas.Count > 0)
         {
-            noteProps["style"] = noteStyle.ToString()!;
+            var srcNoteStyle = bodyParas[0].Format.TryGetValue("style", out var noteStyle)
+                && noteStyle != null ? noteStyle.ToString() : null;
+            // BUG-DUMP: AddFootnote/AddEndnote hard-code pStyle=FootnoteText/
+            // EndnoteText on the synthesized note paragraph. When the SOURCE note
+            // paragraph carries NO pStyle (it inherits the default paragraph
+            // style — e.g. Normal, which has a non-zero spaceAfter), stamping
+            // FootnoteText (spaceAfter=0) collapses the inter-paragraph gap and
+            // the note renders shorter, shifting the page. Emit an explicit empty
+            // style to signal "no pStyle" so the apply side strips the hard-coded
+            // default; a real source style id is forwarded verbatim (R40-1).
+            noteProps["style"] = string.IsNullOrEmpty(srcNoteStyle) ? "" : srcNoteStyle!;
         }
         // Forward the note's first-paragraph PARAGRAPH-level formatting. The
         // `add footnote`/`add endnote` step only seeds p[1] with text + style +
