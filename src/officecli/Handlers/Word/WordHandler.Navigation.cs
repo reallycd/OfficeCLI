@@ -2880,10 +2880,27 @@ public partial class WordHandler
                 break;
             }
             // Direction (CT_TblPrBase / w:bidiVisual). Mirrors paragraph
-            // direction vocabulary; presence-only readback (no bidiVisual
-            // means no key — LTR is the default).
-            if (tp.GetFirstChild<BiDiVisual>() != null)
-                node.Format["direction"] = "rtl";
+            // direction vocabulary. bidiVisual is a CT_OnOff toggle: present
+            // with no val (or val=true) is ON (RTL); val="0"/false is an
+            // explicit OFF (LTR). Read the val — a presence-only check turned a
+            // source's explicit `<w:bidiVisual w:val="0"/>` into direction=rtl,
+            // and AddTable then stamped a bare (ON) `<w:bidiVisual/>`, visually
+            // mirroring the columns. Emit rtl only when the toggle is actually
+            // ON; an OFF/absent toggle leaves no key, and WordBatchEmitter
+            // pins direction=ltr for that case (see EmitTable).
+            var tblBidi = tp.GetFirstChild<BiDiVisual>();
+            if (tblBidi != null)
+            {
+                // CT_OnOff: no val attribute (or a truthy val) is ON; an
+                // explicit falsey val ("0"/"false"/"off") is OFF. Read the raw
+                // attribute text so the check is robust regardless of how the
+                // SDK surfaces the toggle's typed value.
+                var bidiRaw = tblBidi.Val?.InnerText;
+                bool bidiOn = bidiRaw is null
+                    || !(bidiRaw is "0" or "false" or "off");
+                if (bidiOn)
+                    node.Format["direction"] = "rtl";
+            }
             // Default cell margin (padding)
             var dcm = tp.TableCellMarginDefault;
             // BUG-R4B(BUG1): decimal-tolerant margin reads.
