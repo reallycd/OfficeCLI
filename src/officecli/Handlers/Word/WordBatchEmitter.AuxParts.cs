@@ -55,9 +55,12 @@ public static partial class WordBatchEmitter
         "/word/endnotes.xml",
         "/word/fontTable.xml",           // BUG-DUMP-R42-3: EmitFontTableRaw round-trips faces + altName subs
         "/word/webSettings.xml",         // EmitWebSettingsRaw round-trips the whole part verbatim
-        // OPC auto-managed
-        "/docProps/core.xml",            // restamped by OfficeCliMetadata
-        "/docProps/app.xml",             // restamped by OfficeCliMetadata
+        // docProps stores — EmitDocPropsRaw round-trips core/app/custom verbatim
+        // so data-bound content controls keep their source display text (the
+        // OfficeCLI audit stamp still rides in custom.xml via StampOnSave).
+        "/docProps/core.xml",
+        "/docProps/app.xml",
+        "/docProps/custom.xml",
         "/[Content_Types].xml",
         "/_rels/.rels",
     };
@@ -114,26 +117,6 @@ public static partial class WordBatchEmitter
 
             if (KnownEmittedExact.Contains(uri)) continue;
             if (KnownEmittedPrefixes.Any(p => uri.StartsWith(p, StringComparison.OrdinalIgnoreCase))) continue;
-
-            // Special-case: docProps/custom.xml — OfficeCliMetadata always
-            // restamps OfficeCLI.* entries; user-authored entries are silently
-            // dropped on save. Warn only if the part carries non-OfficeCLI
-            // properties; the auto-stamped pair (OfficeCLI.Version + .LastModified)
-            // is expected and not a loss.
-            if (string.Equals(uri, "/docProps/custom.xml", StringComparison.OrdinalIgnoreCase))
-            {
-                var userProps = word.EnumerateCustomDocPropertyNames()
-                    .Where(n => !n.StartsWith("OfficeCLI.", StringComparison.Ordinal))
-                    .ToList();
-                if (userProps.Count > 0)
-                {
-                    warnings.Add(new DocxUnsupportedWarning(
-                        Element: "customDocProperty",
-                        Path: uri,
-                        Reason: $"user-defined custom document properties dropped on dump ({string.Join(", ", userProps)})"));
-                }
-                continue;
-            }
 
             // Look up the catalogued reason; if none matches, emit a generic
             // "unknown part" warning so silent loss never goes unreported.

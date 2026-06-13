@@ -647,6 +647,73 @@ public static partial class WordBatchEmitter
         }
     }
 
+    // docProps/core.xml + app.xml + custom.xml — document properties.
+    //
+    // Cover pages and headers routinely host data-bound content controls
+    // (`<w:sdt>` with `<w:dataBinding w:xpath="…">`) whose DISPLAYED text is
+    // pulled from these property stores, not from the cached run text:
+    //   • core.xml   dc:title / dc:subject / dc:creator …  (coreProperties)
+    //   • app.xml    Company / Manager / TitlesOfParts …    (extended-properties)
+    //   • custom.xml user-defined name/value pairs           (custom-properties)
+    // Without round-tripping the stores, the blank rebuild stamps OfficeCLI
+    // defaults (Application=OfficeCLI, creator=OfficeCLI, no Company/title),
+    // so every bound control renders EMPTY — the cover title/company/contact
+    // vanish even though the SDT structure round-trips perfectly.
+    //
+    // Emit each part verbatim as a normal `raw-set replace` whose xpath is the
+    // part's root element (replacing the root IS replacing the whole part — no
+    // bespoke action verb). The apply side recognises the docProps part path and
+    // rewrites the whole zip entry after the package closes (the SDK won't
+    // persist a mid-session docProps write); see WordHandler.StashWholePartReplace.
+    // A dump→batch rebuild reproduces the source, so all three are carried
+    // verbatim — the source authoring identity (app.xml Application, core.xml
+    // creator, custom.xml user props) is the faithful result; the OfficeCLI
+    // audit stamp is a create/edit concern, not a reconstruction one. Previously
+    // these were treated as auto-managed (restamped to OfficeCLI defaults) and
+    // silently dropped on dump, blanking every data-bound control.
+    private static void EmitDocPropsRaw(WordHandler word, List<BatchItem> items)
+    {
+        foreach (var partUri in new[] { "/docProps/core.xml", "/docProps/app.xml", "/docProps/custom.xml" })
+        {
+            string xml;
+            try { xml = word.Raw(partUri); }
+            catch { continue; } // source lacks this part — nothing to carry
+            if (string.IsNullOrWhiteSpace(xml) || !xml.TrimStart().StartsWith("<")) continue;
+            xml = CanonicalizeRawXml(xml);
+            if (string.IsNullOrEmpty(xml) || !xml.StartsWith("<")) continue;
+            // The xpath is the part's root element — replacing the root element
+            // IS replacing the whole part, so the standard `replace` action with
+            // the root xpath is the honest description (no bespoke action verb).
+            // The apply side recognises the docProps part path and rewrites the
+            // whole entry; see WordHandler.RawSet / StashWholePartReplace.
+            var rootXpath = "/" + RootElementName(xml);
+            items.Add(new BatchItem
+            {
+                Command = "raw-set",
+                Part = partUri,
+                Xpath = rootXpath,
+                Action = "replace",
+                Xml = xml,
+            });
+        }
+    }
+
+    // Extract the (possibly prefixed) qualified name of the first element in an
+    // XML string — used as the root xpath for whole-part docProps replaces.
+    private static string RootElementName(string xml)
+    {
+        var i = xml.IndexOf('<');
+        while (i >= 0 && i + 1 < xml.Length && (xml[i + 1] == '?' || xml[i + 1] == '!'))
+            i = xml.IndexOf('<', i + 1);
+        if (i < 0) return "*";
+        int start = i + 1;
+        int end = start;
+        while (end < xml.Length && xml[end] != ' ' && xml[end] != '>' && xml[end] != '\t'
+               && xml[end] != '\r' && xml[end] != '\n' && xml[end] != '/')
+            end++;
+        return end > start ? xml[start..end] : "*";
+    }
+
     // word/webSettings.xml (web-publishing div/frame settings). Verbatim
     // whole-part raw-set; the apply side creates the part lazily. Previously
     // warn-dropped.

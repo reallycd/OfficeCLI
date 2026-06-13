@@ -197,6 +197,11 @@ public static partial class WordBatchEmitter
         // the other raw resource parts.
         EmitFontTableRaw(word, items, warnings);
         EmitCustomXmlRaw(word, items);
+        // docProps round-trip — data-bound content controls (cover title /
+        // company / contact) read their displayed text from core/app/custom
+        // property stores; without this they render empty. No ordering
+        // dependency on body refs. See EmitDocPropsRaw.
+        EmitDocPropsRaw(word, items);
         EmitWebSettingsRaw(word, items);
         EmitSection(word, items);
         // Headers/footers run AFTER body: multi-section docs now emit

@@ -27,6 +27,16 @@ public partial class WordHandler : IDocumentHandler
     // bytes lag _doc until _doc.Save() runs.
     private FileStream? _backingStream;
 
+    // Whole-part payloads (docProps/core|app|custom.xml) staged by
+    // RawReplaceWholePart and written straight into the saved zip after the
+    // package closes (FlushPendingWholeParts). The Open-XML SDK does not
+    // reliably flush docProps mutations made mid-session on a stream-opened
+    // editable package — a typed/stream write is silently reverted to the
+    // open-time content by _doc.Save(). Rewriting the zip entries post-close
+    // (the same mechanism NormalizeSelfClosingInDocx uses for document.xml)
+    // sidesteps that entirely. Keyed by zip entry name (no leading slash).
+    private Dictionary<string, string>? _pendingWholeParts;
+
     /// <summary>
     /// Props that the most recent Add() call could not consume. Surfaced to
     /// the CLI layer so silent-drops on the curated surface (e.g.
@@ -908,6 +918,21 @@ public partial class WordHandler : IDocumentHandler
             return;
         }
 
+        // docProps whole-part replace (core/app/custom.xml). EmitDocPropsRaw
+        // emits a normal `raw-set replace` whose xpath is the part root, but the
+        // Open-XML SDK does not persist a docProps mutation made mid-session on a
+        // stream-opened package (both typed-root and stream writes are reverted
+        // by _doc.Save()). So stage the whole-part XML and rewrite the zip entry
+        // after the package closes (FlushPendingWholeParts) instead of taking
+        // the normal xpath path. Recognised by part path, not action, so it
+        // stays a plain `replace` in the dump.
+        if (IsDocPropsWholePart(partPath)
+            && string.Equals(action, "replace", StringComparison.OrdinalIgnoreCase))
+        {
+            StashWholePartReplace(partPath, xml);
+            return;
+        }
+
         if (RawXmlHelper.IsZipUriPath(partPath))
         {
             var part = RawXmlHelper.FindPartByZipUri(_doc, partPath)
@@ -1168,6 +1193,81 @@ public partial class WordHandler : IDocumentHandler
         }
     }
 
+    // The three docProps stores whose whole-part replace must take the
+    // staged-zip-rewrite path (the SDK won't persist them mid-session).
+    private static bool IsDocPropsWholePart(string partPath)
+    {
+        var p = partPath.ToLowerInvariant();
+        return p is "/docprops/core.xml" or "/docprops/app.xml" or "/docprops/custom.xml";
+    }
+
+    // Stage a docProps whole-part replace. EmitDocPropsRaw round-trips
+    // core/app/custom.xml verbatim so data-bound content controls (cover title /
+    // company / contact) keep their source-authored display text. The payload is
+    // STAGED here, not written now: the Open-XML SDK does not reliably persist a
+    // docProps mutation made mid-session on a stream-opened editable package —
+    // both a typed-root assignment and a direct part-stream write are silently
+    // reverted to the open-time content when _doc.Save() flushes (verified
+    // empirically; even the documented `set / --prop extended.company=…` path is
+    // lost the same way). The staged XML is written straight into the saved zip
+    // after the package closes (FlushPendingWholeParts), the same post-close
+    // zip-rewrite mechanism NormalizeSelfClosingInDocx uses for document.xml.
+    //
+    // Verbatim for all three: a dump→batch rebuild reproduces the source, so the
+    // source authoring identity (app.xml Application, core.xml creator,
+    // custom.xml user props) is the faithful result — the OfficeCLI audit stamp
+    // is a create/edit-time concern, not a reconstruction one.
+    private void StashWholePartReplace(string partPath, string? xml)
+    {
+        if (string.IsNullOrWhiteSpace(xml))
+            throw new ArgumentException("raw-set replace on docProps requires non-empty 'xml'.");
+        var content = xml.Trim();
+
+        var entryName = (partPath.StartsWith('/') ? partPath[1..] : partPath);
+        // Ensure a standard prolog so the rewritten part matches Office output
+        // (the staged content is element-only — Raw() strips the prolog).
+        if (!content.StartsWith("<?xml", StringComparison.Ordinal))
+            content = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" + content;
+
+        (_pendingWholeParts ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
+            [entryName] = content;
+        Modified = true;
+    }
+
+    // Write every staged whole-part payload into the saved zip on disk,
+    // replacing the entry the SDK wrote. The caller must have released the
+    // file first (_doc + _backingStream closed) — this runs from Dispose,
+    // after _doc.Dispose(). Clears the staging map after writing.
+    //
+    // Resident note: the resident's mid-session ExecuteSave calls handler.Save()
+    // while keeping the package open, so staged docProps land on disk only when
+    // the resident closes and the handler Disposes — consistent with the
+    // existing "resident sessions flush only on save/close" model. dump→batch
+    // rebuilds run non-resident (OFFICECLI_NO_AUTO_RESIDENT=1), so this gap does
+    // not affect the round-trip path.
+    private void FlushPendingWholeParts()
+    {
+        if (_pendingWholeParts == null || _pendingWholeParts.Count == 0) return;
+        var pending = _pendingWholeParts;
+        _pendingWholeParts = null;
+        if (!System.IO.File.Exists(_filePath)) return;
+        try
+        {
+            using var fs = new System.IO.FileStream(_filePath, System.IO.FileMode.Open, System.IO.FileAccess.ReadWrite);
+            using var za = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Update, leaveOpen: false);
+            foreach (var (entryName, content) in pending)
+            {
+                za.GetEntry(entryName)?.Delete();
+                var entry = za.CreateEntry(entryName);
+                using var w = new System.IO.StreamWriter(entry.Open(), new System.Text.UTF8Encoding(false));
+                w.Write(content);
+            }
+        }
+        catch { /* best-effort: a malformed package or locked file leaves the
+                   SDK-saved docProps in place rather than aborting the save */ }
+    }
+
+
     /// <summary>
     /// BUG-DUMP-R26-4: read word/commentsExtended.xml verbatim for the dump
     /// emitter, or null when the part is absent. The part carries modern
@@ -1256,6 +1356,11 @@ public partial class WordHandler : IDocumentHandler
         _doc.Dispose();
         _backingStream?.Dispose();
         _backingStream = null;
+        // docProps whole-part round-trip: the SDK won't persist mid-session
+        // docProps edits on a stream-opened package, so rewrite the staged
+        // entries directly in the closed zip. Must run after _doc.Dispose()
+        // releases the file. See RawReplaceWholePart / FlushPendingWholeParts.
+        try { FlushPendingWholeParts(); } catch { /* best-effort */ }
         // CONSISTENCY(word-self-close): the OpenXml SDK serializes empty
         // elements with a space before the self-close (`<w:br />`). Several
         // downstream consumers (and test regexes) look for the canonical
