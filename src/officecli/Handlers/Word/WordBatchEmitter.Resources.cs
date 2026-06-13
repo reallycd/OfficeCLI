@@ -903,8 +903,21 @@ public static partial class WordBatchEmitter
         // on replay. Emit `parent=/section[N]` so each header targets its
         // true owning section (mirrors ResolveTargetSectPrForHeaderFooter's
         // /section[N] resolver).
-        var headerPathInfo = new Dictionary<string, (string Type, string? SectionPath)>(StringComparer.OrdinalIgnoreCase);
-        var footerPathInfo = new Dictionary<string, (string Type, string? SectionPath)>(StringComparer.OrdinalIgnoreCase);
+        // A single header/footer PART may be referenced by MORE THAN ONE type
+        // in the same section — Word commonly points both the `even` and the
+        // `default` headerReference at one part (so odd AND even pages show the
+        // same running header without authoring two copies). Keep the full LIST
+        // of (type, section) refs per part, not just the first: collapsing to a
+        // single ref dropped the `default` reference, so odd pages (which use
+        // the default header when evenAndOddHeaders is off, or when there is no
+        // titlePg) rendered with NO header at all. Each ref is emitted as its
+        // own `add header` (a content copy referenced by that type) — the
+        // rebuild carries N small part copies instead of one shared part, but
+        // renders identically.
+        var headerPathInfo = new Dictionary<string, List<(string Type, string? SectionPath)>>(StringComparer.OrdinalIgnoreCase);
+        var footerPathInfo = new Dictionary<string, List<(string Type, string? SectionPath)>>(StringComparer.OrdinalIgnoreCase);
+        var headerRefSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var footerRefSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // headerRef.<type> / footerRef.<type> live on **section** nodes
         // (see WordHandler.Query.cs:902), not on root. An earlier fix
         // scanned root.Format and silently found nothing, so every emitted
@@ -924,11 +937,15 @@ public static partial class WordBatchEmitter
         {
             var parent = sref.IsFinal ? "/" : $"/section[{sref.ReplayOrdinal}]";
             foreach (var (type, partPath) in sref.Headers)
-                if (!headerPathInfo.ContainsKey(partPath))
-                    headerPathInfo[partPath] = (type, parent);
+                if (headerRefSeen.Add($"{partPath}|{type}|{parent}"))
+                    (headerPathInfo.TryGetValue(partPath, out var hl) ? hl
+                        : (headerPathInfo[partPath] = new List<(string, string?)>()))
+                        .Add((type, parent));
             foreach (var (type, partPath) in sref.Footers)
-                if (!footerPathInfo.ContainsKey(partPath))
-                    footerPathInfo[partPath] = (type, parent);
+                if (footerRefSeen.Add($"{partPath}|{type}|{parent}"))
+                    (footerPathInfo.TryGetValue(partPath, out var fl) ? fl
+                        : (footerPathInfo[partPath] = new List<(string, string?)>()))
+                        .Add((type, parent));
         }
 
         int hIdx = 0, fIdx = 0;
@@ -942,16 +959,22 @@ public static partial class WordBatchEmitter
                 // the real default header on batch replay ("Header of type
                 // 'default' already exists"). Only re-emit parts that a
                 // section actually links to.
-                if (!headerPathInfo.TryGetValue(child.Path, out var hi)) continue;
-                hIdx++;
-                EmitHeaderFooterPart(word, child.Path, "header", hIdx, items, hi.Type, hi.SectionPath, warnings);
+                if (!headerPathInfo.TryGetValue(child.Path, out var hRefs)) continue;
+                foreach (var (type, section) in hRefs)
+                {
+                    hIdx++;
+                    EmitHeaderFooterPart(word, child.Path, "header", hIdx, items, type, section, warnings);
+                }
             }
             else if (child.Type == "footer")
             {
                 // Same orphan guard as header above.
-                if (!footerPathInfo.TryGetValue(child.Path, out var fi)) continue;
-                fIdx++;
-                EmitHeaderFooterPart(word, child.Path, "footer", fIdx, items, fi.Type, fi.SectionPath, warnings);
+                if (!footerPathInfo.TryGetValue(child.Path, out var fRefs)) continue;
+                foreach (var (type, section) in fRefs)
+                {
+                    fIdx++;
+                    EmitHeaderFooterPart(word, child.Path, "footer", fIdx, items, type, section, warnings);
+                }
             }
         }
     }
