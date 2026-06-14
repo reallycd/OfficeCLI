@@ -1440,7 +1440,7 @@ public partial class WordHandler
                         ApplyDirectionCascade(cellPara, cellRtl);
                     break;
                 }
-                case "shd" or "shading" or "fill":
+                case "shd" or "shading" or "fill" or "cellshading":
                     var shdParts = value.Split(';');
                     if (shdParts.Length >= 3 && shdParts[0].Equals("gradient", StringComparison.OrdinalIgnoreCase))
                     {
@@ -2316,7 +2316,7 @@ public partial class WordHandler
                     cm.TableCellRightMargin = new TableCellRightMargin { Width = (short)Math.Min(paddingVal, short.MaxValue), Type = TableWidthValues.Dxa };
                     break;
                 }
-                case "shd" or "shading" or "fill":
+                case "shd" or "shading" or "fill" or "cellshading":
                 {
                     // BUG-R2-P3-10: table-level shd was falling through to
                     // GenericXmlQuery.TryCreateTypedChild which stamped the

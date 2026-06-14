@@ -107,11 +107,29 @@ public partial class WordHandler
         bool hasTextBoxGroup = HasTextBoxContent(para);
         var preGroupImages = hasTextBoxGroup ? new List<Drawing>() : null;
         bool textBoxSeen = false;
+        // FORMCHECKBOX fields cache the glyph as a literal <w:t>☐/☑</w:t> between
+        // fldChar.Separate and fldChar.End. Begin already emits the glyph, so
+        // suppress the cached run to avoid rendering the checkbox twice.
+        bool skipCachedCheckboxDisplay = false;
 
         foreach (var child in para.ChildElements)
         {
             if (child is Run run)
             {
+                var runFldChar = run.GetFirstChild<FieldChar>()?.FieldCharType?.Value;
+                if (runFldChar == FieldCharValues.Begin
+                    && run.GetFirstChild<FieldChar>()!.GetFirstChild<FormFieldData>()?.GetFirstChild<CheckBox>() != null)
+                {
+                    RenderRunHtml(sb, run, para);
+                    skipCachedCheckboxDisplay = true;
+                    continue;
+                }
+                if (skipCachedCheckboxDisplay)
+                {
+                    if (runFldChar == FieldCharValues.End)
+                        skipCachedCheckboxDisplay = false;
+                    continue;
+                }
                 // Find drawing (direct child or inside mc:AlternateContent Choice)
                 // SDK's Descendants<Drawing>() naturally skips mc:Fallback (VML w:pict)
                 var drawing = run.GetFirstChild<Drawing>() ?? run.Descendants<Drawing>().FirstOrDefault();

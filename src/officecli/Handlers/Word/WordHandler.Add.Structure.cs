@@ -153,19 +153,24 @@ public partial class WordHandler
         // produced a contradictory `<w:pgSz w:w="11906" w:h="16838"
         // w:orient="landscape"/>` on dump→batch replay. Orient is set below
         // (explicit prop) or derived from final W/H after all overrides land.
+        // Copy values, not the UInt32Value references — sharing them would
+        // alias the new sectPr's dimensions onto the source body sectPr, so a
+        // later orientation swap on the new section mutates the body section
+        // simultaneously (and any subsequent section that inherits from body
+        // sees the corrupted dimensions).
         var srcPageSize = bodySectPr?.GetFirstChild<PageSize>();
         InsertSectPrChildInOrder(sectPr, new PageSize
         {
-            Width = srcPageSize?.Width ?? WordPageDefaults.A4WidthTwips,
-            Height = srcPageSize?.Height ?? WordPageDefaults.A4HeightTwips
+            Width = srcPageSize?.Width?.Value ?? WordPageDefaults.A4WidthTwips,
+            Height = srcPageSize?.Height?.Value ?? WordPageDefaults.A4HeightTwips
         });
         var srcMargin = bodySectPr?.GetFirstChild<PageMargin>();
         InsertSectPrChildInOrder(sectPr, new PageMargin
         {
-            Top = srcMargin?.Top ?? 1440,
-            Bottom = srcMargin?.Bottom ?? 1440,
-            Left = srcMargin?.Left ?? 1800,
-            Right = srcMargin?.Right ?? 1800
+            Top = srcMargin?.Top?.Value ?? 1440,
+            Bottom = srcMargin?.Bottom?.Value ?? 1440,
+            Left = srcMargin?.Left?.Value ?? 1800,
+            Right = srcMargin?.Right?.Value ?? 1800
         });
 
         // Allow per-section overrides

@@ -944,11 +944,14 @@ public partial class WordHandler
                 // the docDefaults / style level, not by polluting every run).
                 return true;
             case "charspacing" or "letterspacing" or "spacing":
-                var csPt = value.EndsWith("pt", StringComparison.OrdinalIgnoreCase)
-                    ? ParseHelpers.SafeParseDouble(value[..^2], "charspacing")
-                    : ParseHelpers.SafeParseDouble(value, "charspacing");
+                // w:spacing native unit is twips. With `pt` suffix convert to
+                // twips; bare number is taken as twips so dump→batch round-trips
+                // and `Get`'s "<n>pt" readback (twips/20) stays consistent.
+                int csTwips = value.EndsWith("pt", StringComparison.OrdinalIgnoreCase)
+                    ? (int)Math.Round(ParseHelpers.SafeParseDouble(value[..^2], "charspacing") * 20, MidpointRounding.AwayFromZero)
+                    : (int)Math.Round(ParseHelpers.SafeParseDouble(value, "charspacing"), MidpointRounding.AwayFromZero);
                 props.RemoveAllChildren<Spacing>();
-                InsertRunPropInSchemaOrder(props, new Spacing { Val = (int)Math.Round(csPt * 20, MidpointRounding.AwayFromZero) });
+                InsertRunPropInSchemaOrder(props, new Spacing { Val = csTwips });
                 return true;
             case "shading" or "shd":
                 props.RemoveAllChildren<Shading>();

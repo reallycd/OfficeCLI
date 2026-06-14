@@ -798,7 +798,17 @@ public partial class WordHandler
             Uri? hlUri;
             if (hlIsFragment)
             {
-                hlUri = new Uri(hlUrl!, UriKind.Relative);
+                // Internal bookmark targets must travel as w:anchor on the
+                // <w:hyperlink> element, not as a Target="#name" relationship
+                // — real Word rejects the latter as a corrupt file. Promote
+                // `url=#bookmark` to the anchor= path and skip relationship
+                // creation entirely.
+                if (!hasAnchor)
+                {
+                    hlAnchor = hlUrl!.Substring(1);
+                    hasAnchor = true;
+                }
+                hlUri = null;
             }
             else if (Uri.TryCreate(hlUrl, UriKind.Absolute, out hlUri))
             {
@@ -819,9 +829,10 @@ public partial class WordHandler
             {
                 throw new ArgumentException($"Invalid hyperlink URL '{hlUrl}'. Expected an absolute URI (e.g. 'https://example.com'), a relative target (e.g. 'file.docx'), or a fragment-only anchor (e.g. '#bookmark').");
             }
-            // Fragment = internal anchor; absolute and relative both round-trip
-            // as External relationships.
-            hlRelId = hostPart.AddHyperlinkRelationship(hlUri!, isExternal: !hlIsFragment).Id;
+            // Absolute and relative both round-trip as External relationships;
+            // fragments are handled inline above and skip relationship creation.
+            if (hlUri != null)
+                hlRelId = hostPart.AddHyperlinkRelationship(hlUri, isExternal: true).Id;
         }
 
         var hlRProps = new RunProperties();

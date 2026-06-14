@@ -1172,6 +1172,7 @@ public partial class WordHandler
                 return true;
             case "pbdr.top" or "pbdr.bottom" or "pbdr.left" or "pbdr.right" or "pbdr.between" or "pbdr.bar" or "pbdr.all" or "pbdr":
             case "border.all" or "border" or "border.top" or "border.bottom" or "border.left" or "border.right" or "border.between" or "border.bar":
+            case "border.color" or "border.sz" or "border.size" or "border.space" or "border.val" or "border.style":
                 ApplyParagraphBorders(pProps, key, value);
                 return true;
             // Reading direction: "rtl" enables right-to-left layout for Arabic
@@ -1335,6 +1336,54 @@ public partial class WordHandler
             case "pbdr.bar" or "border.bar":
                 borders.BarBorder = MakeBorder<BarBorder>(style, size, color, space, sf.shadow, sf.frame, theme: bTheme);
                 break;
+            default:
+                // Companion form: border.color, border.sz, border.space, border.val
+                // — update the attribute on every already-stored edge so users can
+                // author `border=single border.color=FF border.sz=12` and have all
+                // three land. Lazily creates a `single` border on each missing
+                // edge so the companion props aren't a no-op when called first.
+                ApplyParagraphBorderCompanion(borders, key.ToLowerInvariant(), value);
+                break;
+        }
+    }
+
+    private static void ApplyParagraphBorderCompanion(ParagraphBorders borders, string key, string value)
+    {
+        // key shape: border.<attr> or pbdr.<attr> — must NOT be an edge name.
+        var parts = key.Split('.');
+        if (parts.Length != 2) return;
+        var attr = parts[1];
+        if (attr is "all" or "top" or "bottom" or "left" or "right" or "between" or "bar") return;
+        var sides = new BorderType[]
+        {
+            borders.TopBorder ??= new TopBorder { Val = BorderValues.Single },
+            borders.BottomBorder ??= new BottomBorder { Val = BorderValues.Single },
+            borders.LeftBorder ??= new LeftBorder { Val = BorderValues.Single },
+            borders.RightBorder ??= new RightBorder { Val = BorderValues.Single },
+        };
+        foreach (var b in sides)
+            SetBorderAttr(b, attr, value);
+    }
+
+    private static void SetBorderAttr(BorderType b, string attr, string value)
+    {
+        switch (attr)
+        {
+            case "sz":
+            case "size":
+                b.Size = (uint)ParseHelpers.SafeParseInt(value, attr);
+                break;
+            case "color":
+                var (cHex, _) = ParseHelpers.SanitizeColorForOoxml(value);
+                b.Color = cHex;
+                break;
+            case "space":
+                b.Space = (uint)ParseHelpers.SafeParseInt(value, attr);
+                break;
+            case "val":
+            case "style":
+                b.Val = new EnumValue<BorderValues>(new BorderValues(value));
+                break;
         }
     }
 
@@ -1383,6 +1432,9 @@ public partial class WordHandler
                 break;
             case "pbdr.bar" or "border.bar":
                 borders.BarBorder = MakeBorder<BarBorder>(style, size, color, space, sf.shadow, sf.frame, theme: bTheme);
+                break;
+            default:
+                ApplyParagraphBorderCompanion(borders, key.ToLowerInvariant(), value);
                 break;
         }
     }
@@ -1521,6 +1573,50 @@ public partial class WordHandler
                 break;
             case "border.tr2bl":
                 borders.TopRightToBottomLeftCellBorder = MakeBorder<TopRightToBottomLeftCellBorder>(style, size, color, space, sf.shadow, sf.frame, theme: bTheme);
+                break;
+            default:
+                // Sub-property form: border.<edge>.<attr> — set an attribute on
+                // the existing edge border (caller must have set border.<edge>
+                // first; we lazily create a default `single` border if absent).
+                ApplyCellBorderSubProperty(borders, key.ToLowerInvariant(), value);
+                break;
+        }
+    }
+
+    private static void ApplyCellBorderSubProperty(TableCellBorders borders, string key, string value)
+    {
+        // key shape: border.<edge>.<attr> — e.g. border.top.sz, border.left.color
+        var parts = key.Split('.');
+        if (parts.Length != 3) return;
+        var edge = parts[1];
+        var attr = parts[2];
+        BorderType? b = edge switch
+        {
+            "top" => borders.TopBorder ??= new TopBorder { Val = BorderValues.Single },
+            "bottom" => borders.BottomBorder ??= new BottomBorder { Val = BorderValues.Single },
+            "left" or "start" => borders.LeftBorder ??= new LeftBorder { Val = BorderValues.Single },
+            "right" or "end" => borders.RightBorder ??= new RightBorder { Val = BorderValues.Single },
+            "tl2br" => borders.TopLeftToBottomRightCellBorder ??= new TopLeftToBottomRightCellBorder { Val = BorderValues.Single },
+            "tr2bl" => borders.TopRightToBottomLeftCellBorder ??= new TopRightToBottomLeftCellBorder { Val = BorderValues.Single },
+            _ => null,
+        };
+        if (b == null) return;
+        switch (attr)
+        {
+            case "sz":
+            case "size":
+                b.Size = (uint)ParseHelpers.SafeParseInt(value, key);
+                break;
+            case "color":
+                var (cHex, _) = ParseHelpers.SanitizeColorForOoxml(value);
+                b.Color = cHex;
+                break;
+            case "space":
+                b.Space = (uint)ParseHelpers.SafeParseInt(value, key);
+                break;
+            case "val":
+            case "style":
+                b.Val = new EnumValue<BorderValues>(new BorderValues(value));
                 break;
         }
     }

@@ -291,12 +291,16 @@ public partial class WordHandler
                 probeRun = new Run(synthRPr);
             }
         }
+        double? paraFontSizePt = null;
         if (probeRun != null)
         {
             var rProps = ResolveEffectiveRunProperties(probeRun, para);
             var sz = rProps.FontSize?.Val?.Value;
             if (sz != null && int.TryParse(sz, out var hp))
+            {
                 parts.Add($"font-size:{hp / 2.0:0.##}pt");
+                paraFontSizePt = hp / 2.0;
+            }
 
             var fonts = rProps.RunFonts;
             var paraFont = fonts?.EastAsia?.Value ?? ResolveThemeFont(fonts?.EastAsiaTheme?.InnerText)
@@ -378,6 +382,15 @@ public partial class WordHandler
             var indRight = directInd?.Right?.Value ?? styleInd?.Right?.Value;
             var indFirstLine = directInd?.FirstLine?.Value ?? styleInd?.FirstLine?.Value;
             var indHanging = directInd?.Hanging?.Value ?? styleInd?.Hanging?.Value;
+            // *Chars variants: indentation expressed as 100ths of an East-Asian
+            // character width. Convert against the paragraph's effective font
+            // size (fallback 10.5pt = Normal default) when the twips counterpart
+            // is absent. Direct overrides win; otherwise inherit style chain.
+            var indLeftChars = directInd?.LeftChars?.Value ?? styleInd?.LeftChars?.Value;
+            var indRightChars = directInd?.RightChars?.Value ?? styleInd?.RightChars?.Value;
+            var indFirstLineChars = directInd?.FirstLineChars?.Value ?? styleInd?.FirstLineChars?.Value;
+            var indHangingChars = directInd?.HangingChars?.Value ?? styleInd?.HangingChars?.Value;
+            double charWidthPt = paraFontSizePt ?? 10.5;
 
             // Hanging indent needs left padding/margin equal to the hanging
             // amount to produce the visual effect (first line at 0, follow
@@ -386,9 +399,13 @@ public partial class WordHandler
             double? hangPt = null;
             if (indHanging is string hpTwips && hpTwips != "0")
                 hangPt = Units.TwipsToPt(hpTwips);
+            else if (indHangingChars is int hpChars && hpChars != 0)
+                hangPt = hpChars / 100.0 * charWidthPt;
             double leftPt = 0;
             if (indLeft is string leftTwips && leftTwips != "0")
                 leftPt = Units.TwipsToPt(leftTwips);
+            else if (indLeftChars is int leftChars && leftChars != 0)
+                leftPt = leftChars / 100.0 * charWidthPt;
             // When hanging is set and left is 0, promote hanging into left
             // margin so subsequent lines visibly indent.
             if (hangPt.HasValue && leftPt == 0) leftPt = hangPt.Value;
@@ -396,10 +413,14 @@ public partial class WordHandler
                 parts.Add($"margin-left:{leftPt:0.##}pt");
             if (indRight is string rightTwips && rightTwips != "0")
                 parts.Add($"margin-right:{Units.TwipsToPt(rightTwips):0.##}pt");
+            else if (indRightChars is int rightChars && rightChars != 0)
+                parts.Add($"margin-right:{rightChars / 100.0 * charWidthPt:0.##}pt");
             if (!hasDropCap)
             {
                 if (indFirstLine is string firstLineTwips && firstLineTwips != "0")
                     parts.Add($"text-indent:{Units.TwipsToPt(firstLineTwips):0.##}pt");
+                else if (indFirstLineChars is int firstLineChars && firstLineChars != 0)
+                    parts.Add($"text-indent:{firstLineChars / 100.0 * charWidthPt:0.##}pt");
                 if (hangPt.HasValue)
                     parts.Add($"text-indent:-{hangPt.Value:0.##}pt");
             }

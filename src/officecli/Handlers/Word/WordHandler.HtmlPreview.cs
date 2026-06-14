@@ -1689,6 +1689,11 @@ public partial class WordHandler
                 // it carries no plain text and no DrawingML Drawing element.
                 if (p.Descendants<Picture>().Any()) return true;
             }
+            // Watermarks live inside <w:sdt><w:sdtContent><w:p><w:pict>…
+            // descend through SDT block wrappers so they aren't treated as
+            // empty headers.
+            if (child is SdtBlock sdt && sdt.SdtContentBlock is { } content
+                && HeaderFooterHasContent(content)) return true;
         }
         return false;
     }
@@ -1700,6 +1705,13 @@ public partial class WordHandler
     {
         foreach (var child in hf.ChildElements)
         {
+            // Watermark paragraphs are nested inside <w:sdt><w:sdtContent>;
+            // recurse so they render the same as direct paragraph children.
+            if (child is SdtBlock sdt && sdt.SdtContentBlock is { } content)
+            {
+                RenderHeaderFooterBody(sb, content);
+                continue;
+            }
             if (child is Paragraph para)
             {
                 // Legacy VML watermark: a <v:shape> in a <w:pict> with
@@ -1707,12 +1719,15 @@ public partial class WordHandler
                 // (DRAFT / CONFIDENTIAL / …). DrawingML text boxes are
                 // already handled by the shape renderer; VML is a
                 // parallel deprecated format we must detect by name.
-                var watermarkText = ExtractVmlWatermarkText(para);
-                if (watermarkText != null)
+                var watermark = ExtractVmlWatermark(para);
+                if (watermark is var (watermarkText, watermarkColor))
                 {
+                    var colorCss = string.IsNullOrWhiteSpace(watermarkColor)
+                        ? "#d0d0d0"
+                        : (watermarkColor!.StartsWith("#") ? watermarkColor : "#" + watermarkColor);
                     sb.Append($"<span class=\"vml-watermark\" style=\"position:absolute;" +
                               "top:50%;left:50%;transform:translate(-50%,-50%) rotate(-45deg);" +
-                              "color:#d0d0d0;font-size:7em;font-weight:bold;" +
+                              $"color:{colorCss};font-size:7em;font-weight:bold;" +
                               "z-index:0;pointer-events:none;white-space:nowrap;" +
                               "user-select:none\">");
                     sb.Append(HtmlEncode(watermarkText));
@@ -1730,7 +1745,7 @@ public partial class WordHandler
     /// Return the watermark text from a legacy VML <c>w:pict &gt; v:shape &gt;
     /// v:textpath</c> structure, or null if the paragraph does not carry one.
     /// </summary>
-    private static string? ExtractVmlWatermarkText(Paragraph para)
+    private static (string text, string? color)? ExtractVmlWatermark(Paragraph para)
     {
         foreach (var pict in para.Descendants<Picture>())
         {
@@ -1741,7 +1756,10 @@ public partial class WordHandler
                 && e.NamespaceUri == "urn:schemas-microsoft-com:vml");
             if (textPath == null) continue;
             var str = textPath.GetAttributes().FirstOrDefault(a => a.LocalName == "string").Value;
-            if (!string.IsNullOrWhiteSpace(str)) return str;
+            if (string.IsNullOrWhiteSpace(str)) continue;
+            // fillcolor on v:shape lives in the default (no-prefix) namespace.
+            var fillcolor = shape.GetAttributes().FirstOrDefault(a => a.LocalName == "fillcolor").Value;
+            return (str, string.IsNullOrWhiteSpace(fillcolor) ? null : fillcolor);
         }
         return null;
     }
@@ -1900,7 +1918,14 @@ public partial class WordHandler
             // to the section it terminates.
             if (element is Paragraph sectPara && sectPara.ParagraphProperties?.GetFirstChild<SectionProperties>() is SectionProperties inlineSectPr)
             {
-                var nextCols = GetNextSectionColumnCount(elements, ei, bodyColCount);
+                // A `continuous` section break's own w:cols defines the column
+                // layout for content FOLLOWING the break in the same page. The
+                // next-sectPr scan returns the body sectPr fallback (usually 1
+                // column), missing the change. Read this sectPr's own w:cols.
+                var sectType = inlineSectPr.GetFirstChild<SectionType>()?.Val?.Value;
+                var nextCols = sectType == SectionMarkValues.Continuous
+                    ? GetSectionColumnCount(inlineSectPr)
+                    : GetNextSectionColumnCount(elements, ei, bodyColCount);
                 if (nextCols > 1 && !inMultiColumn)
                 {
                     sb.AppendLine($"<div style=\"column-count:{nextCols};column-gap:36pt\">");
@@ -2528,6 +2553,30 @@ public partial class WordHandler
                 }
             }
             result[i] = new HeaderFooterBundle(first, def, even);
+        }
+        // ECMA-376 §17.10.1: a section that does not define its own
+        // header/footer reference of a given type inherits. In practice
+        // (and in Word's rendering) a doc with refs on only one section
+        // applies them to all sections — propagate forward, then backward,
+        // so sections lacking own refs pick up whatever the document
+        // actually defines instead of falling through to fallbackHtml.
+        for (int i = 1; i < sections.Count; i++)
+        {
+            var prev = result[i - 1];
+            var cur = result[i];
+            result[i] = new HeaderFooterBundle(
+                cur.First ?? prev.First,
+                cur.Default ?? prev.Default,
+                cur.Even ?? prev.Even);
+        }
+        for (int i = sections.Count - 2; i >= 0; i--)
+        {
+            var next = result[i + 1];
+            var cur = result[i];
+            result[i] = new HeaderFooterBundle(
+                cur.First ?? next.First,
+                cur.Default ?? next.Default,
+                cur.Even ?? next.Even);
         }
         return result;
     }
