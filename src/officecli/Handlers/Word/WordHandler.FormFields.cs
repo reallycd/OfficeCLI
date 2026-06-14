@@ -328,20 +328,26 @@ public partial class WordHandler
                 $"Form field name '{name}' contains whitespace or quote/@ chars " +
                 "that prevent later addressing via bare attribute selectors. " +
                 "Use only letters, digits, '.', '_', '-' in form field names.");
-        // Word permits multiple form fields to share a name (a form with five
-        // "Check1" checkboxes is legal and common), so a hard reject broke
-        // dump→batch round-trip of any such document — the replay re-adds each
-        // field by its source name and the second one threw. The bookmark Id
-        // stays unique (allocated below), which is what Word actually requires;
-        // only the display name repeats. Warn instead of failing: selector
-        // addressing by name will resolve to the first match, but the field is
-        // preserved. (Mirrors the lenient duplicate-style-name handling.)
+        // Word permits multiple form fields to share an ffData NAME (a form with
+        // five "Check1" checkboxes is legal and common), so a hard reject broke
+        // dump→batch round-trip of any such document. BUT the BOOKMARK that wraps
+        // each form field must have a document-unique NAME — duplicate bookmark
+        // names make Word REFUSE to open the file (it validates fine in the SDK
+        // and well-formed XML checks, so the corruption is invisible until a real
+        // Word load). BUG-DUMP-R34-FFBOOKMARK: a budget template with repeated
+        // "FY3" fields produced two <w:bookmarkStart w:name="FY3"> and the rebuilt
+        // would not open. Keep the ffData name as the source authored it, but give
+        // the wrapping bookmark a unique name on collision (Word does the same —
+        // only the first such field keeps the bare name).
+        var bookmarkName = name;
         if (body.Descendants<BookmarkStart>()
-                .Any(b => string.Equals(b.Name?.Value, name, StringComparison.Ordinal)))
+                .Any(b => string.Equals(b.Name?.Value, bookmarkName, StringComparison.Ordinal)))
         {
-            LastAddWarnings.Add(
-                $"form field name '{name}' duplicates an existing bookmark/field name — " +
-                "kept (Word allows it), but addressing by this name resolves to the first match.");
+            int bmSuffix = 1;
+            while (body.Descendants<BookmarkStart>()
+                    .Any(b => string.Equals(b.Name?.Value, $"{name}_{bmSuffix}", StringComparison.Ordinal)))
+                bmSuffix++;
+            bookmarkName = $"{name}_{bmSuffix}";
         }
         var text = ciProps.GetValueOrDefault("text", ciProps.GetValueOrDefault("value", ""));
         // Dump pins `text=""` for a field whose SOURCE has no cached result
@@ -356,7 +362,7 @@ public partial class WordHandler
         var bkId = (existingIds.Any() ? existingIds.Max() + 1 : 1).ToString();
 
         // BookmarkStart
-        var bookmarkStart = new BookmarkStart { Id = bkId, Name = name };
+        var bookmarkStart = new BookmarkStart { Id = bkId, Name = bookmarkName };
         para.AppendChild(bookmarkStart);
 
         // Begin run with FieldChar(Begin) + FormFieldData
@@ -380,10 +386,30 @@ public partial class WordHandler
             ffData.AppendChild(new EntryMacro { Val = emVal });
         if (ciProps.TryGetValue("exitmacro", out var xmVal) && !string.IsNullOrEmpty(xmVal))
             ffData.AppendChild(new ExitMacro { Val = xmVal });
+        // BUG-DUMP-R34-FFHELPTEXT: <w:helpText>/<w:statusText> REQUIRE the
+        // @w:type attribute ("text"|"autoText") — Word REFUSES to open a document
+        // whose form-field helpText/statusText omits it (it validates clean in the
+        // SDK and as well-formed XML, so the corruption is invisible until a real
+        // Word load). The dump emitted only the val, so any FORMTEXT field with a
+        // help/status string produced an unopenable rebuild. Default to "text"
+        // (literal help string; "autoText" references an AutoText entry and is
+        // rare) and round-trip an explicit type when the dump carried one.
         if (ciProps.TryGetValue("helptext", out var htVal) && !string.IsNullOrEmpty(htVal))
-            ffData.AppendChild(new HelpText { Val = htVal });
+        {
+            var ht = new HelpText { Val = htVal, Type = InfoTextValues.Text };
+            if (ciProps.TryGetValue("helptext.type", out var htType)
+                && string.Equals(htType, "autoText", StringComparison.OrdinalIgnoreCase))
+                ht.Type = InfoTextValues.AutoText;
+            ffData.AppendChild(ht);
+        }
         if (ciProps.TryGetValue("statustext", out var stVal) && !string.IsNullOrEmpty(stVal))
-            ffData.AppendChild(new StatusText { Val = stVal });
+        {
+            var st = new StatusText { Val = stVal, Type = InfoTextValues.Text };
+            if (ciProps.TryGetValue("statustext.type", out var stType)
+                && string.Equals(stType, "autoText", StringComparison.OrdinalIgnoreCase))
+                st.Type = InfoTextValues.AutoText;
+            ffData.AppendChild(st);
+        }
 
         switch (ffType)
         {
