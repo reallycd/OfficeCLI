@@ -911,10 +911,10 @@ public partial class WordHandler
             if (properties.TryGetValue("charspacing", out var pCharSp) || properties.TryGetValue("charSpacing", out pCharSp)
                 || properties.TryGetValue("letterspacing", out pCharSp) || properties.TryGetValue("letterSpacing", out pCharSp))
             {
-                var csPt = pCharSp.EndsWith("pt", StringComparison.OrdinalIgnoreCase)
-                    ? ParseHelpers.SafeParseDouble(pCharSp[..^2], "charspacing")
-                    : ParseHelpers.SafeParseDouble(pCharSp, "charspacing");
-                rProps.Spacing = new Spacing { Val = (int)Math.Round(csPt * 20, MidpointRounding.AwayFromZero) };
+                int pCsTwips = pCharSp.EndsWith("pt", StringComparison.OrdinalIgnoreCase)
+                    ? (int)Math.Round(ParseHelpers.SafeParseDouble(pCharSp[..^2], "charspacing") * 20, MidpointRounding.AwayFromZero)
+                    : (int)Math.Round(ParseHelpers.SafeParseDouble(pCharSp, "charspacing"), MidpointRounding.AwayFromZero);
+                rProps.Spacing = new Spacing { Val = pCsTwips };
             }
             // BUG-DUMP22-03: paragraph-level shading lives in pPr (written
             // above ~line 262/289). Do NOT also stamp it onto the inline
@@ -1980,10 +1980,10 @@ public partial class WordHandler
         if (properties.TryGetValue("charspacing", out var rCharSp) || properties.TryGetValue("charSpacing", out rCharSp)
             || properties.TryGetValue("letterspacing", out rCharSp) || properties.TryGetValue("letterSpacing", out rCharSp))
         {
-            var csPt = rCharSp.EndsWith("pt", StringComparison.OrdinalIgnoreCase)
-                ? ParseHelpers.SafeParseDouble(rCharSp[..^2], "charspacing")
-                : ParseHelpers.SafeParseDouble(rCharSp, "charspacing");
-            newRProps.Spacing = new Spacing { Val = (int)Math.Round(csPt * 20, MidpointRounding.AwayFromZero) };
+            int rCsTwips = rCharSp.EndsWith("pt", StringComparison.OrdinalIgnoreCase)
+                ? (int)Math.Round(ParseHelpers.SafeParseDouble(rCharSp[..^2], "charspacing") * 20, MidpointRounding.AwayFromZero)
+                : (int)Math.Round(ParseHelpers.SafeParseDouble(rCharSp, "charspacing"), MidpointRounding.AwayFromZero);
+            newRProps.Spacing = new Spacing { Val = rCsTwips };
         }
         if (properties.TryGetValue("shd", out var rShd) || properties.TryGetValue("shading", out rShd))
         {

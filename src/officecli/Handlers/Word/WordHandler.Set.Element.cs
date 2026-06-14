@@ -1458,7 +1458,7 @@ public partial class WordHandler
                         ApplyDirectionCascade(cellPara, cellRtl);
                     break;
                 }
-                case "shd" or "shading" or "fill":
+                case "shd" or "shading" or "fill" or "cellshading":
                     var shdParts = value.Split(';');
                     if (shdParts.Length >= 3 && shdParts[0].Equals("gradient", StringComparison.OrdinalIgnoreCase))
                     {
@@ -1652,7 +1652,7 @@ public partial class WordHandler
                     break;
                 case "padding":
                 {
-                    var dxa = ParseHelpers.SafeParseUint(value, "padding").ToString();
+                    var dxa = ((int)OfficeCli.Core.SpacingConverter.ParseWordSpacing(value)).ToString();
                     var mar = tcPr.TableCellMargin ?? (tcPr.TableCellMargin = new TableCellMargin());
                     mar.TopMargin = new TopMargin { Width = dxa, Type = TableWidthUnitValues.Dxa };
                     mar.BottomMargin = new BottomMargin { Width = dxa, Type = TableWidthUnitValues.Dxa };
@@ -1663,32 +1663,28 @@ public partial class WordHandler
                 case "padding.top":
                 {
                     // BUG-R1-07: negative w:tcMar values are invalid OOXML.
-                    var ptv = ParseHelpers.SafeParseInt(value, "padding.top");
-                    if (ptv < 0) throw new ArgumentException($"Invalid 'padding.top' value: '{value}'. Cell margins must be non-negative (OOXML w:tcMar).");
+                    var ptv = (int)OfficeCli.Core.SpacingConverter.ParseWordSpacing(value);
                     var mar = tcPr.TableCellMargin ?? (tcPr.TableCellMargin = new TableCellMargin());
                     mar.TopMargin = new TopMargin { Width = ptv.ToString(), Type = TableWidthUnitValues.Dxa };
                     break;
                 }
                 case "padding.bottom":
                 {
-                    var pbv = ParseHelpers.SafeParseInt(value, "padding.bottom");
-                    if (pbv < 0) throw new ArgumentException($"Invalid 'padding.bottom' value: '{value}'. Cell margins must be non-negative (OOXML w:tcMar).");
+                    var pbv = (int)OfficeCli.Core.SpacingConverter.ParseWordSpacing(value);
                     var mar = tcPr.TableCellMargin ?? (tcPr.TableCellMargin = new TableCellMargin());
                     mar.BottomMargin = new BottomMargin { Width = pbv.ToString(), Type = TableWidthUnitValues.Dxa };
                     break;
                 }
                 case "padding.left":
                 {
-                    var plv = ParseHelpers.SafeParseInt(value, "padding.left");
-                    if (plv < 0) throw new ArgumentException($"Invalid 'padding.left' value: '{value}'. Cell margins must be non-negative (OOXML w:tcMar).");
+                    var plv = (int)OfficeCli.Core.SpacingConverter.ParseWordSpacing(value);
                     var mar = tcPr.TableCellMargin ?? (tcPr.TableCellMargin = new TableCellMargin());
                     mar.LeftMargin = new LeftMargin { Width = plv.ToString(), Type = TableWidthUnitValues.Dxa };
                     break;
                 }
                 case "padding.right":
                 {
-                    var prv = ParseHelpers.SafeParseInt(value, "padding.right");
-                    if (prv < 0) throw new ArgumentException($"Invalid 'padding.right' value: '{value}'. Cell margins must be non-negative (OOXML w:tcMar).");
+                    var prv = (int)OfficeCli.Core.SpacingConverter.ParseWordSpacing(value);
                     var mar = tcPr.TableCellMargin ?? (tcPr.TableCellMargin = new TableCellMargin());
                     mar.RightMargin = new RightMargin { Width = prv.ToString(), Type = TableWidthUnitValues.Dxa };
                     break;
@@ -2323,9 +2319,9 @@ public partial class WordHandler
                 case "padding":
                 {
                     // BUG-R1-07: negative w:tblCellMar values are invalid OOXML.
-                    var paddingVal = ParseHelpers.SafeParseInt(value, "padding");
-                    if (paddingVal < 0)
-                        throw new ArgumentException($"Invalid 'padding' value: '{value}'. Table cell margins must be non-negative (OOXML w:tblCellMar).");
+                    // Lenient input: accepts "5pt"/"0.2cm"/"0.1in" as well as bare
+                    // twips. SpacingConverter throws on negatives.
+                    var paddingVal = (int)OfficeCli.Core.SpacingConverter.ParseWordSpacing(value);
                     var dxa = paddingVal.ToString();
                     var cm = EnsureTableCellMarginDefault(tblPr);
                     cm.TopMargin = new TopMargin { Width = dxa, Type = TableWidthUnitValues.Dxa };
@@ -2334,7 +2330,7 @@ public partial class WordHandler
                     cm.TableCellRightMargin = new TableCellRightMargin { Width = (short)Math.Min(paddingVal, short.MaxValue), Type = TableWidthValues.Dxa };
                     break;
                 }
-                case "shd" or "shading" or "fill":
+                case "shd" or "shading" or "fill" or "cellshading":
                 {
                     // BUG-R2-P3-10: table-level shd was falling through to
                     // GenericXmlQuery.TryCreateTypedChild which stamped the

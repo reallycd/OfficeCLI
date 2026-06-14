@@ -798,7 +798,17 @@ public partial class WordHandler
             Uri? hlUri;
             if (hlIsFragment)
             {
-                hlUri = new Uri(hlUrl!, UriKind.Relative);
+                // Internal bookmark targets must travel as w:anchor on the
+                // <w:hyperlink> element, not as a Target="#name" relationship
+                // — real Word rejects the latter as a corrupt file. Promote
+                // `url=#bookmark` to the anchor= path and skip relationship
+                // creation entirely.
+                if (!hasAnchor)
+                {
+                    hlAnchor = hlUrl!.Substring(1);
+                    hasAnchor = true;
+                }
+                hlUri = null;
             }
             else if (Uri.TryCreate(hlUrl, UriKind.Absolute, out hlUri))
             {
@@ -819,9 +829,10 @@ public partial class WordHandler
             {
                 throw new ArgumentException($"Invalid hyperlink URL '{hlUrl}'. Expected an absolute URI (e.g. 'https://example.com'), a relative target (e.g. 'file.docx'), or a fragment-only anchor (e.g. '#bookmark').");
             }
-            // Fragment = internal anchor; absolute and relative both round-trip
-            // as External relationships.
-            hlRelId = hostPart.AddHyperlinkRelationship(hlUri!, isExternal: !hlIsFragment).Id;
+            // Absolute and relative both round-trip as External relationships;
+            // fragments are handled inline above and skip relationship creation.
+            if (hlUri != null)
+                hlRelId = hostPart.AddHyperlinkRelationship(hlUri, isExternal: true).Id;
         }
 
         var hlRProps = new RunProperties();
@@ -2585,6 +2596,15 @@ public partial class WordHandler
         var idx = parentPath.LastIndexOf("/p[", StringComparison.Ordinal);
         var hostRoot = idx >= 0 ? parentPath.Substring(0, idx) : parentPath;
         if (string.IsNullOrEmpty(hostRoot)) hostRoot = "/";
+        // Reject nesting: a textbox/shape inside an existing textbox's
+        // txbxContent produces OOXML the spec prohibits — Word refuses to open
+        // the file (0x800706BE). Fail fast before any XML mutation occurs.
+        for (var walk = para.Parent; walk != null; walk = walk.Parent)
+        {
+            if (walk.LocalName == "txbxContent")
+                throw new ArgumentException(
+                    $"Cannot add textbox/shape under {parentPath}: nested textboxes are not permitted by the OOXML spec (w:drawing inside w:txbxContent corrupts the file).");
+        }
         OpenXmlElement? anc = para.Parent;
         while (anc != null && anc is not (Body or TableCell or Header or Footer))
             anc = anc.Parent;
@@ -2668,6 +2688,15 @@ public partial class WordHandler
         // Accept body / cell / header / footer roots. Path's first segment
         // ("/body", "/header[N]", "/footer[N]", or "/body/.../tc[N]") is what
         // we re-use for the returned /<root>/textbox[N] path.
+        // Reject nesting under a txbxContent ancestor (e.g. a cell inside a
+        // textbox-nested table): drawings under txbxContent corrupt the file
+        // (Word 0x800706BE). Mirror ResolveDrawingHostFromParagraph.
+        for (var walk = parent; walk != null; walk = walk.Parent)
+        {
+            if (walk.LocalName == "txbxContent")
+                throw new ArgumentException(
+                    $"Cannot add textbox/shape under {parentPath}: nested textboxes are not permitted by the OOXML spec (w:drawing inside w:txbxContent corrupts the file).");
+        }
         if (parent is Body) return (parent, parentPath.TrimEnd('/'));
         if (parent is TableCell) return (parent, parentPath);
         // OpenXmlPartRootElement (Header/Footer): use itself.

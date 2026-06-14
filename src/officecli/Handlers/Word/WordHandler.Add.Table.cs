@@ -281,7 +281,7 @@ public partial class WordHandler
         {
             "align", "alignment", "width", "indent", "cellspacing", "layout",
             "padding", "padding.top", "padding.bottom", "padding.left", "padding.right",
-            "style", "shd", "shading", "direction", "dir", "bidi",
+            "style", "shd", "shading", "cellShading", "direction", "dir", "bidi",
             // CONSISTENCY(add-set-symmetry): mirror Set's tblPr-level cases.
             "overlap", "caption", "description",
             // BUG-DUMP-R36-2: band stripe widths.
@@ -467,7 +467,7 @@ public partial class WordHandler
                         InsertTblPrChildInOrder(tblProps, new TableLook { Val = "04A0" });
                     }
                     break;
-                case "shd" or "shading":
+                case "shd" or "shading" or "cellshading":
                     {
                         // BUG-DUMP21-01: w:tblPr/w:shd table-level shading
                         // round-trip. Mirrors paragraph/cell `shading` parsing
@@ -1204,7 +1204,7 @@ public partial class WordHandler
         foreach (var (key, value) in properties)
         {
             var keyLower = key.ToLowerInvariant();
-            if (keyLower is "fill" or "shd" or "shading")
+            if (keyLower is "fill" or "shd" or "shading" or "cellshading")
             {
                 // foreach uses the base Dictionary enumerator (bypasses the
                 // TrackingPropertyDictionary override) — register the key so the
