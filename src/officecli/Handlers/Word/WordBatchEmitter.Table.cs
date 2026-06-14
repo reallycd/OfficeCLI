@@ -960,6 +960,25 @@ public static partial class WordBatchEmitter
         {
             filtered.Remove("fill");
         }
+        // Negative cell margins (<w:tcMar w:w="-13">) are schema-valid and real
+        // Word produces them (tight tables whose text bleeds slightly into the
+        // border zone), but the Set/Add padding path deliberately rejects a
+        // negative w:tcMar (BUG-R1-07). A verbatim dump of a negative margin
+        // therefore emits a `set tc padding=-13` step the rebuild rejects —
+        // round-trip self-conflict (2 failed steps). Clamp to 0 on emit: a
+        // -13-twip (~0.02cm) margin is visually indistinguishable from 0, so the
+        // rebuild renders identically and stays clean. (Accepting negative tcMar
+        // project-wide is the alternative but would reverse the BUG-R1-07 cell
+        // padding contract — out of scope for a fidelity round-trip.)
+        foreach (var pk in filtered.Keys
+                     .Where(k => k.Equals("padding", StringComparison.OrdinalIgnoreCase)
+                              || k.StartsWith("padding.", StringComparison.OrdinalIgnoreCase))
+                     .ToList())
+        {
+            if (filtered[pk]?.ToString() is { } pv
+                && int.TryParse(pv, out var pn) && pn < 0)
+                filtered[pk] = "0";
+        }
         return FilterEmittableProps(filtered);
     }
 
