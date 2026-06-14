@@ -445,6 +445,67 @@ public partial class WordHandler
             }
         }
 
+        // Page border on a mid-document section carrier. CONSISTENCY(add-set-symmetry):
+        // mirror TrySetSectionLayout's pgborders.<side> / .offsetFrom / .zOrder /
+        // .display cases so `add section --prop pgBorders.top=single;4;auto;24 ...`
+        // round-trips a carrier sectPr's <w:pgBorders> (e.g. a cover page boxing
+        // only its first page via display=firstPage). The dump folds the per-side
+        // sub-keys into the STYLE;SIZE;COLOR;SPACE value ParseBorderValue reads.
+        // Keys consumed here are tracked in sectionAlreadyConsumed below so the
+        // dotted fallback doesn't re-run TypedAttributeFallback against sectPr
+        // (the per-side attrs live on the nested <w:pgBorders>, not sectPr).
+        foreach (var (pk, pv) in properties)
+        {
+            var pkl = pk.ToLowerInvariant();
+            if (!pkl.StartsWith("pgborders.")) continue;
+            switch (pkl)
+            {
+                case "pgborders.top" or "pgborders.left"
+                    or "pgborders.bottom" or "pgborders.right":
+                {
+                    var pb = EnsurePageBorders(sectPr);
+                    var (style, size, color, space) = ParseBorderValue(pv);
+                    var sf = ParseBorderShadowFrame(pv);
+                    switch (pkl)
+                    {
+                        case "pgborders.top":    pb.TopBorder    = MakeBorder<TopBorder>(style, size, color, space, sf.shadow, sf.frame); break;
+                        case "pgborders.left":   pb.LeftBorder   = MakeBorder<LeftBorder>(style, size, color, space, sf.shadow, sf.frame); break;
+                        case "pgborders.bottom": pb.BottomBorder = MakeBorder<BottomBorder>(style, size, color, space, sf.shadow, sf.frame); break;
+                        case "pgborders.right":  pb.RightBorder  = MakeBorder<RightBorder>(style, size, color, space, sf.shadow, sf.frame); break;
+                    }
+                    break;
+                }
+                case "pgborders.offsetfrom":
+                    EnsurePageBorders(sectPr).OffsetFrom = pv.ToLowerInvariant().Trim() switch
+                    {
+                        "page" => PageBorderOffsetValues.Page,
+                        "text" => PageBorderOffsetValues.Text,
+                        _ => throw new ArgumentException(
+                            $"Invalid pgBorders.offsetFrom value: '{pv}'. Valid: page, text.")
+                    };
+                    break;
+                case "pgborders.zorder":
+                    EnsurePageBorders(sectPr).ZOrder = pv.ToLowerInvariant().Trim() switch
+                    {
+                        "front" => PageBorderZOrderValues.Front,
+                        "back" => PageBorderZOrderValues.Back,
+                        _ => throw new ArgumentException(
+                            $"Invalid pgBorders.zOrder value: '{pv}'. Valid: front, back.")
+                    };
+                    break;
+                case "pgborders.display":
+                    EnsurePageBorders(sectPr).Display = pv.ToLowerInvariant().Trim() switch
+                    {
+                        "allpages" => PageBorderDisplayValues.AllPages,
+                        "firstpage" => PageBorderDisplayValues.FirstPage,
+                        "notfirstpage" => PageBorderDisplayValues.NotFirstPage,
+                        _ => throw new ArgumentException(
+                            $"Invalid pgBorders.display value: '{pv}'. Valid: allPages, firstPage, notFirstPage.")
+                    };
+                    break;
+            }
+        }
+
         // Dotted-key fallback for sectPr-level attrs not modeled by the
         // hand-rolled blocks above (single-attr forms like docGrid.* or
         // future schema additions). CONSISTENCY(add-set-symmetry).
@@ -461,6 +522,11 @@ public partial class WordHandler
             // applied correctly).
             "columns.separator", "columns.equalwidth", "columns.equalWidth",
             "colwidths", "colWidths", "colspaces", "colSpaces",
+            // pgBorders.* consumed by the dedicated block above; their per-side
+            // attrs live on the nested <w:pgBorders>, not sectPr, so the dotted
+            // fallback would falsely flag them unsupported.
+            "pgBorders.top", "pgBorders.left", "pgBorders.bottom", "pgBorders.right",
+            "pgBorders.offsetFrom", "pgBorders.zOrder", "pgBorders.display",
         };
         foreach (var (key, value) in properties)
         {

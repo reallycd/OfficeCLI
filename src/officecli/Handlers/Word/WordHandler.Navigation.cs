@@ -3964,6 +3964,28 @@ public partial class WordHandler
                 if (sbTextDir?.Val != null)
                     node.Format["sectionBreak.textDirection"] = sbTextDir.Val.InnerText;
 
+                // Page border on a mid-document section carrier (e.g. a cover
+                // page that boxes only its own first page via display="firstPage").
+                // Surface per-side detail + offsetFrom/zOrder/display under the
+                // sectionBreak.pgBorders.* prefix so the carrier sectPr round-trips
+                // — mirrors the body-sectPr ReadPageBorders path. Without this the
+                // <w:pgBorders> child was dropped entirely on rebuild (the body
+                // sectPr's Get path never sees a carrier paragraph's sectPr).
+                var sbPgBorders = inlineSectPr.GetFirstChild<PageBorders>();
+                if (sbPgBorders != null)
+                {
+                    ReadBorder(sbPgBorders.TopBorder, "sectionBreak.pgBorders.top", node);
+                    ReadBorder(sbPgBorders.LeftBorder, "sectionBreak.pgBorders.left", node);
+                    ReadBorder(sbPgBorders.BottomBorder, "sectionBreak.pgBorders.bottom", node);
+                    ReadBorder(sbPgBorders.RightBorder, "sectionBreak.pgBorders.right", node);
+                    if (sbPgBorders.OffsetFrom?.InnerText is { } sbOff)
+                        node.Format["sectionBreak.pgBorders.offsetFrom"] = sbOff;
+                    if (sbPgBorders.ZOrder?.InnerText is { } sbZ)
+                        node.Format["sectionBreak.pgBorders.zOrder"] = sbZ;
+                    if (sbPgBorders.Display?.InnerText is { } sbDisp)
+                        node.Format["sectionBreak.pgBorders.display"] = sbDisp;
+                }
+
                 // BUG-DUMP-SECT-FOOTNOTE: footnote/endnote numbering on a
                 // mid-document section carrier. Surface as sectionBreak.footnotePr.*
                 // / sectionBreak.endnotePr.* so the carrier sectPr round-trips —

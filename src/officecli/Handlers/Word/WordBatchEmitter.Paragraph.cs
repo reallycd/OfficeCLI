@@ -571,6 +571,11 @@ public static partial class WordBatchEmitter
                 var s = v switch { bool b => b ? "true" : "false", _ => v.ToString() ?? "" };
                 if (s.Length > 0) sectProps[keyTail] = s;
             }
+            // Fold the carrier sectPr's pgBorders.<side>.sz/.color/.space sub-keys
+            // (now prefix-stripped to bare pgBorders.* form) into the single
+            // STYLE;SIZE;COLOR;SPACE value AddSection's pgBorders.<side> case
+            // parses. Mirrors EmitSection's FoldPgBordersProps for the body sectPr.
+            FoldPgBordersProps(sectProps);
             items.Add(new BatchItem
             {
                 Command = "add",
