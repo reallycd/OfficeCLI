@@ -348,7 +348,7 @@ public partial class WordHandler
                 if (lvl.LevelSuffix?.Val?.HasValue == true) lNode.Format["suff"] = lvl.LevelSuffix.Val.InnerText;
                 var lvlR = lvl.GetFirstChild<LevelRestart>();
                 if (lvlR?.Val?.Value != null) lNode.Format["lvlRestart"] = lvlR.Val.Value.ToString()!;
-                if (lvl.GetFirstChild<IsLegalNumberingStyle>() != null) lNode.Format["isLgl"] = true;
+                if (IsToggleOn(lvl.GetFirstChild<IsLegalNumberingStyle>())) lNode.Format["isLgl"] = true;
                 var ind = lvl.PreviousParagraphProperties?.Indentation;
                 if (ind?.Left?.Value != null) lNode.Format["indent"] = ind.Left.Value;
                 if (ind?.Hanging?.Value != null) lNode.Format["hanging"] = ind.Hanging.Value;
@@ -375,8 +375,8 @@ public partial class WordHandler
                         lNode.Format["color"] = clr.ThemeColor.InnerText;
                     else if (clr?.Val?.Value != null)
                         lNode.Format["color"] = ParseHelpers.FormatHexColor(clr.Val.Value);
-                    if (rpr.GetFirstChild<Bold>() != null) lNode.Format["bold"] = true;
-                    if (rpr.GetFirstChild<Italic>() != null) lNode.Format["italic"] = true;
+                    if (rpr.GetFirstChild<Bold>() is { } lvlB) lNode.Format["bold"] = IsToggleOn(lvlB);
+                    if (rpr.GetFirstChild<Italic>() is { } lvlI) lNode.Format["italic"] = IsToggleOn(lvlI);
                 }
                 return lNode;
             }
@@ -661,8 +661,8 @@ public partial class WordHandler
             // paragraph using it) and StyleHidden (style hidden from UI
             // gallery). FillUnknownChildProps covers only rPr/pPr children,
             // so these Style-level bare flags were silently lost on dump.
-            if (style.GetFirstChild<AutoRedefine>() != null) styleNode.Format["autoRedefine"] = true;
-            if (style.GetFirstChild<StyleHidden>() != null) styleNode.Format["hidden"] = true;
+            if (IsToggleOn(style.GetFirstChild<AutoRedefine>())) styleNode.Format["autoRedefine"] = true;
+            if (IsToggleOn(style.GetFirstChild<StyleHidden>())) styleNode.Format["hidden"] = true;
             // BUG-DUMP-STYLE-LATENT: latent-style flags (qFormat / uiPriority /
             // semiHidden / unhideWhenUsed / locked). Without these the default
             // Normal style's <w:qFormat/> (and authored uiPriority/semiHidden)
@@ -1008,7 +1008,7 @@ public partial class WordHandler
             secNode.Format["chapSep"] = pgNumType.ChapterSeparator.InnerText;
 
         // Title page flag (w:titlePg) — first-page header/footer differs from rest
-        if (sectPr.GetFirstChild<TitlePage>() != null)
+        if (IsToggleOn(sectPr.GetFirstChild<TitlePage>()))
             secNode.Format["titlePage"] = true;
 
         // BUG-DUMP-SECT-PAPERSRC: printer paper-source bins (<w:paperSrc
@@ -1035,12 +1035,12 @@ public partial class WordHandler
             secNode.Format["direction"] = "rtl";
 
         // <w:rtlGutter/> places the binding gutter on the right side.
-        if (sectPr.GetFirstChild<GutterOnRight>() != null)
+        if (IsToggleOn(sectPr.GetFirstChild<GutterOnRight>()))
             secNode.Format["rtlGutter"] = true;
 
         // BUG-DUMP11-03: <w:noEndnote/> suppresses end-of-section endnote
         // collection. On/off toggle — bare element, no val attribute.
-        if (sectPr.GetFirstChild<NoEndnote>() != null)
+        if (IsToggleOn(sectPr.GetFirstChild<NoEndnote>()))
             secNode.Format["noEndnote"] = true;
 
         // BUG-DUMP-SECT-FORMPROT: <w:formProt/> locks section content except
@@ -1500,8 +1500,8 @@ public partial class WordHandler
             if (font != null) node.Format["font"] = font;
             if (rp.FontSize?.Val?.Value != null)
                 node.Format["size"] = $"{int.Parse(rp.FontSize.Val.Value) / 2.0:0.##}pt";
-            if (rp.Bold != null) node.Format["bold"] = true;
-            if (rp.Italic != null) node.Format["italic"] = true;
+            if (rp.Bold != null) node.Format["bold"] = IsToggleOn(rp.Bold);
+            if (rp.Italic != null) node.Format["italic"] = IsToggleOn(rp.Italic);
             if (rp.Color?.Val?.Value != null) node.Format["color"] = ParseHelpers.FormatHexColor(rp.Color.Val.Value);
             else if (rp.Color?.ThemeColor?.HasValue == true) node.Format["color"] = rp.Color.ThemeColor.InnerText;
             if (rp.Underline?.Val != null) node.Format["underline"] = rp.Underline.Val.InnerText;
@@ -1583,8 +1583,8 @@ public partial class WordHandler
             if (font != null) node.Format["font"] = font;
             if (rp.FontSize?.Val?.Value != null)
                 node.Format["size"] = $"{int.Parse(rp.FontSize.Val.Value) / 2.0:0.##}pt";
-            if (rp.Bold != null) node.Format["bold"] = true;
-            if (rp.Italic != null) node.Format["italic"] = true;
+            if (rp.Bold != null) node.Format["bold"] = IsToggleOn(rp.Bold);
+            if (rp.Italic != null) node.Format["italic"] = IsToggleOn(rp.Italic);
             if (rp.Color?.Val?.Value != null) node.Format["color"] = ParseHelpers.FormatHexColor(rp.Color.Val.Value);
             else if (rp.Color?.ThemeColor?.HasValue == true) node.Format["color"] = rp.Color.ThemeColor.InnerText;
             if (rp.Underline?.Val != null) node.Format["underline"] = rp.Underline.Val.InnerText;
@@ -3466,10 +3466,10 @@ public partial class WordHandler
         // AddStyle fall back to styleId derivation, re-introducing the bug.
         node.Format["customStyle"] = style.CustomStyle?.Value == true;
         if (style.UIPriority?.Val?.Value is int uip) node.Format["uiPriority"] = uip;
-        if (style.GetFirstChild<SemiHidden>() != null) node.Format["semiHidden"] = true;
-        if (style.GetFirstChild<UnhideWhenUsed>() != null) node.Format["unhideWhenUsed"] = true;
-        if (style.GetFirstChild<PrimaryStyle>() != null) node.Format["qFormat"] = true;
-        if (style.GetFirstChild<Locked>() != null) node.Format["locked"] = true;
+        if (IsToggleOn(style.GetFirstChild<SemiHidden>())) node.Format["semiHidden"] = true;
+        if (IsToggleOn(style.GetFirstChild<UnhideWhenUsed>())) node.Format["unhideWhenUsed"] = true;
+        if (IsToggleOn(style.GetFirstChild<PrimaryStyle>())) node.Format["qFormat"] = true;
+        if (IsToggleOn(style.GetFirstChild<Locked>())) node.Format["locked"] = true;
     }
 
     /// <summary>

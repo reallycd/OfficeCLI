@@ -73,6 +73,21 @@ public partial class WordHandler
     private static bool IsToggleOn(Emboss? t) => t != null && (t.Val == null || t.Val.Value);
     private static bool IsToggleOn(Imprint? t) => t != null && (t.Val == null || t.Val.Value);
     private static bool IsToggleOn(NoProof? t) => t != null && (t.Val == null || t.Val.Value);
+    // BUG-DUMP-R35-TRBOOL (project-wide): generic CT_OnOff / CT_OnOffOnly reader
+    // for the toggle elements that have no typed overload above (tcPr/style/row
+    // markers like w:noWrap, w:hideMark, w:semiHidden, w:tblHeader, …). The bare
+    // element is ON; an explicit w:val="0"/"false"/"off" is OFF. Reading
+    // "element present → true" flips an explicit-OFF marker to ON on dump→batch.
+    // OnOffType (OnOffValue Val) and OnOffOnlyType (EnumValue Val) expose
+    // different Val CLR types, so read the raw w:val attribute text uniformly.
+    private static bool IsToggleOn(OpenXmlElement? e)
+    {
+        if (e == null) return false;
+        foreach (var a in e.GetAttributes())
+            if (a.LocalName == "val")
+                return a.Value is not ("0" or "false" or "off");
+        return true; // bare element (no w:val) = ON
+    }
 
     private DocumentNode GetRootNode(int depth)
     {
@@ -265,7 +280,7 @@ public partial class WordHandler
             if (pgNumType?.ChapterSeparator?.Value != null)
                 node.Format["chapSep"] = pgNumType.ChapterSeparator.InnerText;
 
-            if (sectPr.GetFirstChild<TitlePage>() != null)
+            if (IsToggleOn(sectPr.GetFirstChild<TitlePage>()))
                 node.Format["titlePage"] = true;
 
             // BUG-DUMP-SECT-PAPERSRC: <w:paperSrc w:first/@w:other> selects the
@@ -293,16 +308,16 @@ public partial class WordHandler
             ReadPageBorders(sectPr.GetFirstChild<PageBorders>(), node);
 
             // Section-level RTL (Arabic / Hebrew page direction).
-            if (sectPr.GetFirstChild<BiDi>() != null)
+            if (IsToggleOn(sectPr.GetFirstChild<BiDi>()))
                 node.Format["direction"] = "rtl";
 
             // <w:rtlGutter/> places the binding gutter on the right side.
-            if (sectPr.GetFirstChild<GutterOnRight>() != null)
+            if (IsToggleOn(sectPr.GetFirstChild<GutterOnRight>()))
                 node.Format["rtlGutter"] = true;
 
             // BUG-DUMP11-03: <w:noEndnote/> on a section suppresses endnote
             // collection at section end. Bare on/off toggle (no val attr).
-            if (sectPr.GetFirstChild<NoEndnote>() != null)
+            if (IsToggleOn(sectPr.GetFirstChild<NoEndnote>()))
                 node.Format["noEndnote"] = true;
 
             // BUG-DUMP-SECT-FORMPROT: <w:formProt/> locks the section's content
@@ -5412,23 +5427,16 @@ public partial class WordHandler
         // it refuses to orphan at a page bottom, pushing the whole table to the
         // next page (a blank page + reflow on a Canva-style title-block table).
         // The bare element (no w:val) is ON; an explicit "0"/"false"/"off" is
-        // OFF. TableHeader/CantSplit (OnOffOnlyType, EnumValue Val) and Hidden
-        // (OnOffType, OnOffValue Val) expose different Val CLR types, so read the
-        // raw attribute text uniformly. Leave the key unset when OFF (false =
-        // absent default) so dump→batch never re-emits a bare ON element.
-        static bool OnOffOn(string? raw)
-            => raw is null || !(raw is "0" or "false" or "off");
-        var trHeaderEl = trPr.GetFirstChild<TableHeader>();
-        if (trHeaderEl != null && OnOffOn(trHeaderEl.Val?.InnerText))
+        // OFF — leave the key unset when OFF (false = absent default) so dump→
+        // batch never re-emits a bare ON element. See IsToggleOn(OpenXmlElement?).
+        if (IsToggleOn(trPr.GetFirstChild<TableHeader>()))
             node.Format["header"] = true;
-        var cantSplitEl = trPr.GetFirstChild<CantSplit>();
-        if (cantSplitEl != null && OnOffOn(cantSplitEl.Val?.InnerText))
+        if (IsToggleOn(trPr.GetFirstChild<CantSplit>()))
             node.Format["cantSplit"] = true;
         // BUG-DUMP-R37-3: <w:hidden/> marks the whole row not displayed/printed
         // (CT_TrPr). Previously unread — a hidden row reappeared on dump→batch.
         // Mirror the header/cantSplit toggle reads; Add/Set grow matching cases.
-        var rowHiddenEl = trPr.GetFirstChild<Hidden>();
-        if (rowHiddenEl != null && OnOffOn(rowHiddenEl.Val?.InnerText))
+        if (IsToggleOn(trPr.GetFirstChild<Hidden>()))
             node.Format["hidden"] = true;
         // BUG-DUMP-R24-1: row-level <w:jc> in <w:trPr> horizontally positions
         // the WHOLE ROW on the page (CT_TrPr). Distinct from table-level
@@ -5668,8 +5676,8 @@ public partial class WordHandler
             // Text direction
             if (tcPr.TextDirection?.Val?.Value != null)
                 node.Format["textDirection"] = tcPr.TextDirection.Val.InnerText;
-            // No wrap
-            if (tcPr.NoWrap != null)
+            // No wrap (CT_OnOff — honor an explicit w:val="0" = OFF)
+            if (IsToggleOn(tcPr.NoWrap))
                 node.Format["nowrap"] = true;
             // BUG-R3-03: cnfStyle (conditional formatting bitfield).
             var cnfRead = tcPr.GetFirstChild<ConditionalFormatStyle>();
@@ -5680,9 +5688,9 @@ public partial class WordHandler
             // so any tcPr child outside the curated set was silently dropped on
             // dump→batch. Surface the two common toggles explicitly (mirrors the
             // row-level cantSplit/tblHeader reads); Add/Set already support both.
-            if (tcPr.GetFirstChild<HideMark>() != null)
+            if (IsToggleOn(tcPr.GetFirstChild<HideMark>()))
                 node.Format["hideMark"] = true;
-            if (tcPr.GetFirstChild<TableCellFitText>() != null)
+            if (IsToggleOn(tcPr.GetFirstChild<TableCellFitText>()))
                 node.Format["tcFitText"] = true;
             // BUG-DUMP-R32-3: <w:cellMerge> is a tracked-change marker (a cell
             // split/merge made under Track Changes) carrying
@@ -5765,7 +5773,7 @@ public partial class WordHandler
             // CONSISTENCY(underline-color): backfilled from style Get edc8f884.
             if (rPr.Underline?.Color?.Value != null)
                 node.Format["underline.color"] = ParseHelpers.FormatHexColor(rPr.Underline.Color.Value);
-            if (rPr.Strike != null) node.Format["strike"] = true;
+            if (rPr.Strike != null) node.Format["strike"] = IsToggleOn(rPr.Strike);
             if (rPr.Highlight?.Val != null) node.Format["highlight"] = rPr.Highlight.Val.InnerText;
         }
     }
