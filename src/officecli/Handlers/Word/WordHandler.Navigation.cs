@@ -4947,6 +4947,61 @@ public partial class WordHandler
                     Text = recoveredText,
                     Path = $"{path}/r[{runIdx + 1}]",
                 };
+                // BUG-DUMP-R29-SMARTTAG-RPR: carry the wrapped run's own rPr into
+                // the synthesized node. The unknown-subtree path previously emitted
+                // the run as bare text, dropping its bold/size/font/etc. A bold,
+                // 10pt "AND" inside a heading ("INSPECTION <smartTag>AND</smartTag>
+                // ACCEPTANCE") came back non-bold AND at the docDefaults 11pt — the
+                // taller mis-sized word grew the heading line, and across many such
+                // headings the extra height cascaded into whole-document pagination
+                // drift. The rPr is itself an OpenXmlUnknownElement, so map its
+                // children to the same canonical run keys RunToNode emits.
+                var unkRPr = unkRun.ChildElements.FirstOrDefault(c =>
+                    c.LocalName == "rPr" && c.NamespaceUri == wNs);
+                if (unkRPr != null)
+                {
+                    string? Attr(OpenXmlElement el, string n) => el.GetAttributes()
+                        .FirstOrDefault(a => a.LocalName == n && a.NamespaceUri == wNs).Value;
+                    bool ToggleOn(OpenXmlElement el)
+                    { var v = Attr(el, "val"); return v is null or "1" or "true" or "on"; }
+                    foreach (var ch in unkRPr.ChildElements)
+                    {
+                        if (ch.NamespaceUri != wNs) continue;
+                        switch (ch.LocalName)
+                        {
+                            case "b": synthNode.Format["bold"] = ToggleOn(ch); break;
+                            case "bCs": synthNode.Format["bold.cs"] = ToggleOn(ch); break;
+                            case "i": synthNode.Format["italic"] = ToggleOn(ch); break;
+                            case "iCs": synthNode.Format["italic.cs"] = ToggleOn(ch); break;
+                            case "caps": synthNode.Format["caps"] = ToggleOn(ch); break;
+                            case "smallCaps": synthNode.Format["smallcaps"] = ToggleOn(ch); break;
+                            case "strike": synthNode.Format["strike"] = ToggleOn(ch); break;
+                            case "sz":
+                                if (Attr(ch, "val") is { } sv && int.TryParse(sv, out var szi))
+                                    synthNode.Format["size"] = $"{szi / 2.0:0.##}pt";
+                                break;
+                            case "szCs":
+                                if (Attr(ch, "val") is { } scv && int.TryParse(scv, out var szci))
+                                    synthNode.Format["size.cs"] = $"{szci / 2.0:0.##}pt";
+                                break;
+                            case "color": if (Attr(ch, "val") is { } cv) synthNode.Format["color"] = cv; break;
+                            case "highlight": if (Attr(ch, "val") is { } hv) synthNode.Format["highlight"] = hv; break;
+                            case "u": if (Attr(ch, "val") is { } uv) synthNode.Format["underline"] = uv; break;
+                            case "rStyle": if (Attr(ch, "val") is { } rsv) synthNode.Format["rStyle"] = rsv; break;
+                            case "vertAlign":
+                                var va = Attr(ch, "val");
+                                if (va == "superscript") synthNode.Format["superscript"] = true;
+                                else if (va == "subscript") synthNode.Format["subscript"] = true;
+                                break;
+                            case "rFonts":
+                                if (Attr(ch, "ascii") is { } fa) synthNode.Format["font.latin"] = fa;
+                                else if (Attr(ch, "hAnsi") is { } fh) synthNode.Format["font.latin"] = fh;
+                                if (Attr(ch, "eastAsia") is { } fe) synthNode.Format["font.ea"] = fe;
+                                if (Attr(ch, "cs") is { } fc) synthNode.Format["font.cs"] = fc;
+                                break;
+                        }
+                    }
+                }
                 // BUG-DUMP-R35-2: mark a wrapper-flattened run so the emitter can
                 // surface a deterministic "wrapper flattened" warning (the inner
                 // run text/formatting is preserved; only the smartTag/customXml
