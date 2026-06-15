@@ -170,32 +170,40 @@ public static partial class WordBatchEmitter
             var wNs = (System.Xml.Linq.XNamespace)"http://schemas.openxmlformats.org/wordprocessingml/2006/main";
             var rNs = (System.Xml.Linq.XNamespace)"http://schemas.openxmlformats.org/officeDocument/2006/relationships";
             var removed = false;
-            // BUG-DUMP-R57-NOTESEP: keep the separator / continuationSeparator
-            // refs (<w:footnote w:id="-1"/>, <w:footnote w:id="0"/>) when the
-            // document has body-referenced notes — then `add footnote`/`add
-            // endnote` recreates the notes part WITH those separators (ids -1/0),
-            // so the refs resolve. Dropping them made Word fall back to the
-            // DEFAULT separator, whose height differs from the source's custom
-            // one; on a footnote-dense page that shifted the body text area
-            // enough to flip a page break and cascade a multi-page reflow. Strip
-            // only when the part won't be recreated (no body notes of that kind),
-            // matching the original dangling-ref protection. footnotePr children
-            // only ever reference the -1/0 separators (never body notes), so a
-            // kept ref is always valid once the part exists.
+            // BUG-DUMP-R57-NOTESEP: keep the separator (-1) / continuationSeparator
+            // (0) refs when the document has body-referenced notes — then `add
+            // footnote`/`add endnote` recreates the notes part WITH those two
+            // separators, so the refs resolve. Dropping them made Word fall back
+            // to the DEFAULT separator, whose height differs from the source's
+            // custom one; on a footnote-dense page that shifted the body text area
+            // enough to flip a page break and cascade a multi-page reflow.
+            //
+            // BUG-DUMP-R58-NOTENOTICE: keep ONLY ids -1 and 0. footnotePr may also
+            // reference other reserved special notes (continuationNotice, often
+            // id=1) which the dump does NOT round-trip — and `add footnote`
+            // renumbers the surviving body notes from 1 up, so the dropped
+            // continuationNotice's id gets reused by a real BODY note. A kept ref
+            // to that id then declares a body footnote as a document-wide special
+            // note, which Word rejects outright ("file may be corrupted") even
+            // though the SDK validator passes. So a kept ref is safe only for the
+            // -1/0 separators the rebuild reliably recreates; strip every other
+            // referenced id (and strip all refs when the part won't be recreated).
             foreach (var pr in doc.Descendants(wNs + "footnotePr").ToList())
             {
-                if (keepFootnoteSeps) continue;
                 foreach (var sep in pr.Elements(wNs + "footnote").ToList())
                 {
+                    var id = sep.Attribute(wNs + "id")?.Value;
+                    if (keepFootnoteSeps && (id == "-1" || id == "0")) continue;
                     sep.Remove();
                     removed = true;
                 }
             }
             foreach (var pr in doc.Descendants(wNs + "endnotePr").ToList())
             {
-                if (keepEndnoteSeps) continue;
                 foreach (var sep in pr.Elements(wNs + "endnote").ToList())
                 {
+                    var id = sep.Attribute(wNs + "id")?.Value;
+                    if (keepEndnoteSeps && (id == "-1" || id == "0")) continue;
                     sep.Remove();
                     removed = true;
                 }
