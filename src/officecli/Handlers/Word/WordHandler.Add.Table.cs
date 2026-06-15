@@ -1089,19 +1089,16 @@ public partial class WordHandler
             ? index.Value
             : existingGridCols.Count; // append by default
 
-        // Reject if any row at insertIdx straddles the boundary via merge.
-        foreach (var row in targetTable.Elements<TableRow>())
-        {
-            var cells = row.Elements<TableCell>().ToList();
-            // Check the cell currently occupying slot `insertIdx` (the one
-            // that will be pushed right). gridSpan or vMerge here means
-            // re-indexing the column slot would split a merged region.
-            if (insertIdx < cells.Count && CellHasMerge(cells[insertIdx]))
-                throw new ArgumentException(
-                    $"Cannot insert column at index {insertIdx} of {parentPath}: " +
-                    $"a row contains a merged cell straddling that boundary (gridSpan/vMerge). " +
-                    "Unmerge first or pick a different position.");
-        }
+        // Reject if any row's merge makes the insertion slot un-addressable by
+        // position. BUG-COLOP-GRIDIDX: the old check inspected cells[insertIdx]
+        // by ORDINAL, but a preceding gridSpan shifts the ordinal off the grid
+        // slot — so a straddling merge before insertIdx was missed AND the
+        // insertion at cells[insertIdx] below would push the wrong cell right.
+        // The slot-aware guard rejects a merged target slot OR a preceding
+        // horizontal span (ordinal ≠ slot). Appending (insertIdx == count) has
+        // no occupied slot to check and is always safe.
+        if (insertIdx < existingGridCols.Count)
+            GuardColumnSlotAddressable(targetTable, insertIdx, "insert column at index " + insertIdx + " of " + parentPath + ";");
 
         // Width: explicit, or average of existing cols, or default 2400 twips
         long defaultWidthTwips = 2400;
@@ -1172,19 +1169,6 @@ public partial class WordHandler
         return $"{parentPath}/col[{newColIdx}]";
     }
 
-    /// <summary>
-    /// True if the cell carries gridSpan > 1 (horizontal merge) or any
-    /// vMerge directive (vertical merge — restart or continue).
-    /// </summary>
-    private static bool CellHasMerge(TableCell cell)
-    {
-        var tcPr = cell.GetFirstChild<TableCellProperties>();
-        if (tcPr == null) return false;
-        var span = tcPr.GetFirstChild<GridSpan>()?.Val?.Value ?? 1;
-        if (span > 1) return true;
-        if (tcPr.GetFirstChild<VerticalMerge>() != null) return true;
-        return false;
-    }
 
     private string AddCell(OpenXmlElement parent, string parentPath, int? index, Dictionary<string, string> properties)
     {

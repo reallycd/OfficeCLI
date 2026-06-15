@@ -1009,6 +1009,10 @@ public partial class WordHandler
             throw new ArgumentException($"Table index {tableIdx} out of range");
         var table = tables[tableIdx - 1];
 
+        // Same ordinal-vs-grid-slot hazard as the physical column ops: a
+        // preceding gridSpan would mark the wrong cell with <w:cellDel>.
+        GuardNoMergesInColumn(table, colIdx, "remove");
+
         properties.TryGetValue("revision.author", out var aRaw);
         properties.TryGetValue("revision.date", out var dRaw);
         var author = string.IsNullOrEmpty(aRaw) ? "OfficeCLI" : aRaw!;
@@ -2353,24 +2357,54 @@ public partial class WordHandler
         return null;
     }
 
-    private static void GuardNoMergesInColumn(Table table, int colIdx, string action)
+    // BUG-COLOP-GRIDIDX: column add/remove/move/copy address cells by their
+    // ORDINAL position in the row (cells[colIdx-1]). That equals the grid slot
+    // ONLY when no preceding cell in the row horizontally spans (gridSpan). A
+    // gridSpan before the target column shifts the ordinal, so the op silently
+    // targets the WRONG cell — removing/marking/cloning a different column's
+    // data (data corruption). A gridSpan/vMerge AT the target slot likewise
+    // can't be column-addressed. Detect both per row and reject (the callers'
+    // contract is already "unmerge before column-level operations"), turning
+    // silent corruption into a safe, actionable error. Same class as the
+    // tcW-from-grid derivation fix (cell ordinal ≠ grid column index).
+    private static void GuardColumnSlotAddressable(Table table, int slot, string action)
     {
-        // gridSpan/vMerge in the affected column slot would silently break.
+        int human = slot + 1;
         foreach (var row in table.Elements<TableRow>())
         {
-            var cells = row.Elements<TableCell>().ToList();
-            if (colIdx - 1 < cells.Count)
+            var tcs = row.Elements<TableCell>().ToList();
+            if (tcs.Count == 0) continue;
+            int acc = 0;
+            bool found = false;
+            for (int ord = 0; ord < tcs.Count; ord++)
             {
-                var tc = cells[colIdx - 1];
-                var tcPr = tc.GetFirstChild<TableCellProperties>();
-                var span = tcPr?.GetFirstChild<GridSpan>()?.Val?.Value ?? 1;
-                if (span > 1 || tcPr?.GetFirstChild<VerticalMerge>() != null)
-                    throw new ArgumentException(
-                        $"Cannot {action} column {colIdx}: a row contains a merged cell (gridSpan/vMerge) " +
-                        "spanning that column. Unmerge before performing column-level operations.");
+                var tcPr = tcs[ord].GetFirstChild<TableCellProperties>();
+                int span = tcPr?.GetFirstChild<GridSpan>()?.Val?.Value ?? 1;
+                if (slot >= acc && slot < acc + span)
+                {
+                    found = true;
+                    if (span > 1 || tcPr?.GetFirstChild<VerticalMerge>() != null)
+                        throw new ArgumentException(
+                            $"Cannot {action} column {human}: a row contains a merged cell (gridSpan/vMerge) " +
+                            "spanning that column. Unmerge before performing column-level operations.");
+                    if (ord != slot)
+                        throw new ArgumentException(
+                            $"Cannot {action} column {human}: a row contains a horizontally merged cell before " +
+                            "that column, so the column cannot be addressed by position. Unmerge before " +
+                            "performing column-level operations.");
+                    break;
+                }
+                acc += span;
             }
+            if (!found)
+                throw new ArgumentException(
+                    $"Cannot {action} column {human}: a row does not cleanly span that column (merged cells " +
+                    "present). Unmerge before performing column-level operations.");
         }
     }
+
+    private static void GuardNoMergesInColumn(Table table, int colIdx, string action)
+        => GuardColumnSlotAddressable(table, colIdx - 1, action);
 
     private void RemoveTableColumn(Match colMatch)
     {
