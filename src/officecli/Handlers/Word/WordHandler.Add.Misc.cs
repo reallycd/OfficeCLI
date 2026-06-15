@@ -1012,10 +1012,26 @@ public partial class WordHandler
         // (minorEastAsia-themed Korean links, shaded URLs); route through the
         // shared run cases so batch replay keeps the source typography instead
         // of falling back to the document default (serif) font.
+        // BUG-DUMP-HLINK-RPR: a run inside a <w:hyperlink> carries the full run
+        // rPr vocabulary, but AddHyperlink only hand-rolled color/underline/font/
+        // size/bold/italic. Any other character property the source set on the
+        // link run — most consequentially <w:vanish/> (a hidden boilerplate /
+        // template-guidance link), plus the per-script bold.cs/italic.cs/size.cs,
+        // language, caps, strike, vertAlign, … — was silently dropped, so a
+        // vanished hyperlink rendered as visible text. Route every remaining
+        // character key the dump emits through the shared ApplyRunFormatting (the
+        // same applier the plain-run path uses); none of these collide with the
+        // color/underline/size/bold/italic/font slots handled specially above.
         foreach (var hlPassKey in new[]
                  {
                      "font.asciiTheme", "font.hAnsiTheme", "font.eaTheme",
                      "font.csTheme", "shading", "w",
+                     "vanish", "specVanish", "webHidden",
+                     "bold.cs", "italic.cs", "size.cs",
+                     "lang", "lang.ea", "lang.cs",
+                     "caps", "smallCaps", "strike", "dstrike",
+                     "outline", "shadow", "emboss", "imprint",
+                     "highlight", "vertAlign", "position", "kern",
                  })
         {
             if (properties.TryGetValue(hlPassKey, out var hlPassVal))
