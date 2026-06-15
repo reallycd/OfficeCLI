@@ -805,6 +805,36 @@ public static partial class WordBatchEmitter
                     });
                 }
             }
+            // BUG-DUMP-R61-TOCSECT: a cross-paragraph field (canonically a TOC)
+            // can CLOSE in a section-carrier paragraph — the paragraph holds both
+            // the section's <w:sectPr> and the field's terminating
+            // <w:fldChar w:fldCharType="end"/> run. The carrier branch emits the
+            // section + visible runs but never the bare fldChar runs (they carry
+            // no text, so the carrierRuns filter drops them). Worse, the field's
+            // entry paragraphs round-trip verbatim via EmitCrossParagraphFieldMember
+            // but the END paragraph reaches THIS branch instead: the sectPr's
+            // <w:footerReference r:id="…"/> trips that member's HasExternalRelRef
+            // guard (a false positive — the footer ref is recreated by the section
+            // emit, not a dangling content rel), so it falls back to the typed
+            // section emit here. Dropping the closing fldChar leaves the field
+            // unterminated and Word renders the raw field code (" TOC \o … ")
+            // instead of the cached result. Re-emit every fldChar run verbatim via
+            // a rel-free raw-set append onto the rebuilt section paragraph,
+            // restoring the field terminator.
+            foreach (var fcRun in (pNode.Children ?? new List<DocumentNode>())
+                         .Where(c => c.Type == "fieldChar"))
+            {
+                var fcXml = word.GetElementXml(fcRun.Path);
+                if (string.IsNullOrEmpty(fcXml)) continue;
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = "/document",
+                    Xpath = "/w:document/w:body/w:p[last()]",
+                    Action = "append",
+                    Xml = fcXml
+                });
+            }
             return true;
         }
     }
