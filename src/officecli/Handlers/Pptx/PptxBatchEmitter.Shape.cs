@@ -620,15 +620,28 @@ public static partial class PptxBatchEmitter
             }
         }
 
-        // Strip `id` from every `add` BatchItem emitted between the boundary
+        // Reassign `id` on every `add` BatchItem emitted between the boundary
         // and now — these are the group's descendants. Set ops within the
-        // group reference shapes positionally; they don't carry `id` to
-        // begin with, so the filter is naturally a no-op for them.
+        // group reference shapes positionally and carry no `id`, so they're
+        // untouched. Previously the id was STRIPPED (→ replay auto-assign), but
+        // auto-assign (base 100000) collides on decks with authored top-level
+        // ids above that base: a stripped child auto-assigns max+1 = a sibling's
+        // preserved source id, throwing "id already in use" and cascading the
+        // rest of the group. Assign an explicit high-range id instead — group
+        // descendants are resolved positionally, so the value is never
+        // externally referenced. Skip items already in the high range (a nested
+        // group's recursive pass reassigned them first).
         for (int gi = groupChildItemsStart; gi < items.Count; gi++)
         {
             var bi = items[gi];
             if (bi.Command == "add" && bi.Props != null && bi.Props.ContainsKey("id"))
-                bi.Props.Remove("id");
+            {
+                if (bi.Props.TryGetValue("id", out var idv)
+                    && uint.TryParse(idv, out var idn)
+                    && idn >= SlideEmitContext.GroupChildIdBase)
+                    continue; // already reassigned by a nested EmitGroup
+                bi.Props["id"] = ctx.NextGroupChildId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
         }
     }
 

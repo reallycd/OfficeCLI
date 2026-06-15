@@ -44,6 +44,20 @@ public static partial class PptxBatchEmitter
         // Lazily populated per slidePath.
         public Dictionary<string, HashSet<uint>> SlideTimingSpTgtIds { get; } =
             new(StringComparer.Ordinal);
+
+        // CONSISTENCY(group-id-autoassign): group-descendant cNvPr ids are
+        // reassigned to explicit values from this HIGH range (instead of being
+        // stripped → replay auto-assign). Replay's auto-assign base is 100000,
+        // which collides on decks whose authored TOP-LEVEL ids exceed it (seen:
+        // 124930+): a stripped group child auto-assigns max+1 = a value a sibling
+        // top-level shape preserves LATER in the same slide, throwing "id already
+        // in use". Group-descendant ids are never externally referenced (Set ops
+        // resolve them positionally), so any unique value is safe; this base sits
+        // above every realistic PowerPoint-authored id, and being monotonic it is
+        // unique across the whole emit.
+        public const uint GroupChildIdBase = 2_000_000_000u;
+        private uint _groupChildId = GroupChildIdBase;
+        public uint NextGroupChildId() => _groupChildId++;
     }
 
     /// <summary>
