@@ -670,7 +670,16 @@ public partial class WordHandler
             : new RunProperties(new RunStyle { Val = "FootnoteReference" });
         if (fnPara.ParagraphProperties?.BiDi != null)
             ApplyRunFormatting(fnRefRPr, "rtl", "true");
-        var fnRefRun = new Run(fnRefRPr, new FootnoteReference { Id = fnId });
+        // BUG-DUMP-NOTEREF-CUSTOMMARK: a custom-mark reference carries
+        // w:customMarkFollows="1" and the literal mark glyph in a sibling <w:t>
+        // inside the SAME body run. Restore both so the asterisk/dagger survives.
+        var fnRef = new FootnoteReference { Id = fnId };
+        if (IsTruthy(properties.GetValueOrDefault("referenceCustomMarkFollows")))
+            fnRef.CustomMarkFollows = true;
+        var fnRefRun = new Run(fnRefRPr, fnRef);
+        if (properties.TryGetValue("referenceCustomMark", out var fnMark)
+            && !string.IsNullOrEmpty(fnMark))
+            fnRefRun.AppendChild(new Text(fnMark) { Space = SpaceProcessingModeValues.Preserve });
         InsertIntoParagraph(fnPara, fnRefRun, index);
 
         var resultPath = $"/footnote[@footnoteId={fnId}]";
@@ -745,7 +754,15 @@ public partial class WordHandler
             : new RunProperties(new RunStyle { Val = "EndnoteReference" });
         if (enPara.ParagraphProperties?.BiDi != null)
             ApplyRunFormatting(enRefRPr, "rtl", "true");
-        var enRefRun = new Run(enRefRPr, new EndnoteReference { Id = enId });
+        // BUG-DUMP-NOTEREF-CUSTOMMARK: mirror AddFootnote — restore a custom
+        // mark (w:customMarkFollows + sibling <w:t> glyph) in the body ref run.
+        var enRef = new EndnoteReference { Id = enId };
+        if (IsTruthy(properties.GetValueOrDefault("referenceCustomMarkFollows")))
+            enRef.CustomMarkFollows = true;
+        var enRefRun = new Run(enRefRPr, enRef);
+        if (properties.TryGetValue("referenceCustomMark", out var enMark)
+            && !string.IsNullOrEmpty(enMark))
+            enRefRun.AppendChild(new Text(enMark) { Space = SpaceProcessingModeValues.Preserve });
         InsertIntoParagraph(enPara, enRefRun, index);
 
         var resultPath = $"/endnote[@endnoteId={enId}]";

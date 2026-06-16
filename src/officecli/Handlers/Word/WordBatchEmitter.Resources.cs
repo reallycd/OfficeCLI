@@ -1909,6 +1909,24 @@ public static partial class WordBatchEmitter
                     var rPrEl = runEl.Element(wNs2 + "rPr");
                     if (rPrEl != null)
                         noteProps["referenceRPr"] = rPrEl.ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+                    // BUG-DUMP-NOTEREF-CUSTOMMARK: a note reference may use a
+                    // CUSTOM mark instead of an auto-number — Word sets
+                    // <w:footnoteReference w:customMarkFollows="1" w:id="N"/> and
+                    // the literal mark glyph lives in a SIBLING <w:t> in the SAME
+                    // body run (e.g. "*", "†"). The typed rebuild emitted a bare
+                    // <w:footnoteReference w:id="N"/>, dropping BOTH the attribute
+                    // and the glyph (the asterisk vanished from body text). Carry
+                    // the flag + the mark text so AddFootnote/AddEndnote restore them.
+                    var refChild = runEl.Element(wNs2 + "footnoteReference")
+                                   ?? runEl.Element(wNs2 + "endnoteReference");
+                    var cmf = refChild?.Attribute(wNs2 + "customMarkFollows")?.Value;
+                    if (cmf is "1" or "true" or "on")
+                    {
+                        noteProps["referenceCustomMarkFollows"] = "1";
+                        var markText = string.Concat(
+                            runEl.Elements(wNs2 + "t").Select(t => t.Value));
+                        noteProps["referenceCustomMark"] = markText;
+                    }
                 }
                 catch { /* malformed run XML — keep the rStyle-only fallback */ }
             }
