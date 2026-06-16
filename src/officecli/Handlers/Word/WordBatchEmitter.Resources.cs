@@ -247,11 +247,12 @@ public static partial class WordBatchEmitter
     {
         if (string.IsNullOrEmpty(notesXml) || !notesXml.StartsWith("<")) return false;
         // Fast path: a default separator paragraph is just <w:separator/> /
-        // <w:continuationSeparator/>; any field / instrText / drawn text means
-        // there is custom content worth inspecting.
+        // <w:continuationSeparator/>; any field / instrText / drawn text — or a
+        // <w:pPr> (paragraph spacing, see below) — means there is custom content
+        // worth inspecting.
         if (!notesXml.Contains("fldChar") && !notesXml.Contains("instrText")
             && !notesXml.Contains("<w:t") && !notesXml.Contains("<w:drawing")
-            && !notesXml.Contains("<w:pict"))
+            && !notesXml.Contains("<w:pict") && !notesXml.Contains("<w:pPr"))
             return false;
         try
         {
@@ -265,11 +266,17 @@ public static partial class WordBatchEmitter
                 if (type is not ("separator" or "continuationSeparator")) continue;
                 // Any run carrying a field char, field instruction, drawn text,
                 // or drawing/picture is custom content the bare glyph mark lacks.
+                // BUG-DUMP-NOTESEP-SPACING: a non-empty <w:pPr> (most often
+                // <w:spacing w:after="0"/>, which tightens the footnote area) is
+                // ALSO custom — AddFootnote seeds a bare pPr-less separator, so
+                // dropping it lets Word's default after-spacing grow the footnote
+                // area and reflow the body. Round-trip the whole part to keep it.
                 bool custom = note.Descendants(wNs + "fldChar").Any()
                     || note.Descendants(wNs + "instrText").Any()
                     || note.Descendants(wNs + "t").Any()
                     || note.Descendants(wNs + "drawing").Any()
-                    || note.Descendants(wNs + "pict").Any();
+                    || note.Descendants(wNs + "pict").Any()
+                    || note.Descendants(wNs + "pPr").Any(p => p.HasElements);
                 if (custom) return true;
             }
             return false;
@@ -387,12 +394,23 @@ public static partial class WordBatchEmitter
         // A note carries CUSTOM content when it holds drawn text / a field /
         // a drawing beyond the bare separator glyph mark — same probe shape as
         // HasCustomNoteSeparator, applied per note.
+        //
+        // BUG-DUMP-NOTESEP-SPACING: ALSO custom when the separator paragraph
+        // carries non-empty paragraph properties (a <w:pPr> with any child —
+        // most often <w:spacing w:after="0"/>, which tightens the footnote
+        // area). AddFootnote seeds a BARE separator paragraph (no pPr), so Word
+        // applies its DEFAULT after-spacing on replay → the footnote area grows
+        // taller → body text shifts → a ±1 page reflow across the document.
+        // Treating a spacing-only separator as "custom" makes the verbatim
+        // raw-set restore below fire and round-trip the pPr. (The dominant
+        // common cause of the P1 footnote-reflow cluster.)
         static bool IsCustom(System.Xml.Linq.XElement note, System.Xml.Linq.XNamespace w)
             => note.Descendants(w + "t").Any()
             || note.Descendants(w + "fldChar").Any()
             || note.Descendants(w + "instrText").Any()
             || note.Descendants(w + "drawing").Any()
-            || note.Descendants(w + "pict").Any();
+            || note.Descendants(w + "pict").Any()
+            || note.Descendants(w + "pPr").Any(p => p.HasElements);
 
         // The rebuild renumbers body notes 1..bodyNoteCount, so the next free
         // id sits at bodyNoteCount+1. Re-id every restored continuationNotice
