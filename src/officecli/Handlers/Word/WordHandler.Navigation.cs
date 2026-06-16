@@ -4693,6 +4693,17 @@ public partial class WordHandler
             // path). Without this they were dropped entirely on round-trip.
             var paraPermStarts = para.Elements<PermStart>().ToList();
             var paraPermEnds = para.Elements<PermEnd>().ToList();
+            // BUG-DUMP-FLDSIMPLE-ORDER: direct-child <w:fldSimple> (e.g. a footer
+            // STYLEREF/PAGE) must surface at its DOCUMENT position in the merged
+            // child list, not hoisted to the tail. The legacy standalone loop
+            // below appended every fldSimple after the positional merge, so a
+            // paragraph shaped "text <tab> <fldSimple> text <pageField>" round-
+            // tripped as "text <pageField> <tab> text <fldSimple>" — visible
+            // content (a running-header STYLEREF beside a page number) reordered.
+            // Surface direct-child fldSimple as a positioned "fldSimple" kind;
+            // the hyperlink-nested fldSimple loop further down keeps its own
+            // hyperlink-scoped path and is unaffected.
+            var paraSimpleFields = para.Elements<SimpleField>().ToList();
             // BUG-DUMP-RUBY: ruby-bearing runs (a <w:r> wrapping <w:ruby>, the
             // CJK phonetic guide) are excluded from GetAllRuns (their inner
             // <w:rt>/<w:rubyBase> runs would otherwise flatten into sequential
@@ -4723,6 +4734,7 @@ public partial class WordHandler
                 .Concat(paraDirs.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "dir", el: (OpenXmlElement)b)))
                 .Concat(inlineEqsAll.Select(e => (pos: descendantPos.TryGetValue(e, out var p) ? p : int.MaxValue, kind: "eq", el: (OpenXmlElement)e)))
                 .Concat(bareFieldUnknowns.Select(u => (pos: descendantPos.TryGetValue(u, out var p) ? p : int.MaxValue, kind: u.LocalName == "fldChar" ? "fieldChar" : "instrText", el: (OpenXmlElement)u)))
+                .Concat(paraSimpleFields.Select(f => (pos: descendantPos.TryGetValue(f, out var p) ? p : int.MaxValue, kind: "fldSimple", el: (OpenXmlElement)f)))
                 .Concat(paraBookmarks.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "bookmark", el: (OpenXmlElement)b)))
                 .Concat(paraBookmarkEnds.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "bookmarkEnd", el: (OpenXmlElement)b)))
                 .Concat(paraPermStarts.Select(b => (pos: descendantPos.TryGetValue(b, out var p) ? p : int.MaxValue, kind: "permStart", el: (OpenXmlElement)b)))
@@ -4730,10 +4742,35 @@ public partial class WordHandler
                 .OrderBy(t => t.pos)
                 .ToList();
             int bareFieldIdx = 0;
+            int fldSimpleMergeIdx = 0;
             foreach (var entry in ordered)
             {
                 int _childCountBefore = node.Children.Count;
-                if (entry.kind == "run")
+                if (entry.kind == "fldSimple")
+                {
+                    // BUG-DUMP-FLDSIMPLE-ORDER: emit a direct-child <w:fldSimple>
+                    // as a positioned `field` node (same shape as the legacy
+                    // standalone loop, which is now removed for direct children).
+                    var fld = (SimpleField)entry.el;
+                    var instr = fld.Instruction?.Value ?? "";
+                    var displayText = string.Join("", fld.Descendants<Text>().Select(t => t.Text));
+                    var fldNode = new DocumentNode
+                    {
+                        Type = "field",
+                        Text = displayText,
+                        Path = $"{path}/field[{fldSimpleMergeIdx + 1}]",
+                    };
+                    fldNode.Format["instruction"] = instr.Trim();
+                    var instrUpper = instr.Trim().Split(' ', 2)[0].ToUpperInvariant();
+                    if (!string.IsNullOrEmpty(instrUpper))
+                        fldNode.Format["fieldType"] = instrUpper.ToLowerInvariant();
+                    if (fld.Dirty?.Value == true) fldNode.Format["dirty"] = true;
+                    if (fld.FieldLock?.Value == true) fldNode.Format["fldLock"] = true;
+                    fldNode.Format["evaluated"] = displayText.Length > 0;
+                    node.Children.Add(fldNode);
+                    fldSimpleMergeIdx++;
+                }
+                else if (entry.kind == "run")
                 {
                     var runNode = ElementToNode(entry.el, $"{path}/r[{runIdx + 1}]", depth - 1);
                     // BUG-DUMP-R35-2: unlike <w:smartTag> (OpenXmlUnknownElement in
@@ -5160,46 +5197,16 @@ public partial class WordHandler
             }
             // BUG-DUMP6-01: surface <w:fldSimple> children as typed `field`
             // nodes so WordBatchEmitter can re-emit `add field` with the
-            // instruction preserved. Without this, GetAllRuns descended
-            // into SimpleField and surfaced the inner display run as a
-            // plain run, silently dropping the w:instr attribute.
-            // BUG-DUMP9-03: w:fldSimple nested inside w:hyperlink is a
-            // grandchild of the paragraph and was silently dropped.
-            int fldSimpleIdx = 0;
-            // BUG-DUMP18-02: w:fldSimple inside w:hyperlink must surface
-            // as /…/p[N]/hyperlink[K]/field[M] so dump→batch replays the
-            // field INSIDE the hyperlink rather than alongside it. Mirrors
-            // BUG-DUMP15-04 hyperlink-scoped equation paths above.
-            foreach (var fld in para.Elements<SimpleField>())
-            {
-                var instr = fld.Instruction?.Value ?? "";
-                var displayText = string.Join("",
-                    fld.Descendants<Text>().Select(t => t.Text));
-                var fldNode = new DocumentNode
-                {
-                    Type = "field",
-                    Text = displayText,
-                    Path = $"{path}/field[{fldSimpleIdx + 1}]",
-                };
-                fldNode.Format["instruction"] = instr.Trim();
-                var instrUpper = instr.Trim().Split(' ', 2)[0].ToUpperInvariant();
-                if (!string.IsNullOrEmpty(instrUpper))
-                    fldNode.Format["fieldType"] = instrUpper.ToLowerInvariant();
-                // Cross-handler `evaluated` protocol — true whenever
-                // there's a readable cached result. dirty=true (Word
-                // re-renders on open) keeps evaluated=true since a value
-                // is still available; view issues field_cache_stale
-                // surfaces the dirty + cached combination separately.
-                var fldDirty = fld.Dirty?.Value == true;
-                if (fldDirty) fldNode.Format["dirty"] = true;
-                // BUG-DUMP-R37-4: <w:fldSimple w:fldLock="true"> — locked
-                // against F9/recalc. Surface it so the round-trip re-applies
-                // it on the rebuilt (complex) field's begin fldChar.
-                if (fld.FieldLock?.Value == true) fldNode.Format["fldLock"] = true;
-                fldNode.Format["evaluated"] = displayText.Length > 0;
-                node.Children.Add(fldNode);
-                fldSimpleIdx++;
-            }
+            // instruction preserved. Without this, GetAllRuns descended into
+            // SimpleField and surfaced the inner display run as a plain run,
+            // silently dropping the w:instr attribute.
+            // BUG-DUMP-FLDSIMPLE-ORDER: direct-child fldSimple is now emitted
+            // INSIDE the positional `ordered` merge above (kind "fldSimple"),
+            // so it lands at its document position instead of the child tail.
+            // Only the hyperlink-NESTED fldSimple (a paragraph grandchild) is
+            // handled here — BUG-DUMP9-03 / BUG-DUMP18-02: it must surface as
+            // /…/p[N]/hyperlink[K]/field[M] so dump→batch replays the field
+            // INSIDE the hyperlink rather than alongside it.
             for (int hlI = 0; hlI < paraHyperlinks.Count; hlI++)
             {
                 var hl = paraHyperlinks[hlI];
