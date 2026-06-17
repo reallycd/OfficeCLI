@@ -65,7 +65,7 @@
       "set": true,
       "get": true,
       "description": "left text margin (CT_TextParagraphProperties @marL).",
-      "readback": "unit-qualified EMU length",
+      "readback": "unit-qualified pt length (e.g. '36pt')",
       "enforcement": "report"
     },
     "marginRight": {
@@ -74,7 +74,7 @@
       "set": true,
       "get": true,
       "description": "right text margin (CT_TextParagraphProperties @marR).",
-      "readback": "unit-qualified EMU length",
+      "readback": "unit-qualified pt length (e.g. '36pt')",
       "enforcement": "report"
     },
     "lineRule": {

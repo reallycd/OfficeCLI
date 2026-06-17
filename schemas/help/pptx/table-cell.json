@@ -326,7 +326,7 @@
         "--prop border.all=\"single;4;FF0000\""
       ],
       "enforcement": "report",
-      "readback": "edge descriptor (e.g. 'solid;4;FF0000')"
+      "readback": "edge descriptor 'WIDTH DASH #COLOR' (e.g. '2pt solid #FF0000')"
     },
     "border.bottom": {
       "type": "string",
@@ -339,7 +339,7 @@
         "--prop border.bottom=\"double;6;0000FF\""
       ],
       "enforcement": "report",
-      "readback": "edge descriptor (e.g. 'solid;4;FF0000')"
+      "readback": "edge descriptor 'WIDTH DASH #COLOR' (e.g. '2pt solid #FF0000')"
     },
     "border.left": {
       "type": "string",
@@ -352,7 +352,7 @@
         "--prop border.left=\"single;4\""
       ],
       "enforcement": "report",
-      "readback": "edge descriptor (e.g. 'solid;4;FF0000')"
+      "readback": "edge descriptor 'WIDTH DASH #COLOR' (e.g. '2pt solid #FF0000')"
     },
     "border.right": {
       "type": "string",
@@ -365,7 +365,7 @@
         "--prop border.right=\"single;4\""
       ],
       "enforcement": "report",
-      "readback": "edge descriptor (e.g. 'solid;4;FF0000')"
+      "readback": "edge descriptor 'WIDTH DASH #COLOR' (e.g. '2pt solid #FF0000')"
     },
     "border.tl2br": {
       "type": "string",
@@ -391,7 +391,7 @@
         "--prop border.top=\"single;4;000000\""
       ],
       "enforcement": "report",
-      "readback": "edge descriptor (e.g. 'solid;4;FF0000')"
+      "readback": "edge descriptor 'WIDTH DASH #COLOR' (e.g. '2pt solid #FF0000')"
     },
     "border.tr2bl": {
       "type": "string",

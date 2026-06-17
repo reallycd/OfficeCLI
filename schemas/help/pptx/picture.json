@@ -160,7 +160,7 @@
     },
     "shadow": {
       "type": "string",
-      "description": "outer shadow as `color-blur-angle-dist-opacity` (mirrors shape `shadow`). color is hex (no `#`) or scheme; blur/dist in points; angle in degrees; opacity 0-100.",
+      "description": "outer shadow as `color-blur-angle-dist-opacity` (mirrors shape `shadow`). Input color is hex (with or without `#`, 6- or 8-digit `RRGGBBAA`) or a scheme name; blur/dist in points; angle in degrees; opacity 0-100. Readback emits `#RRGGBBAA-blur-angle-dist-opacity` (always `#`-prefixed, alpha byte forced opaque since opacity is carried by the trailing field).",
       "add": false,
       "set": true,
       "get": true,
@@ -168,7 +168,7 @@
         "--prop shadow=000000-10-45-6-50",
         "--prop shadow=accent1-8-90-4-60"
       ],
-      "readback": "`color-blur-angle-dist-opacity`",
+      "readback": "`#RRGGBBAA-blur-angle-dist-opacity`",
       "enforcement": "report"
     },
     "glow": {
