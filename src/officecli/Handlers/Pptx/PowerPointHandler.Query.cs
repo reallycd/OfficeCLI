@@ -259,14 +259,29 @@ public partial class PowerPointHandler
         // fell through to the slide-only fallback and emitted the misleading
         // "Path must start with /slide[N], ..." error so Add output was
         // non-round-trippable.
+        // CONSISTENCY(master-layout-subpath): allow optional /paragraph[P] and
+        // /paragraph[P]/run[R] suffixes under the master/layout shape so the
+        // children the parent Get already advertises are routable (RC2). The
+        // suffix is captured as the last optional group; when present we resolve
+        // the shape node first, then descend into its Children by positional idx.
+        const string mlSubPathSuffix = @"(?:/paragraph\[(\d+)\](?:/run\[(\d+)\])?)?";
         var nestedMasterShapeGetMatch = Regex.Match(path,
-            @"^/slidemaster\[(\d+)\]/slidelayout\[(\d+)\]/shape\[(\d+)\]$", RegexOptions.IgnoreCase);
+            @"^/slidemaster\[(\d+)\]/slidelayout\[(\d+)\]/shape\[(\d+)\]" + mlSubPathSuffix + "$", RegexOptions.IgnoreCase);
         var masterShapeGetMatch = Regex.Match(path,
-            @"^/(slidemaster|slidelayout)\[(\d+)\]/shape\[(\d+)\]$", RegexOptions.IgnoreCase);
+            @"^/(slidemaster|slidelayout)\[(\d+)\]/shape\[(\d+)\]" + mlSubPathSuffix + "$", RegexOptions.IgnoreCase);
         if (nestedMasterShapeGetMatch.Success || masterShapeGetMatch.Success)
         {
             ShapeTree? mlShapeTree;
             string mlPathPrefix;
+            DocumentNode shapeNode;
+            string? paraGrp, runGrp;
+            // ShapeToNode populates paragraph children at depth>0 and run children
+            // only at depth>1. A /paragraph[P]/run[R] subpath therefore needs the
+            // shape resolved at depth>=2 so the run nodes exist to descend into.
+            var activeMatch = nestedMasterShapeGetMatch.Success ? nestedMasterShapeGetMatch : masterShapeGetMatch;
+            var mlDepth = activeMatch.Groups[5].Success ? Math.Max(depth, 2)
+                        : activeMatch.Groups[4].Success ? Math.Max(depth, 1)
+                        : depth;
             if (nestedMasterShapeGetMatch.Success)
             {
                 var mIdx = int.Parse(nestedMasterShapeGetMatch.Groups[1].Value);
@@ -280,7 +295,9 @@ public partial class PowerPointHandler
                 mlShapeTree = layouts[lIdx - 1].SlideLayout?.CommonSlideData?.ShapeTree;
                 mlPathPrefix = $"/slidemaster[{mIdx}]/slidelayout[{lIdx}]";
                 var shapeIdx = int.Parse(nestedMasterShapeGetMatch.Groups[3].Value);
-                return GetMasterOrLayoutShapeNode(mlShapeTree, shapeIdx, mlPathPrefix, depth);
+                shapeNode = GetMasterOrLayoutShapeNode(mlShapeTree, shapeIdx, mlPathPrefix, mlDepth);
+                paraGrp = nestedMasterShapeGetMatch.Groups[4].Success ? nestedMasterShapeGetMatch.Groups[4].Value : null;
+                runGrp = nestedMasterShapeGetMatch.Groups[5].Success ? nestedMasterShapeGetMatch.Groups[5].Value : null;
             }
             else
             {
@@ -304,8 +321,25 @@ public partial class PowerPointHandler
                     mlShapeTree = allLayouts[pIdx - 1].SlideLayout?.CommonSlideData?.ShapeTree;
                     mlPathPrefix = $"/slidelayout[{pIdx}]";
                 }
-                return GetMasterOrLayoutShapeNode(mlShapeTree, shapeIdx, mlPathPrefix, depth);
+                shapeNode = GetMasterOrLayoutShapeNode(mlShapeTree, shapeIdx, mlPathPrefix, mlDepth);
+                paraGrp = masterShapeGetMatch.Groups[4].Success ? masterShapeGetMatch.Groups[4].Value : null;
+                runGrp = masterShapeGetMatch.Groups[5].Success ? masterShapeGetMatch.Groups[5].Value : null;
             }
+
+            if (paraGrp == null) return shapeNode;
+            // Descend into the shape's child tree by positional paragraph (1-based),
+            // then optionally into the paragraph's run children.
+            var pIndex = int.Parse(paraGrp);
+            var paraChildren = shapeNode.Children?.Where(c => c.Type == "paragraph").ToList() ?? [];
+            if (pIndex < 1 || pIndex > paraChildren.Count)
+                throw new ArgumentException($"Paragraph {pIndex} not found at {shapeNode.Path} (total: {paraChildren.Count})");
+            var paraNode = paraChildren[pIndex - 1];
+            if (runGrp == null) return paraNode;
+            var rIndex = int.Parse(runGrp);
+            var runChildren = paraNode.Children?.Where(c => c.Type == "run").ToList() ?? [];
+            if (rIndex < 1 || rIndex > runChildren.Count)
+                throw new ArgumentException($"Run {rIndex} not found at {paraNode.Path} (total: {runChildren.Count})");
+            return runChildren[rIndex - 1];
         }
 
         // Try OLE path: /slide[N]/ole[M]
