@@ -24,7 +24,7 @@
   "properties": {
     "baseline": {
       "type": "string",
-      "description": "vertical alignment in % of font height. Accepts 'super' (≡ +30), 'sub' (≡ -25), 'none'/'false'/'0', or a signed number. Get readback is the numeric percentage.",
+      "description": "vertical alignment in % of font height. Accepts 'super' (≡ +30), 'sub' (≡ -25), 'none'/'false'/'0', or a signed number. Get readback is the %-suffixed percentage.",
       "add": true,
       "set": true,
       "get": true,
@@ -33,7 +33,7 @@
         "--prop baseline=sub",
         "--prop baseline=-25"
       ],
-      "readback": "signed number (e.g. 30, -25, 0)",
+      "readback": "signed percentage with % suffix (e.g. \"30%\", \"-25%\", \"0%\")",
       "enforcement": "strict"
     },
     "highlight": {

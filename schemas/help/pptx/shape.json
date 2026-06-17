@@ -85,6 +85,33 @@
       "readback": "preset name (e.g. \"ellipse\", \"roundRect\")",
       "enforcement": "strict"
     },
+    "textWarp": {
+      "type": "string",
+      "description": "WordArt text warp preset applied to the shape's text body (a:bodyPr/a:prstTxWarp @prst). Use 'none' to remove. The HTML preview surfaces the active warp as a data-textwarp attribute + a 'text-warp' marker class on the shape; real PowerPoint renders the per-glyph warp path.",
+      "values": [
+        "none",
+        "textNoShape",
+        "textPlain",
+        "textArchUp",
+        "textArchDown",
+        "textCircle",
+        "textWave1",
+        "textWave2",
+        "textInflate",
+        "textDeflate",
+        "textCanUp",
+        "textCanDown"
+      ],
+      "add": false,
+      "set": true,
+      "get": true,
+      "examples": [
+        "--prop textWarp=textArchUp",
+        "--prop textWarp=textWave1"
+      ],
+      "readback": "warp preset name (e.g. \"textArchUp\")",
+      "enforcement": "report"
+    },
     "font.latin": {
       "type": "string",
       "description": "Latin-script font slot only (a:latin). Use to target ASCII/European text without overwriting CJK / complex-script slots.",
