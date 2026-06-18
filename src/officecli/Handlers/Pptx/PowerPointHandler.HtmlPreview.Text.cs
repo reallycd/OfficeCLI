@@ -152,7 +152,11 @@ public partial class PowerPointHandler
             // Bullet
             var bulletChar = pProps?.GetFirstChild<Drawing.CharacterBullet>()?.Char?.Value;
             var bulletAuto = pProps?.GetFirstChild<Drawing.AutoNumberedBullet>();
-            var hasBullet = bulletChar != null || bulletAuto != null;
+            // Image bullet (<a:buBlip>). SDK 3.x has no typed BulletBlip in this
+            // context; detect by local name so a raw-injected buBlip also counts.
+            var bulletBlip = pProps?.ChildElements
+                .FirstOrDefault(e => e.LocalName == "buBlip");
+            var hasBullet = bulletChar != null || bulletAuto != null || bulletBlip != null;
 
             // Resolve auto-numbered glyph (e.g. "1.", "a.", "iv.") and track per-scheme counter.
             string? autoNumGlyph = null;
@@ -186,8 +190,17 @@ public partial class PowerPointHandler
 
             if (hasBullet)
             {
-                var bullet = autoNumGlyph ?? bulletChar ?? "\u2022";
+                // Image bullets have no glyph; use a generic marker so the
+                // bullet span is non-empty (the source blip relationship is not
+                // resolved into an <img> here \u2014 fallback marker only).
+                var bullet = autoNumGlyph ?? bulletChar ?? (bulletBlip != null ? "\u25a0" : "\u2022");
                 var buStyles = new List<string>();
+
+                // Bullet font (<a:buFont typeface="..."/>) \u2014 apply font-family so a
+                // symbol-font glyph (e.g. Wingdings "l") renders with the right face.
+                var buFontTypeface = pProps?.GetFirstChild<Drawing.BulletFont>()?.Typeface?.Value;
+                if (!string.IsNullOrEmpty(buFontTypeface))
+                    buStyles.Add($"font-family:{buFontTypeface}");
 
                 // Bullet color: explicit buClr > first run color > default (inherit)
                 var buClrFill = pProps?.GetFirstChild<Drawing.BulletColor>()
