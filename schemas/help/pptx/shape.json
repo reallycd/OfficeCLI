@@ -567,6 +567,23 @@
       "readback": "canonical OOXML prstDash token (solid | dot | dash | dashDot | lgDash | lgDashDot | lgDashDotDot | sysDot | sysDash | sysDashDot | sysDashDotDot). 'longdash'/'longdashdot' are accepted on input as aliases for lgDash/lgDashDot. 'dashDotDot' has no native enum member; it is accepted as an alias for sysDashDotDot (Get readback returns sysDashDotDot).",
       "enforcement": "report"
     },
+    "lineGradient": {
+      "type": "string",
+      "description": "gradient outline (drawingML <a:ln>/<a:gradFill>). Accepts a stop list 'color@pos,color@pos,...' (pos in percent) with an optional 'angle=Ndeg' segment, mirroring the fill gradient form. Set/Add replace any solid outline color. Get readback is emitted under the canonical key 'line.gradient'.",
+      "aliases": [
+        "linegradient",
+        "line.gradient"
+      ],
+      "add": true,
+      "set": true,
+      "get": true,
+      "examples": [
+        "--prop lineGradient=\"FF0000@0,0000FF@100\"",
+        "--prop lineGradient=\"FF0000@0,00FF00@50,0000FF@100,angle=90deg\""
+      ],
+      "readback": "gradient stop string (canonical key line.gradient)",
+      "enforcement": "report"
+    },
     "lineCap": {
       "type": "enum",
       "description": "line end cap style (drawingML <a:ln @cap>). Affects how the stroke terminates at endpoints (and dash gaps for dashed strokes).",

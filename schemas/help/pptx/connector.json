@@ -145,6 +145,14 @@
       "readback": "plain string",
       "enforcement": "report"
     },
+    "text": {
+      "type": "string",
+      "description": "inline text label on the connector (<p:cxnSp> child <p:txBody>). Single-paragraph single-run; Set replaces any existing label. Multi-paragraph labels arrive via subsequent add paragraph/run ops against the connector path.",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop text=\"Yes\"", "--prop text=\"No\""],
+      "readback": "plain text content of the connector txBody",
+      "enforcement": "report"
+    },
     "startShape": { "type":"number", "add":false, "set":false, "get":true, "description":"shape id of the start connection endpoint.", "readback":"integer shape id", "enforcement":"report" },
     "startIdx":   { "type":"number", "add":false, "set":false, "get":true, "description":"connection point index on start shape (0-based; omitted when 0).", "readback":"integer", "enforcement":"report" },
     "endShape":   { "type":"number", "add":false, "set":false, "get":true, "description":"shape id of the end connection endpoint.", "readback":"integer shape id", "enforcement":"report" },
