@@ -355,6 +355,52 @@ public partial class PowerPointHandler
                     ApplyGlow(spPrGl, value);
                     break;
                 }
+                case "softedge":
+                {
+                    // CONSISTENCY(shape-picture-parity): a picture's spPr carries
+                    // the same effectLst as a shape's. Reuse the shape helper so
+                    // the input vocabulary (e.g. softEdge=10pt) matches exactly.
+                    var spPrSe = pic.ShapeProperties ?? (pic.ShapeProperties = new ShapeProperties());
+                    ApplySoftEdge(spPrSe, value);
+                    break;
+                }
+                case "reflection":
+                {
+                    var spPrRe = pic.ShapeProperties ?? (pic.ShapeProperties = new ShapeProperties());
+                    ApplyReflection(spPrRe, value);
+                    break;
+                }
+                case "bevel" or "beveltop":
+                {
+                    var spPrBv = pic.ShapeProperties ?? (pic.ShapeProperties = new ShapeProperties());
+                    ApplyBevel(spPrBv, value, top: true);
+                    break;
+                }
+                case "bevelbottom":
+                {
+                    var spPrBb = pic.ShapeProperties ?? (pic.ShapeProperties = new ShapeProperties());
+                    ApplyBevel(spPrBb, value, top: false);
+                    break;
+                }
+                case "recolor":
+                {
+                    // <a:grayscl/> under a:blip — Picture Format → Color → Recolor
+                    // → Grayscale. Only "grayscale" is supported (the only fully
+                    // parameter-free recolor); other recolor presets map to
+                    // duotone= which already has its own case.
+                    var rcBlip = pic.BlipFill?.GetFirstChild<Drawing.Blip>();
+                    if (rcBlip == null) { unsupported.Add(key); break; }
+                    rcBlip.RemoveAllChildren<Drawing.Grayscale>();
+                    if (value.Equals("none", StringComparison.OrdinalIgnoreCase)
+                        || value.Equals("false", StringComparison.OrdinalIgnoreCase))
+                        break;
+                    if (!value.Equals("grayscale", StringComparison.OrdinalIgnoreCase)
+                        && !value.Equals("grayscl", StringComparison.OrdinalIgnoreCase)
+                        && !value.Equals("greyscale", StringComparison.OrdinalIgnoreCase))
+                        throw new ArgumentException($"Invalid 'recolor' value: '{value}'. Supported: grayscale, none.");
+                    rcBlip.AppendChild(new Drawing.Grayscale());
+                    break;
+                }
                 case "brightness" or "contrast":
                 {
                     // Per OOXML CT_Blip (ECMA-376 §20.1.8.13) the only luminance
