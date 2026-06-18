@@ -949,10 +949,79 @@ public partial class WordHandler
         return unsupported;
     }
 
+    // Apply the paragraph-MARK tracked-change revisions the dump carries as the
+    // .author/.date/.id namespaces — paraMarkIns (<w:pPr><w:rPr><w:ins/>),
+    // paraMarkDel (<w:del/>) and numPrIns (<w:numPr><w:ins/>) — onto a paragraph's
+    // pPr, returning the keys it consumed. CONSISTENCY(add-set-symmetry): mirrors
+    // the AddParagraph blocks (BUG-DUMP-R44-6 / R49-1). The dump emits these as
+    // `set` ops on table-cell paragraphs the table build already created, so the
+    // modify path must accept them too or the ¶-mark insertion/deletion (and the
+    // tracked numbering assignment) round-trip back as UNSUPPORTED and are dropped.
+    private HashSet<string> ApplyParagraphMarkRevisionNamespaces(
+        ParagraphProperties pProps, Dictionary<string, string> properties)
+    {
+        var consumed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        static DateTime ParseRev(string? s) =>
+            !string.IsNullOrEmpty(s)
+            && DateTime.TryParse(s, null, System.Globalization.DateTimeStyles.RoundtripKind, out var d)
+                ? d : DateTime.UtcNow;
+
+        if (properties.TryGetValue("paraMarkIns.author", out var iA)
+            | properties.TryGetValue("paraMarkIns.date", out var iD)
+            | properties.TryGetValue("paraMarkIns.id", out var iI))
+        {
+            consumed.UnionWith(new[] { "paraMarkIns.author", "paraMarkIns.date", "paraMarkIns.id" });
+            var rpr = pProps.ParagraphMarkRunProperties
+                      ?? pProps.AppendChild(new ParagraphMarkRunProperties());
+            if (rpr.GetFirstChild<Inserted>() == null)
+                rpr.PrependChild(new Inserted
+                {
+                    Author = string.IsNullOrEmpty(iA) ? "OfficeCLI" : iA!,
+                    Date = ParseRev(iD),
+                    Id = !string.IsNullOrEmpty(iI) ? iI : GenerateRevisionId(),
+                });
+        }
+        if (properties.TryGetValue("paraMarkDel.author", out var dA)
+            | properties.TryGetValue("paraMarkDel.date", out var dD)
+            | properties.TryGetValue("paraMarkDel.id", out var dI))
+        {
+            consumed.UnionWith(new[] { "paraMarkDel.author", "paraMarkDel.date", "paraMarkDel.id" });
+            var rpr = pProps.ParagraphMarkRunProperties
+                      ?? pProps.AppendChild(new ParagraphMarkRunProperties());
+            if (rpr.GetFirstChild<Deleted>() == null)
+                rpr.PrependChild(new Deleted
+                {
+                    Author = string.IsNullOrEmpty(dA) ? "OfficeCLI" : dA!,
+                    Date = ParseRev(dD),
+                    Id = !string.IsNullOrEmpty(dI) ? dI : GenerateRevisionId(),
+                });
+        }
+        // numPrIns lands inside an existing <w:numPr> (CT_NumPr order: ilvl?, numId?,
+        // ins?), so it only applies when the paragraph already carries numbering.
+        if (properties.TryGetValue("numPrIns.author", out var nA)
+            | properties.TryGetValue("numPrIns.date", out var nD)
+            | properties.TryGetValue("numPrIns.id", out var nI))
+        {
+            consumed.UnionWith(new[] { "numPrIns.author", "numPrIns.date", "numPrIns.id" });
+            var numPr = pProps.NumberingProperties;
+            if (numPr != null && numPr.GetFirstChild<Inserted>() == null)
+                numPr.AppendChild(new Inserted
+                {
+                    Author = string.IsNullOrEmpty(nA) ? "OfficeCLI" : nA!,
+                    Date = ParseRev(nD),
+                    Id = !string.IsNullOrEmpty(nI) ? nI : GenerateRevisionId(),
+                });
+        }
+        return consumed;
+    }
+
     private List<string> SetElementParagraph(Paragraph para, Dictionary<string, string> properties)
     {
         var unsupported = new List<string>();
         var pProps = para.ParagraphProperties ?? para.PrependChild(new ParagraphProperties());
+        // Consume paragraph-mark tracked-change namespaces up front so the per-key
+        // loop below doesn't reject them as unsupported (add-set-symmetry).
+        var markRevConsumed = ApplyParagraphMarkRevisionNamespaces(pProps, properties);
         // CONSISTENCY(markRPr-pre-existed-snapshot): captured ONCE before
         // the property iteration starts. The per-iteration pmrpExisting
         // check inside the bare-key case below otherwise flipped to non-
@@ -963,6 +1032,7 @@ public partial class WordHandler
         bool markRPrPreExisted = pProps.ParagraphMarkRunProperties != null;
         foreach (var (key, value) in properties)
         {
+            if (markRevConsumed.Contains(key)) continue;
             var k = key.ToLowerInvariant();
             if (ApplyParagraphLevelProperty(pProps, key, value, LastSetWarnings))
             {
