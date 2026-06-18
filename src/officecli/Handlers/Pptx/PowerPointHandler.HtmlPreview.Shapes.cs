@@ -500,12 +500,35 @@ public partial class PowerPointHandler
             // on the inner text container so the line extends horizontally
             // rather than wrapping inside the shape's width box.
             var wrapNoneStyle = wrapNone ? "white-space:nowrap;overflow:visible;" : "";
+
+            // Multi-column text: <a:bodyPr numCol="N" spcCol="EMU"/> lays the
+            // text body out in N columns. CSS column-count is INERT on a flex
+            // container, and `.shape-text` is display:flex (for valign). So the
+            // columns CSS must live on a BLOCK-level wrapper INSIDE the flex div
+            // — the flex parent still handles vertical anchoring while the inner
+            // block establishes the multi-column formatting context.
+            string columnStyle = "";
+            if (bodyPr?.ColumnCount?.HasValue == true && bodyPr.ColumnCount.Value > 1)
+            {
+                columnStyle = $"column-count:{bodyPr.ColumnCount.Value};";
+                if (bodyPr.ColumnSpacing?.HasValue == true)
+                    columnStyle += $"column-gap:{Units.EmuToPt(bodyPr.ColumnSpacing.Value):0.##}pt;";
+            }
+
             var textStyle = !string.IsNullOrEmpty(flipStyle) || !string.IsNullOrEmpty(clipPathCss) || !string.IsNullOrEmpty(rtlColStyle) || !string.IsNullOrEmpty(wrapNoneStyle) || !string.IsNullOrEmpty(vertStyle)
                 ? $" style=\"{flipStyle}{rtlColStyle}{vertStyle}{wrapNoneStyle}{(string.IsNullOrEmpty(clipPathCss) ? "" : "position:relative;")}\""
                 : "";
             sb.Append($"<div class=\"shape-text valign-{valign}\"{textStyle}>");
 
+            // Block-level column wrapper: column-count works here (normal block
+            // formatting context), unlike on the flex .shape-text parent.
+            if (!string.IsNullOrEmpty(columnStyle))
+                sb.Append($"<div class=\"text-columns\" style=\"display:block;width:100%;{columnStyle}\">");
+
             RenderTextBody(sb, shape.TextBody, themeColors, shape, part);
+
+            if (!string.IsNullOrEmpty(columnStyle))
+                sb.Append("</div>");
             sb.Append("</div>");
         }
 
@@ -838,6 +861,33 @@ public partial class PowerPointHandler
     // ==================== Picture Rendering ====================
 
     /// <summary>
+    /// Compute the hue angle (degrees, 0-360) of an RRGGBB hex color. Used to
+    /// approximate a duotone recolor in CSS via sepia + hue-rotate toward the
+    /// target color's hue. sepia produces a brownish base (~hue 35°), so the
+    /// emitted rotation is relative to that.
+    /// </summary>
+    private static double RgbHexToHueDeg(string hex)
+    {
+        var clean = hex.TrimStart('#');
+        if (clean.Length < 6) return 0.0;
+        var (r, g, b) = ColorMath.HexToRgb(clean[..6]);
+        double rf = r / 255.0, gf = g / 255.0, bf = b / 255.0;
+        double max = Math.Max(rf, Math.Max(gf, bf)), min = Math.Min(rf, Math.Min(gf, bf));
+        double delta = max - min;
+        if (delta < 1e-6) return 0.0;
+        double hue;
+        if (max == rf) hue = ((gf - bf) / delta) % 6;
+        else if (max == gf) hue = (bf - rf) / delta + 2;
+        else hue = (rf - gf) / delta + 4;
+        hue *= 60;
+        if (hue < 0) hue += 360;
+        // sepia base hue is ~35°; rotate from there toward the target hue.
+        var rotate = hue - 35;
+        if (rotate < 0) rotate += 360;
+        return rotate;
+    }
+
+    /// <summary>
     /// Render a picture element to HTML. When called from a group, pass overridePos
     /// with the adjusted coordinates — the original element is NEVER modified.
     /// </summary>
@@ -862,9 +912,34 @@ public partial class PowerPointHandler
             $"height:{Units.EmuToPt(cy)}pt"
         };
 
+        // Transform chain (rotation + 3D) — combined into one transform property.
+        var picTransforms = new List<string>();
+
         // Rotation
         if (xfrm.Rotation != null && xfrm.Rotation.Value != 0)
-            styles.Add($"transform:rotate({xfrm.Rotation.Value / 60000.0:0.##}deg)");
+            picTransforms.Add($"rotate({xfrm.Rotation.Value / 60000.0:0.##}deg)");
+
+        // 3D rotation (scene3d camera rotation) → CSS perspective transform.
+        // CONSISTENCY(shape-picture-parity): mirror RenderShape's scene3d block.
+        var picScene3d = pic.ShapeProperties?.GetFirstChild<Drawing.Scene3DType>();
+        var picCam = picScene3d?.Camera;
+        var picRot3d = picCam?.Rotation;
+        if (picRot3d != null)
+        {
+            var rx = (picRot3d.Latitude?.Value ?? 0) / 60000.0;
+            var ry = (picRot3d.Longitude?.Value ?? 0) / 60000.0;
+            var rz = (picRot3d.Revolution?.Value ?? 0) / 60000.0;
+            if (rx != 0 || ry != 0 || rz != 0)
+            {
+                styles.Add("perspective:800px");
+                if (rx != 0) picTransforms.Add($"rotateX({rx:0.##}deg)");
+                if (ry != 0) picTransforms.Add($"rotateY({ry:0.##}deg)");
+                if (rz != 0) picTransforms.Add($"rotateZ({rz:0.##}deg)");
+            }
+        }
+
+        if (picTransforms.Count > 0)
+            styles.Add($"transform:{string.Join(" ", picTransforms)}");
 
         // Border
         var outline = pic.ShapeProperties?.GetFirstChild<Drawing.Outline>();
@@ -915,9 +990,28 @@ public partial class PowerPointHandler
         // contrast boost to push midtones toward pure black/white.
         var picBiLevel = picBlipForFx?.GetFirstChild<Drawing.BiLevel>();
 
+        // Duotone — Set.Media writes <a:duotone> with two color children under
+        // a:blip, remapping the image's luminance gradient between the two
+        // stops. CSS has no true duotone, so approximate (same philosophy as
+        // the biLevel approximation): grayscale + sepia + hue-rotate toward the
+        // highlight color's hue so a duotone picture is visibly tinted and
+        // distinct from the untinted original.
+        var picDuotone = picBlipForFx?.GetFirstChild<Drawing.Duotone>();
+        string? duotoneFilter = null;
+        if (picDuotone != null)
+        {
+            var highlight = picDuotone.ChildElements
+                .OfType<Drawing.RgbColorModelHex>()
+                .LastOrDefault()?.Val?.Value;
+            var hue = !string.IsNullOrEmpty(highlight) ? RgbHexToHueDeg(highlight!) : 0.0;
+            duotoneFilter = $"grayscale(1) sepia(1) saturate(3) hue-rotate({hue:0.#}deg)";
+        }
+
         var filterParts = new List<string>();
         if (picBiLevel != null)
             filterParts.Add("grayscale(1) contrast(1000%)");
+        if (duotoneFilter != null)
+            filterParts.Add(duotoneFilter);
         // CSS brightness(1) = no change; +N% brightness → brightness(1 + N/100).
         if (brightnessPct.HasValue && Math.Abs(brightnessPct.Value) > 0.01)
             filterParts.Add($"brightness({1 + brightnessPct.Value / 100.0:0.###})");
@@ -940,6 +1034,27 @@ public partial class PowerPointHandler
         var reflectionCss = EffectListToReflectionCss(effectList);
         if (!string.IsNullOrEmpty(reflectionCss))
             styles.Add(reflectionCss);
+
+        // Soft edge → fade out at edges using CSS mask-image.
+        // CONSISTENCY(shape-picture-parity): mirror RenderShape's softEdge block.
+        var picSoftEdge = effectList?.GetFirstChild<Drawing.SoftEdge>();
+        if (picSoftEdge?.Radius?.HasValue == true)
+        {
+            var edgePx = Math.Max(2, picSoftEdge.Radius.Value / EmuConverter.EmuPerPointF * 0.8);
+            styles.Add($"-webkit-mask-image:linear-gradient(to right,transparent 0,black {edgePx:0.#}px,black calc(100% - {edgePx:0.#}px),transparent 100%)," +
+                       $"linear-gradient(to bottom,transparent 0,black {edgePx:0.#}px,black calc(100% - {edgePx:0.#}px),transparent 100%)");
+            styles.Add("-webkit-mask-composite:source-in;mask-composite:intersect");
+        }
+
+        // Bevel → approximate with inset box-shadow for a subtle 3D appearance.
+        // CONSISTENCY(shape-picture-parity): mirror RenderShape's sp3d block.
+        var picSp3d = pic.ShapeProperties?.GetFirstChild<Drawing.Shape3DType>();
+        if (picSp3d?.BevelTop != null)
+        {
+            var bevelW = picSp3d.BevelTop.Width?.HasValue == true ? picSp3d.BevelTop.Width.Value / EmuConverter.EmuPerPointF : 6;
+            var bW = Math.Max(1, bevelW * 0.5);
+            styles.Add($"box-shadow:inset {bW:0.#}px {bW:0.#}px {bW * 1.5:0.#}px rgba(255,255,255,0.25),inset -{bW:0.#}px -{bW:0.#}px {bW * 1.5:0.#}px rgba(0,0,0,0.15)");
+        }
 
         // Geometry (rounded corners)
         var presetGeom = pic.ShapeProperties?.GetFirstChild<Drawing.PresetGeometry>();
