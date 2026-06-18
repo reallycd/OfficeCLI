@@ -961,7 +961,7 @@ public partial class PowerPointHandler
                     }
                     var avLst = prstAdj.GetFirstChild<Drawing.AdjustValueList>()
                         ?? prstAdj.AppendChild(new Drawing.AdjustValueList())!;
-                    ApplyAdjustHandles(avLst, value);
+                    ApplyAdjustHandles(avLst, value, prstAdj.Preset?.Value);
                     break;
                 }
 

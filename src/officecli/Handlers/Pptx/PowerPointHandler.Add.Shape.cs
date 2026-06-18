@@ -649,7 +649,7 @@ public partial class PowerPointHandler
                         if (properties.TryGetValue("adj", out var adjSpec)
                             && !string.IsNullOrWhiteSpace(adjSpec))
                         {
-                            ApplyAdjustHandles(avLstForAdd, adjSpec);
+                            ApplyAdjustHandles(avLstForAdd, adjSpec, presetGeom);
                         }
                         newShape.ShapeProperties.AppendChild(
                             new Drawing.PresetGeometry(avLstForAdd) { Preset = presetGeom }

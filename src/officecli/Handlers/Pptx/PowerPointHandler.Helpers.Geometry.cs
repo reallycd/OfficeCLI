@@ -266,10 +266,12 @@ public partial class PowerPointHandler
     /// expression for @fmla ("val N", "*/ adj1 width …", named references
     /// resolved by the preset's own definition).
     /// </summary>
-    internal static void ApplyAdjustHandles(Drawing.AdjustValueList avLst, string spec)
+    internal static void ApplyAdjustHandles(Drawing.AdjustValueList avLst, string spec,
+        Drawing.ShapeTypeValues? preset = null)
     {
         avLst.RemoveAllChildren<Drawing.ShapeGuide>();
         if (string.IsNullOrWhiteSpace(spec)) return;
+        int idx = 0;
         foreach (var raw in spec.Split(',', StringSplitOptions.RemoveEmptyEntries))
         {
             var entry = raw.Trim();
@@ -283,7 +285,36 @@ public partial class PowerPointHandler
             if (name.Length == 0 || fmla.Length == 0)
                 throw new ArgumentException(
                     $"Invalid adj spec '{entry}'. Both name and formula must be non-empty.");
+            // R18 BUG A: PowerPoint validates each <a:gd name="…"> against the
+            // names the preset's own definition declares; an unknown name (e.g.
+            // "adj1" on a single-handle preset whose guide is literally "adj")
+            // makes real PowerPoint refuse the file (0x80070570) even though the
+            // OpenXML SDK considers it schema-valid. Remap the supplied name to
+            // the canonical handle name expected at this position for the preset.
+            name = CanonicalAdjName(preset, idx, name);
             avLst.AppendChild(new Drawing.ShapeGuide { Name = name, Formula = fmla });
+            idx++;
         }
+    }
+
+    /// <summary>
+    /// Map the adjust-handle name at <paramref name="index"/> to the name the
+    /// given <paramref name="preset"/> actually declares. Presets that define a
+    /// single adjust handle name it <c>adj</c> (donut, noSmoking, …); writing the
+    /// generic <c>adj1</c> there yields a file real PowerPoint rejects. Presets
+    /// with multiple handles use <c>adj1</c>/<c>adj2</c>/… and pass through.
+    /// Unknown presets keep the caller-supplied name verbatim.
+    /// </summary>
+    private static string CanonicalAdjName(Drawing.ShapeTypeValues? preset, int index, string supplied)
+    {
+        if (preset == null) return supplied;
+        // Single-handle presets: the one and only guide is named "adj".
+        if (index == 0 &&
+            (preset == Drawing.ShapeTypeValues.Donut
+             || preset == Drawing.ShapeTypeValues.NoSmoking))
+        {
+            return "adj";
+        }
+        return supplied;
     }
 }
