@@ -879,6 +879,20 @@ public partial class WordHandler
         return AddInlinedPartsRun(parent, parentPath, properties, "diagram");
     }
 
+    // Native DrawingML chart run carried VERBATIM — supersedes the lossy typed
+    // `add chart` rebuild. The runXml is the run's <w:drawing> referencing
+    // <c:chart r:id>; part{N} payloads carry chart1.xml + its style / colors /
+    // themeOverride / userShapes / embedded-workbook children (and any external
+    // workbook relationship). Same self-contained carrier as `add diagram`.
+    private string AddChartVerbatim(OpenXmlElement parent, string parentPath, Dictionary<string, string> properties)
+    {
+        properties ??= new Dictionary<string, string>();
+        if (!properties.TryGetValue("runXml", out var cMarker) || string.IsNullOrEmpty(cMarker)
+            || !cMarker.Contains("c:chart", StringComparison.Ordinal))
+            throw new ArgumentException("chartpart requires --prop runXml containing a <c:chart> reference");
+        return AddInlinedPartsRun(parent, parentPath, properties, "chartpart");
+    }
+
     // Legacy VML shape run (<w:pict>) — textboxes whose content carries
     // hyperlinks (external rels) or v:imagedata image parts. Same carrier.
     private string AddVmlShape(OpenXmlElement parent, string parentPath, Dictionary<string, string> properties)
@@ -1167,6 +1181,14 @@ public partial class WordHandler
         // `add vmlshape` step and dropping the shape's enclosed text runs.
         "application/vnd.openxmlformats-officedocument.themeOverride+xml"
             => parent.AddNewPart<ThemeOverridePart>(ct, relId),
+        // BUG-DUMP-CHART-VERBATIM: a native chart's userShapes overlay drawing
+        // (chartshapes+xml, the chartUserShapes child of the ChartPart — a
+        // logo/annotation drawn on top of the chart). Carried as a chart child
+        // so the verbatim `add chartpart` carrier round-trips it; without this
+        // arm a chart with a userShapes overlay aborts the carrier and falls
+        // back to the lossy typed rebuild.
+        "application/vnd.openxmlformats-officedocument.drawingml.chartshapes+xml"
+            => parent.AddNewPart<ChartDrawingPart>(ct, relId),
         // BUG-DUMP-VMLCHART-EMBEDPKG: a chart child of a VML shape can also be
         // the chart's embedded data workbook (spreadsheetml.sheet, the live
         // chart source) or a legacy OLE object. CreateInlinedPart already routes

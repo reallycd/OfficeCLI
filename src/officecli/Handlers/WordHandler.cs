@@ -749,6 +749,69 @@ public partial class WordHandler : IDocumentHandler
         catch { return null; }
     }
 
+    /// <summary>
+    /// dump→batch: capture a native DrawingML chart run VERBATIM — the run's
+    /// <c>&lt;w:drawing&gt;</c> (referencing the chart part via
+    /// <c>&lt;c:chart r:id&gt;</c>) plus the chart part's bytes and every sidecar
+    /// it owns (chartStyle, chartColorStyle, themeOverride, the userShapes
+    /// overlay drawing, an embedded data workbook, and any external-workbook
+    /// relationship). This SUPERSEDES the typed <c>add chart</c> rebuild, whose
+    /// BuildChartProps round-trip de-references the data (numRef→numLit, drops
+    /// strRef category labels, ptCount data points, dLbls, externalData) and
+    /// visibly compresses the rendered chart. Mirrors the diagram/activeX
+    /// inlined-parts carrier. Returns null when the run hosts no chart reference
+    /// or a referenced part can't be resolved, so the caller falls back to the
+    /// typed path.
+    /// </summary>
+    internal ActiveXEmitData? GetChartVerbatimEmitData(string runPath)
+    {
+        OpenXmlElement? element;
+        try { element = NavigateToElement(ParsePath(runPath)); }
+        catch { return null; }
+        if (element is not Run run) return null;
+        var drawing = run.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.Drawing>();
+        if (drawing == null) return null;
+        if (!drawing.Descendants<DocumentFormat.OpenXml.Drawing.Charts.ChartReference>().Any())
+            return null;
+        // GATE (editability vs fidelity): only supersede the typed `add chart`
+        // path for charts the typed BuildChartProps round-trip actually mangles —
+        // those whose data is a LIVE cached reference (<c:numRef>/<c:strRef>) or
+        // links an external workbook (<c:externalData>), or that carry a
+        // userShapes overlay / mc:AlternateContent the typed path drops. Charts
+        // AUTHORED via `add chart` embed LITERAL data (<c:numLit>/<c:strLit>) and
+        // carry none of these markers — keep them on the typed path so the dump
+        // stays human/agent-editable (`add chart --prop data=…`) instead of an
+        // opaque verbatim blob. This is the deliberate dump-as-code boundary.
+        var chartPart = ResolveChartPartFromRunPath(runPath);
+        if (chartPart == null || !ChartNeedsVerbatim(chartPart)) return null;
+        // No GuardCarrierContentTypes here: chart + its sidecar content types are
+        // explicitly supported by CreateInlinedPart / CreateInlinedChildPart, so
+        // the guard's conservative allowlist (which excludes charts on purpose)
+        // must not veto this carrier.
+        return CollectInlinedPartsEmitData(run, drawing);
+    }
+
+    // A chart whose typed-prop round-trip is known-lossy: live data references
+    // (numRef/strRef de-reference to numLit/strLit, dropping ptCount points and
+    // category labels), an external-workbook link, a userShapes overlay, or an
+    // mc:AlternateContent block the typed rebuild can't represent.
+    private static bool ChartNeedsVerbatim(ChartPart chartPart)
+    {
+        string xml;
+        try
+        {
+            using var s = chartPart.GetStream(FileMode.Open, FileAccess.Read);
+            using var r = new StreamReader(s);
+            xml = r.ReadToEnd();
+        }
+        catch { return false; }
+        return xml.Contains("<c:numRef", StringComparison.Ordinal)
+            || xml.Contains("<c:strRef", StringComparison.Ordinal)
+            || xml.Contains("<c:externalData", StringComparison.Ordinal)
+            || xml.Contains("<c:userShapes", StringComparison.Ordinal)
+            || xml.Contains("AlternateContent", StringComparison.Ordinal);
+    }
+
     // Shared collector for the `add activex` / `add diagram` carriers: every
     // relationship-namespace attribute in the subtree (r:id, r:dm, r:lo, …)
     // names a part on the run's host part; ship each part's bytes plus its

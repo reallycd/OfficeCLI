@@ -2707,6 +2707,27 @@ public static partial class WordBatchEmitter
         {
             var spec = ctx.ChartSpecs[ctx.ChartCursor.Index];
             ctx.ChartCursor.Index++;
+            // VERBATIM-FIRST: carry the chart part + its sidecars byte-for-byte
+            // instead of rebuilding from semantic props. The typed BuildChartProps
+            // path below de-references the chart data (numRef→numLit, drops strRef
+            // category labels / ptCount data points / dLbls / externalData) and
+            // renders a visibly compressed chart. The verbatim <w:drawing> also
+            // preserves the host wrapper (wp:extent / effectExtent / anchor) for
+            // free, so the R38-1 / anchor width fix-ups below are unnecessary on
+            // this path. Falls through to the typed path when the carrier can't
+            // resolve every referenced part (return null) — same conservative
+            // fallback as the other inlined-parts carriers.
+            if (word.GetChartVerbatimEmitData(run.Path) is { } chartVerbatim)
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "add",
+                    Parent = paraTargetPath,
+                    Type = "chartpart",
+                    Props = PackInlinedPartsProps(chartVerbatim),
+                });
+                return true;
+            }
             var chartProps = BuildChartProps(spec);
             // BUG-DUMP-R38-1: the chart node's width/height come from
             // WordHandler.Query formatted as 1-decimal CENTIMETRES (cx/cy /

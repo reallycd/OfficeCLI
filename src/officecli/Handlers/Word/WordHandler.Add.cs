@@ -182,6 +182,7 @@ public partial class WordHandler
             "tab" or "tabstop" => AddTab(parent, parentPath, index, properties),
             "ptab" or "positionaltab" => AddPtab(parent, parentPath, index, properties),
             "chart" => AddChart(parent, parentPath, index, properties),
+            "chartpart" => AddChartVerbatim(parent, parentPath, properties),
             "picture" or "image" or "img" => AddPicture(parent, parentPath, index, properties),
             "ole" or "oleobject" or "object" or "embed" => AddOle(parent, parentPath, index, properties),
             "activex" => AddActiveX(parent, parentPath, properties),
