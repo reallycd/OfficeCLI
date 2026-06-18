@@ -609,7 +609,7 @@ public partial class PowerPointHandler
         // Per-element-type positional counters used to build the data-path of each
         // top-level element. We prefer @id= when the element has a cNvPr id (stable
         // across edits), and fall back to positional [N] otherwise.
-        int shapeIdx = 0, picIdx = 0, tableIdx = 0, chartIdx = 0, cxnIdx = 0, groupIdx = 0, oleIdx = 0, model3dIdx = 0;
+        int shapeIdx = 0, picIdx = 0, tableIdx = 0, chartIdx = 0, cxnIdx = 0, groupIdx = 0, oleIdx = 0, model3dIdx = 0, smartartIdx = 0;
         string PathFor(string typeName, OpenXmlElement el, int positional)
             => $"/slide[{slideNum}]/{BuildElementPathSegment(typeName, el, positional)}";
 
@@ -641,6 +641,13 @@ public partial class PowerPointHandler
                     {
                         oleIdx++;
                         RenderOlePlaceholder(sb, gf, slidePart, dataPath: PathFor("ole", gf, oleIdx));
+                    }
+                    else if (gf.Descendants().Any(e =>
+                                 (e.LocalName == "graphicData" && (e.GetAttributes().Any(a => a.LocalName == "uri" && a.Value != null && a.Value.Contains("diagram"))))
+                                 || (e.LocalName == "relIds" && e.NamespaceUri.Contains("diagram"))))
+                    {
+                        smartartIdx++;
+                        RenderSmartArt(sb, gf, slidePart, themeColors, dataPath: PathFor("smartart", gf, smartartIdx));
                     }
                     break;
                 case ConnectionShape cxn:

@@ -2202,6 +2202,135 @@ public partial class PowerPointHandler
     /// the slide canvas is not silently empty and selection has a data-path
     /// to bind to.
     /// </summary>
+    // SmartArt (diagram) GraphicFrame. Prefer rendering the cached dsp drawing
+    // part (the fully laid-out <dsp:sp> shapes). Resolve chain:
+    //   gf → dgm:relIds/@r:dm → DiagramDataPart
+    //   data part → <dsp:dataModelExt @relId> → DiagramPersistLayoutPart (slide rel)
+    //   drawing part → <dsp:spTree> with <dsp:sp> shapes
+    // Each <dsp:sp> is structurally identical to <p:sp>; we namespace-swap the
+    // drawing XML to the presentation namespace, reparse into a ShapeTree, and
+    // reuse RenderShape. dsp shape xfrm offsets are in the diagram's own space,
+    // which (per the dsp drawing contract) shares the graphicFrame's EMU origin,
+    // so we offset each shape by the frame's top-left. When the drawing part is
+    // absent/unresolvable, fall back to a labeled placeholder (mirrors
+    // RenderOlePlaceholder) so the SmartArt is never silently invisible.
+    private void RenderSmartArt(StringBuilder sb, GraphicFrame gf, OpenXmlPart slidePart,
+        Dictionary<string, string> themeColors, string? dataPath = null)
+    {
+        var xfrm = gf.Transform;
+        var fx = xfrm?.Offset?.X?.Value ?? 0;
+        var fy = xfrm?.Offset?.Y?.Value ?? 0;
+        var fcx = xfrm?.Extents?.Cx?.Value ?? 0;
+        var fcy = xfrm?.Extents?.Cy?.Value ?? 0;
+
+        var drawingPart = TryResolveDiagramDrawingPart(gf, slidePart);
+        if (drawingPart != null)
+        {
+            try
+            {
+                string raw;
+                using (var s = drawingPart.GetStream(FileMode.Open, FileAccess.Read))
+                using (var r = new StreamReader(s))
+                    raw = r.ReadToEnd();
+
+                // Swap the dsp namespace to the presentation namespace so <dsp:sp>
+                // (and its nvSpPr/spPr/txBody) reparse as p:sp / Shape, and the
+                // drawing/spTree roots as p:cSld/p:spTree. dsp shares the same
+                // child element local-names + Drawing (a:) children as p:.
+                const string dspNs = "http://schemas.microsoft.com/office/drawing/2008/diagram";
+                const string pNs = "http://schemas.openxmlformats.org/presentationml/2006/main";
+                // Swap both the element prefix (<dsp:spTree> → <p:spTree>, and the
+                // xmlns:dsp= declaration → xmlns:p=) AND the namespace URI. Replacing
+                // only the URI leaves the elements as <dsp:...>, so the spTree
+                // extraction below would never match (dead drawing-render path).
+                var swapped = raw.Replace("dsp:", "p:").Replace(dspNs, pNs);
+
+                // Wrap the spTree in a throwaway slide so reparse yields a Slide we
+                // can walk for Shape children. The dsp drawing root is <dsp:drawing>
+                // with a <dsp:spTree>; after the swap it's <p:drawing>/<p:spTree>.
+                // Extract just the spTree subtree and host it in a minimal p:sld.
+                int treeStart = swapped.IndexOf("<p:spTree", StringComparison.Ordinal);
+                int treeEnd = swapped.LastIndexOf("</p:spTree>", StringComparison.Ordinal);
+                if (treeStart >= 0 && treeEnd > treeStart)
+                {
+                    var treeXml = swapped.Substring(treeStart, treeEnd - treeStart + "</p:spTree>".Length);
+                    var sldXml =
+                        $"<p:sld xmlns:p=\"{pNs}\" " +
+                        "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
+                        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+                        "<p:cSld>" + treeXml + "</p:cSld></p:sld>";
+                    var slide = new Slide(sldXml);
+                    var spTree = slide.CommonSlideData?.ShapeTree;
+                    if (spTree != null)
+                    {
+                        bool emittedAny = false;
+                        bool dpUsed = false;
+                        foreach (var shape in spTree.Elements<Shape>())
+                        {
+                            var sx = shape.ShapeProperties?.Transform2D?.Offset?.X?.Value ?? 0;
+                            var sy = shape.ShapeProperties?.Transform2D?.Offset?.Y?.Value ?? 0;
+                            var scx = shape.ShapeProperties?.Transform2D?.Extents?.Cx?.Value ?? 0;
+                            var scy = shape.ShapeProperties?.Transform2D?.Extents?.Cy?.Value ?? 0;
+                            // The dsp spTree origin maps to the frame origin; offset
+                            // each shape's local position by the frame's top-left.
+                            var pos = (x: fx + sx, y: fy + sy, cx: scx, cy: scy);
+                            RenderShape(sb, shape, slidePart, themeColors, overridePos: pos,
+                                dataPath: dpUsed ? null : dataPath);
+                            dpUsed = true;
+                            emittedAny = true;
+                        }
+                        if (emittedAny) return;
+                    }
+                }
+            }
+            catch { /* fall through to placeholder */ }
+        }
+
+        // Fallback: labeled placeholder so the element is never silently invisible.
+        var leftPt = Units.EmuToPt(fx);
+        var topPt = Units.EmuToPt(fy);
+        var widthPt = Units.EmuToPt(fcx);
+        var heightPt = Units.EmuToPt(fcy);
+        var dpAttr = string.IsNullOrEmpty(dataPath) ? "" : $" data-path=\"{HtmlEncode(dataPath)}\"";
+        sb.AppendLine($"    <div class=\"smartart-placeholder\"{dpAttr} style=\"position:absolute;" +
+            $"left:{leftPt:0.##}pt;top:{topPt:0.##}pt;" +
+            $"width:{widthPt:0.##}pt;height:{heightPt:0.##}pt;" +
+            $"border:2px dashed rgba(108,117,125,0.6);border-radius:4px;" +
+            $"display:flex;align-items:center;justify-content:center;" +
+            $"font:11pt sans-serif;color:#495057;background:rgba(248,249,250,0.7);" +
+            $"overflow:hidden;text-align:center;padding:4px;box-sizing:border-box;\">" +
+            $"SmartArt</div>");
+    }
+
+    // Resolve the dsp cached-drawing part for a SmartArt graphicFrame, or null.
+    private static DiagramPersistLayoutPart? TryResolveDiagramDrawingPart(GraphicFrame gf, OpenXmlPart slidePart)
+    {
+        try
+        {
+            const string dgmNs = "http://schemas.openxmlformats.org/drawingml/2006/diagram";
+            const string dspNs = "http://schemas.microsoft.com/office/drawing/2008/diagram";
+            var relIds = gf.Descendants().FirstOrDefault(e =>
+                e.LocalName == "relIds" && e.NamespaceUri == dgmNs);
+            if (relIds == null) return null;
+            string? dataRid = null;
+            foreach (var a in relIds.GetAttributes())
+                if (a.LocalName == "dm") { dataRid = a.Value; break; }
+            if (string.IsNullOrEmpty(dataRid)) return null;
+
+            if (slidePart.GetPartById(dataRid!) is not DiagramDataPart dataPart) return null;
+            var ext = dataPart.DataModelRoot?.Descendants().FirstOrDefault(e =>
+                e.LocalName == "dataModelExt" && e.NamespaceUri == dspNs);
+            string? drawingRelId = null;
+            if (ext != null)
+                foreach (var a in ext.GetAttributes())
+                    if (a.LocalName == "relId") { drawingRelId = a.Value; break; }
+            if (string.IsNullOrEmpty(drawingRelId)) return null;
+
+            return slidePart.GetPartById(drawingRelId!) as DiagramPersistLayoutPart;
+        }
+        catch { return null; }
+    }
+
     private static void RenderOlePlaceholder(StringBuilder sb, GraphicFrame gf, OpenXmlPart slidePart, string? dataPath = null)
     {
         var xfrm = gf.Transform;
