@@ -463,7 +463,7 @@ public static partial class WordBatchEmitter
             if (TryEmitOleRun(run, paraTargetPath, items, ctx, word)) continue;
             if (TryEmitPictureRun(word, run, paraTargetPath, parentPath, targetIndex, items, ctx, sharedAttachPara)) continue;
             if (TryEmitNoteRefRun(word, run, paraTargetPath, items, ctx)) continue;
-            if (TryEmitMixedBreakRun(word, run, parentPath, items, ctx)) continue;
+            if (TryEmitMixedBreakRun(word, run, parentPath, paraTargetPath, items, ctx)) continue;
             EmitPlainOrHyperlinkRun(run, paraTargetPath, items, ctx, hlBaseline);
         }
         // Flush any SDTs that sit after the last run (or whose rank could not be
@@ -1458,7 +1458,7 @@ public static partial class WordBatchEmitter
     // page/column <w:br>, re-insert the whole <w:r> verbatim via a raw-set
     // append (mirrors the rich-break / ruby / pgNum raw-set fallback), so text
     // AND the break — with full run formatting — survive intact.
-    private static bool TryEmitMixedBreakRun(WordHandler word, DocumentNode run, string parentPath, List<BatchItem> items, BodyEmitContext? ctx)
+    private static bool TryEmitMixedBreakRun(WordHandler word, DocumentNode run, string parentPath, string paraTargetPath, List<BatchItem> items, BodyEmitContext? ctx)
     {
         // Only plain text runs reach here (break-only runs are Type=="break"
         // and consumed by TryEmitBreakRun upstream). Picture/field/etc. runs
@@ -1486,6 +1486,34 @@ public static partial class WordBatchEmitter
         // Surface the deterministic "break lost" warning, then defer.
         if (parentPath != "/body")
         {
+            // BUG-DUMP-R27 (BUG-DUMP-R24-3 follow-up): a SINGLE page/column break
+            // that PRECEDES all text in its run (<w:r><w:br w:type="page"/><w:t>…
+            // </w:t></w:r>) — pervasive in table cells whose leading page break
+            // splits the row across pages — still round-trips in a non-body host:
+            // emit the break as a typed `add pagebreak` on the paragraph's OWN
+            // resolvable path (paraTargetPath = "{parentPath}/p[last()]" works for
+            // cell/header/footer paragraphs, unlike the body-only raw-set xpath),
+            // then return FALSE so the normal text path emits the run's <w:t>
+            // AFTER it — preserving break-then-text order. Mid-run / trailing /
+            // multi-break runs can't be ordered this way and keep warn-and-defer.
+            var brkMatches = System.Text.RegularExpressions.Regex.Matches(
+                rawXml, @"<w:br\b[^>]*\bw:type=""(page|column)""");
+            var firstTextIdx = rawXml.IndexOf("<w:t", StringComparison.Ordinal);
+            if (brkMatches.Count == 1
+                && (firstTextIdx < 0 || brkMatches[0].Index < firstTextIdx))
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "add",
+                    Parent = paraTargetPath,
+                    Type = "pagebreak",
+                    Props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["type"] = brkMatches[0].Groups[1].Value
+                    }
+                });
+                return false; // text path (EmitPlainOrHyperlinkRun) emits <w:t> after
+            }
             ctx?.Warnings.Add(new DocxUnsupportedWarning(
                 Element: "break",
                 Path: run.Path,
