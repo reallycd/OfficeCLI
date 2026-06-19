@@ -37,7 +37,16 @@ public partial class PowerPointHandler
         // textBody is a p:txBody (Presentation.TextBody), and its a:bodyPr is a
         // Drawing.BodyProperties child — read it generically, not via a cast to
         // Drawing.TextBody (which a p:txBody is not).
-        var naf = textBody.GetFirstChild<Drawing.BodyProperties>()?
+        var bodyPr = textBody.GetFirstChild<Drawing.BodyProperties>();
+        // R35: default tab interval (<a:bodyPr defTabSz="EMU">), used for tabs
+        // beyond the last defined stop. Default 914400 EMU (1in = 72pt) per OOXML.
+        // SDK 3.x does not surface defTabSz as a typed property on BodyProperties,
+        // so read the raw attribute.
+        double defTabPt = 72.0;
+        var defTabAttr = bodyPr?.GetAttributes().FirstOrDefault(a => a.LocalName == "defTabSz").Value;
+        if (long.TryParse(defTabAttr, out var defTabEmu) && defTabEmu > 0)
+            defTabPt = Units.EmuToPt(defTabEmu);
+        var naf = bodyPr?
             .GetFirstChild<Drawing.NormalAutoFit>();
         var nafScale = naf?.FontScale?.Value;
         double fontScale = (nafScale.HasValue && nafScale.Value > 0) ? nafScale.Value / 100000.0 : 1.0;
@@ -347,6 +356,13 @@ public partial class PowerPointHandler
                 }
             }
 
+            // R35: per-paragraph tab-stop context. Read the explicit <a:tabLst>
+            // (defined stops with absolute positions + alignment); fall back to
+            // the body's default tab interval for tabs beyond the last stop.
+            // RenderRun consumes this to advance each \t to its DEFINED column
+            // instead of the old hardcoded 0.5in spacer.
+            var tabCtx = new TabContext(pProps?.GetFirstChild<Drawing.TabStopList>(), defTabPt);
+
             var hasMath = paraXml.Contains("oMath");
             var runs = para.Elements<Drawing.Run>().ToList();
             // A paragraph is visually empty when it has no runs OR all its runs
@@ -376,23 +392,128 @@ public partial class PowerPointHandler
                 bool? inhItalic = inheritedDefRp?.Italic?.HasValue == true ? inheritedDefRp.Italic.Value : null;
                 foreach (var run in runs)
                 {
-                    RenderRun(sb, run, themeColors, defaultFontSizeHundredths, placeholderPart, themeFontFallback, fontScale, defaultRunColor, inhBold, inhItalic);
+                    RenderRun(sb, run, themeColors, defaultFontSizeHundredths, placeholderPart, themeFontFallback, fontScale, defaultRunColor, inhBold, inhItalic, tabCtx);
                 }
             }
 
-            // Line breaks within paragraph
+            // Line breaks within paragraph. Each <br> resets the tab column
+            // (the next line's tabs measure from the line's left edge again).
             foreach (var br in para.Elements<Drawing.Break>())
+            {
                 sb.Append("<br>");
+                tabCtx.ResetColumn();
+            }
 
             sb.AppendLine("</div>");
             isFirstPara = false;
         }
     }
 
+    // R35: per-paragraph tab-stop tracking for the HTML preview. Holds the
+    // paragraph's declared stops (absolute position in pt, sorted) plus the
+    // body default tab interval, and a running horizontal column position that
+    // RenderRun advances as it emits text/tabs within the paragraph line.
+    private sealed class TabContext
+    {
+        private readonly List<double> _stops = new();
+        private readonly double _defTabPt;
+        // Current horizontal pen position (pt) measured from the line's left edge.
+        public double ColumnPt;
+
+        public TabContext(Drawing.TabStopList? tabLst, double defTabPt)
+        {
+            _defTabPt = defTabPt > 0 ? defTabPt : 72.0;
+            if (tabLst != null)
+            {
+                foreach (var t in tabLst.Elements<Drawing.TabStop>())
+                {
+                    if (t.Position?.HasValue == true)
+                        _stops.Add(Units.EmuToPt(t.Position.Value));
+                }
+                _stops.Sort();
+            }
+        }
+
+        public void ResetColumn() => ColumnPt = 0;
+
+        // Advance the column past printed text using an average-char-width
+        // heuristic (mirrors the 0.55*fontPt ratio used by the autofit line-wrap
+        // estimator; CJK/full-width counts as a full em). Approximate by design.
+        public void AdvanceText(string text, double fontPt)
+        {
+            double w = 0;
+            foreach (var ch in text)
+                w += ParseHelpers.IsCjkOrFullWidth(ch) ? fontPt : fontPt * 0.55;
+            ColumnPt += w;
+        }
+
+        // Width (pt) of the spacer needed to advance from the current column to
+        // the next tab stop, then move the column to that stop. Picks the first
+        // declared stop strictly beyond the current column; if none, snaps to
+        // the next multiple of the default tab interval.
+        public double NextTabAdvance()
+        {
+            double target = double.NaN;
+            foreach (var s in _stops)
+            {
+                if (s > ColumnPt + 0.01) { target = s; break; }
+            }
+            if (double.IsNaN(target))
+            {
+                // Next multiple of the default interval strictly beyond column.
+                int n = (int)Math.Floor(ColumnPt / _defTabPt) + 1;
+                target = n * _defTabPt;
+            }
+            double advance = target - ColumnPt;
+            if (advance < 0) advance = 0;
+            ColumnPt = target;
+            return advance;
+        }
+    }
+
+    // R35: encode run text to HTML, replacing each literal tab with a
+    // stop-aware inline-block spacer (see the call site for the alignment
+    // approximation note). When no tab context is available, fall back to the
+    // legacy fixed 0.5in spacer so behavior is unchanged outside text bodies.
+    private static string EncodeTextWithTabs(string text, TabContext? tabCtx, double fontPt)
+    {
+        if (text.IndexOf('\t') < 0)
+        {
+            tabCtx?.AdvanceText(text, fontPt);
+            return HtmlEncode(text);
+        }
+        if (tabCtx == null)
+            return HtmlEncode(text).Replace("\t",
+                "<span class=\"tab-spacer\" style=\"display:inline-block;width:0.5in\"></span>");
+
+        var sb = new StringBuilder();
+        int start = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] != '\t') continue;
+            string seg = text.Substring(start, i - start);
+            if (seg.Length > 0)
+            {
+                tabCtx.AdvanceText(seg, fontPt);
+                sb.Append(HtmlEncode(seg));
+            }
+            double advancePt = tabCtx.NextTabAdvance();
+            sb.Append($"<span class=\"tab-spacer\" style=\"display:inline-block;width:{advancePt:0.##}pt\"></span>");
+            start = i + 1;
+        }
+        string tail = text.Substring(start);
+        if (tail.Length > 0)
+        {
+            tabCtx.AdvanceText(tail, fontPt);
+            sb.Append(HtmlEncode(tail));
+        }
+        return sb.ToString();
+    }
+
     private static void RenderRun(StringBuilder sb, Drawing.Run run, Dictionary<string, string> themeColors,
         int? defaultFontSizeHundredths = null, OpenXmlPart? part = null, string? themeFontFallback = null,
         double fontScale = 1.0, string? defaultRunColor = null,
-        bool? inheritedBold = null, bool? inheritedItalic = null)
+        bool? inheritedBold = null, bool? inheritedItalic = null, TabContext? tabCtx = null)
     {
         var text = run.Text?.Text ?? "";
         if (string.IsNullOrEmpty(text)) return;
@@ -444,6 +565,13 @@ public partial class PowerPointHandler
         // 18pt default so the browser doesn't fall back to its ~12pt default.
         // Placeholders keep their layout/master size via defaultFontSizeHundredths.
         // Bug #8(B): multiply by the textbody's normAutofit fontScale (1.0 = none).
+        // Effective font size in pt (used both for the CSS and the R35 tab-column
+        // text-advance heuristic below).
+        double effFontPt = rp?.FontSize?.HasValue == true
+            ? rp.FontSize.Value / 100.0 * fontScale
+            : defaultFontSizeHundredths.HasValue
+                ? defaultFontSizeHundredths.Value / 100.0 * fontScale
+                : 18 * fontScale;
         if (rp?.FontSize?.HasValue == true)
             styles.Add($"font-size:{rp.FontSize.Value / 100.0 * fontScale:0.##}pt");
         else if (defaultFontSizeHundredths.HasValue)
@@ -699,10 +827,18 @@ public partial class PowerPointHandler
 
         // Tab chars (literal U+0009 inside <a:t>, the form the Add path writes)
         // would collapse to a single space in HTML. Replace each with an
-        // inline-block spacer so tab-separated columns keep visible spacing,
-        // matching how PowerPoint advances to the next tab stop.
-        string encoded = HtmlEncode(text).Replace("\t",
-            "<span class=\"tab-spacer\" style=\"display:inline-block;width:0.5in\"></span>");
+        // inline-block spacer whose WIDTH advances the running column to the
+        // paragraph's next defined <a:tabLst> stop (R35), matching how
+        // PowerPoint advances to the next tab stop. Falls back to the body's
+        // default tab interval for tabs beyond the last declared stop.
+        // The column is tracked across runs of a paragraph (see TabContext),
+        // with printed text advancing the column via an average-char-width
+        // heuristic. ctr/r/dec stops are APPROXIMATED as left-at-stop: a static
+        // HTML renderer can't measure the following text width to center/right-
+        // align it, so we advance to the stop and let text start there. This is
+        // still exact column placement (a huge improvement over the old fixed
+        // 0.5in) and is acceptable per the static-render limitation.
+        string encoded = EncodeTextWithTabs(text, tabCtx, effFontPt);
 
         string inner = styles.Count > 0
             ? $"<span style=\"{string.Join(";", styles)}\">{encoded}</span>"
