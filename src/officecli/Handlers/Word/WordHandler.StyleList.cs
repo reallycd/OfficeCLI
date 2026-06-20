@@ -917,7 +917,9 @@ public partial class WordHandler
     private void AdvanceOrderedCounter(OrderedListNumberingState st, int numId, int? absId, int ilvl)
     {
         var seed = SeedOrderedStart(st, numId, absId, ilvl);
-        st.OlCountPerLevel[ilvl] = st.OlCountPerLevel.GetValueOrDefault(ilvl, seed) + 1;
+        var prev = st.OlCountPerLevel.GetValueOrDefault(ilvl, seed);
+        // Saturate at int.MaxValue to avoid overflow when w:start is INT_MAX.
+        st.OlCountPerLevel[ilvl] = prev == int.MaxValue ? int.MaxValue : prev + 1;
         st.MultiLevelCounters[ilvl] = st.OlCountPerLevel[ilvl];
         for (int lk = ilvl + 1; lk <= 8; lk++)
         {
