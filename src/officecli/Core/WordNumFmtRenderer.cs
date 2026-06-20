@@ -29,11 +29,18 @@ public static class WordNumFmtRenderer
             case "ordinaltext": return ToEnglishOrdinal(n);
             case "chinesecounting":
             case "japanesecounting":
-                return ToChineseCounting(n, formal: false);
             case "chinesecountingthousand":
+                // "Counting" / "CountingThousand" render ordinary hanzi
+                // (一二三, 萬 at 10000) in real Word — verified via officeshot.
+                // Only the "Legal" formats are the financial/capital glyphs
+                // (壹貳參); see chineseLegalSimplified / koreanLegal below.
+                return ToChineseCounting(n, formal: false);
             case "taiwanesecounting":
             case "taiwanesecountingthousand":
-                return ToChineseCounting(n, formal: true);
+                // Traditional ordinary hanzi (一二三 … 十百千) — identical to
+                // simplified except 10000 uses traditional 萬 (vs simplified
+                // 万). Verified ordinary (not financial) via officeshot.
+                return ToTraditionalCounting(n);
             case "chineselegalsimplified":
                 return ToChineseLegalSimplified(n);
             case "ideographdigital":
@@ -191,6 +198,11 @@ public static class WordNumFmtRenderer
     private static string ToChineseLegalSimplified(int n)
         => BuildCjkPositional(n, CnLegalSimplDigits, '拾', '佰', '仟', '万');
 
+    /// <summary>Traditional ordinary counting: ordinary hanzi digits/units but
+    /// traditional 萬 for the 10000 place (taiwaneseCounting family).</summary>
+    private static string ToTraditionalCounting(int n)
+        => BuildCjkPositional(n, CnDigits, '十', '百', '千', '萬');
+
     private static string BuildCjkPositional(int n, char[] digits, char shi, char bai, char qian, char wan)
     {
         if (n == 0) return digits[0].ToString();
@@ -321,8 +333,6 @@ public static class WordNumFmtRenderer
 
     private static readonly char[] KoreanSinoDigits = // 〇일이삼사오육칠팔구
         { '〇', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구' };
-    private static readonly string[] KoreanNativeCounting = // 하나..열
-        { "", "하나", "둘", "셋", "넷", "다섯", "여섯", "일곱", "여덟", "아홉", "열" };
 
     /// <summary>Positional sino-korean digits: 1 → 일, 25 → 이오, 100 → 일〇〇.</summary>
     private static string ToKoreanDigital(int n)
@@ -334,9 +344,11 @@ public static class WordNumFmtRenderer
         return sb.ToString();
     }
 
-    /// <summary>Native Korean counting 1..10, beyond that falls back to sino-korean digital.</summary>
+    /// <summary>Korean counting renders sino-korean digits (일이삼 …) — the
+    /// same glyphs as koreanDigital — in real Word, NOT native counting words
+    /// (하나/둘/셋). Verified via officeshot.</summary>
     private static string ToKoreanCounting(int n)
-        => n is >= 1 and <= 10 ? KoreanNativeCounting[n] : ToKoreanDigital(n);
+        => ToKoreanDigital(n);
 
     /// <summary>Korean legal (formal) numerals share the Chinese formal hanzi set.</summary>
     private static string ToKoreanLegal(int n)
