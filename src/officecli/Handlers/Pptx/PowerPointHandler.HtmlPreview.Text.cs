@@ -110,13 +110,15 @@ public partial class PowerPointHandler
                     "ctr" => "center",
                     "r" => "right",
                     "just" => "justify",
+                    "justLow" => "justify",   // Justify Low (Arabic kashida): like just
                     "dist" => "justify",
+                    "thaiDist" => "justify",  // Thai Distributed: like dist
                     _ => "left"
                 };
                 paraStyles.Add($"text-align:{align}");
-                // algn="dist" stretches EVERY line — including the last — to the
+                // dist / thaiDist stretch EVERY line — including the last — to the
                 // full text-box width (inter-word, not inter-character for Latin).
-                if (algnInner == "dist")
+                if (algnInner == "dist" || algnInner == "thaiDist")
                     paraStyles.Add("text-align-last:justify");
             }
 
