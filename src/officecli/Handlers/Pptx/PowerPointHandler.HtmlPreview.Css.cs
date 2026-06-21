@@ -1547,6 +1547,29 @@ public partial class PowerPointHandler
              + $"100% 50%,{P(headStartX)}% 100%,{P(headStartX)}% {P(tailBottom)}%,0 {P(tailBottom)}%,{P(notchX)}% 50%)";
     }
 
+    /// <summary>
+    /// upDownArrow clip-path honoring avLst. adj1 = shaft width as a fraction of
+    /// WIDTH (default 50000); adj2 = each arrowhead's length as a fraction of the
+    /// SHORTER side (default 50000). The arrowhead base always spans the full
+    /// width; the arrowhead depth (in %height) clamps to 50% so the two heads meet
+    /// (a diamond) rather than overflow. The old hardcoded polygon ignored both.
+    /// Mapping verified empirically against real PowerPoint.
+    /// </summary>
+    private static string UpDownArrowPolygon(long widthEmu, long heightEmu, Drawing.PresetGeometry? presetGeom)
+    {
+        var adj1 = Math.Clamp(ReadAdjValueCss(presetGeom, 0, 50000), 0, 100000);
+        var adj2 = Math.Clamp(ReadAdjValueCss(presetGeom, 1, 50000), 0, 100000);
+        var minSide = Math.Min(widthEmu, heightEmu);
+        var depthY = Math.Clamp((double)adj2 / 100000.0 * minSide / heightEmu * 100.0, 0, 50);
+        var shaftHalf = adj1 / 2000.0;
+        var shaftL = Math.Clamp(50 - shaftHalf, 0, 50);
+        var shaftR = Math.Clamp(50 + shaftHalf, 50, 100);
+        string P(double d) => d.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        var d2 = 100 - depthY;
+        return $"clip-path:polygon(50% 0,100% {P(depthY)}%,{P(shaftR)}% {P(depthY)}%,{P(shaftR)}% {P(d2)}%,"
+             + $"100% {P(d2)}%,50% 100%,0 {P(d2)}%,{P(shaftL)}% {P(d2)}%,{P(shaftL)}% {P(depthY)}%,0 {P(depthY)}%)";
+    }
+
     private static string PresetGeometryToCss(string preset, long widthEmu, long heightEmu,
         Drawing.PresetGeometry? presetGeom)
     {
@@ -1600,6 +1623,8 @@ public partial class PowerPointHandler
             return FramePolygon(widthEmu, heightEmu, presetGeom);
         if (preset == "notchedRightArrow")
             return NotchedRightArrowPolygon(widthEmu, heightEmu, presetGeom);
+        if (preset == "upDownArrow" && widthEmu > 0 && heightEmu > 0)
+            return UpDownArrowPolygon(widthEmu, heightEmu, presetGeom);
         // corner (L-shape): adj1 = bottom (horizontal) arm height %, adj2 = left
         // (vertical) arm width %; both default 50000. Inner corner at (adj2, 100-adj1).
         // The old hardcoded 50/50 ignored both, so a thin-armed L looked fat.
@@ -1737,7 +1762,6 @@ public partial class PowerPointHandler
             // Arrows
             "rightArrow" => "clip-path:polygon(0 20%,70% 20%,70% 0,100% 50%,70% 100%,70% 80%,0 80%)",
             "leftRightArrow" => "clip-path:polygon(0 50%,15% 20%,15% 35%,85% 35%,85% 20%,100% 50%,85% 80%,85% 65%,15% 65%,15% 80%)",
-            "upDownArrow" => "clip-path:polygon(50% 0,80% 15%,65% 15%,65% 85%,80% 85%,50% 100%,20% 85%,35% 85%,35% 15%,20% 15%)",
             "bentArrow" => "clip-path:polygon(0 20%,60% 20%,60% 0,100% 35%,60% 70%,60% 50%,20% 50%,20% 100%,0 100%)",
             "chevron" => "clip-path:polygon(0 0,80% 0,100% 50%,80% 100%,0 100%,20% 50%)",
             "stripedRightArrow" => "clip-path:polygon(10% 20%,12% 20%,12% 80%,10% 80%,10% 20%,15% 20%,70% 20%,70% 0,100% 50%,70% 100%,70% 80%,15% 80%)",
