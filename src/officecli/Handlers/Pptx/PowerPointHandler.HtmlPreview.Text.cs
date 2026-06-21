@@ -557,7 +557,9 @@ public partial class PowerPointHandler
     // RenderRun advances as it emits text/tabs within the paragraph line.
     private sealed class TabContext
     {
-        private readonly List<double> _stops = new();
+        // Each declared stop keeps its alignment (l|ctr|r|dec) — center/right tabs
+        // anchor the following text segment at the stop column, not just advance to it.
+        private readonly List<(double pos, char algn)> _stops = new();
         private readonly double _defTabPt;
         // Current horizontal pen position (pt) measured from the line's left edge.
         public double ColumnPt;
@@ -570,46 +572,39 @@ public partial class PowerPointHandler
                 foreach (var t in tabLst.Elements<Drawing.TabStop>())
                 {
                     if (t.Position?.HasValue == true)
-                        _stops.Add(Units.EmuToPt(t.Position.Value));
+                    {
+                        var a = t.Alignment?.HasValue == true ? t.Alignment.InnerText : "l";
+                        var algn = a switch { "ctr" => 'c', "r" => 'r', "dec" => 'd', _ => 'l' };
+                        _stops.Add((Units.EmuToPt(t.Position.Value), algn));
+                    }
                 }
-                _stops.Sort();
+                _stops.Sort((x, y) => x.pos.CompareTo(y.pos));
             }
         }
 
         public void ResetColumn() => ColumnPt = 0;
 
-        // Advance the column past printed text using an average-char-width
-        // heuristic (mirrors the 0.55*fontPt ratio used by the autofit line-wrap
-        // estimator; CJK/full-width counts as a full em). Approximate by design.
-        public void AdvanceText(string text, double fontPt)
+        // Approximate text width (pt) using the same average-char-width heuristic
+        // as the autofit line-wrap estimator (0.55*fontPt; CJK/full-width = 1 em).
+        public static double MeasureText(string text, double fontPt)
         {
             double w = 0;
             foreach (var ch in text)
                 w += ParseHelpers.IsCjkOrFullWidth(ch) ? fontPt : fontPt * 0.55;
-            ColumnPt += w;
+            return w;
         }
 
-        // Width (pt) of the spacer needed to advance from the current column to
-        // the next tab stop, then move the column to that stop. Picks the first
-        // declared stop strictly beyond the current column; if none, snaps to
-        // the next multiple of the default tab interval.
-        public double NextTabAdvance()
+        // Advance the column past printed text.
+        public void AdvanceText(string text, double fontPt) => ColumnPt += MeasureText(text, fontPt);
+
+        // Resolve the next tab stop strictly beyond the current column (declared
+        // stop first, else the next default-interval multiple) and its alignment.
+        public (double target, char algn) NextTab()
         {
-            double target = double.NaN;
             foreach (var s in _stops)
-            {
-                if (s > ColumnPt + 0.01) { target = s; break; }
-            }
-            if (double.IsNaN(target))
-            {
-                // Next multiple of the default interval strictly beyond column.
-                int n = (int)Math.Floor(ColumnPt / _defTabPt) + 1;
-                target = n * _defTabPt;
-            }
-            double advance = target - ColumnPt;
-            if (advance < 0) advance = 0;
-            ColumnPt = target;
-            return advance;
+                if (s.pos > ColumnPt + 0.01) return s;
+            int n = (int)Math.Floor(ColumnPt / _defTabPt) + 1;
+            return (n * _defTabPt, 'l');
         }
     }
 
@@ -639,8 +634,26 @@ public partial class PowerPointHandler
                 tabCtx.AdvanceText(seg, fontPt);
                 sb.Append(HtmlEncode(seg));
             }
-            double advancePt = tabCtx.NextTabAdvance();
+            var (target, algn) = tabCtx.NextTab();
+            // For center/right tabs, the text segment that FOLLOWS this tab (up to
+            // the next tab or end of this run) must be anchored at the stop column,
+            // not merely advanced to it. Look ahead within this run to measure it and
+            // place its START so the segment is centered on / ends at the column.
+            // (Cross-run segments degrade to a left tab — segW measures 0 here.)
+            double anchorStart = target;
+            if (algn is 'c' or 'r')
+            {
+                int next = text.IndexOf('\t', i + 1);
+                string nextSeg = text.Substring(i + 1, (next < 0 ? text.Length : next) - (i + 1));
+                double segW = TabContext.MeasureText(nextSeg, fontPt);
+                anchorStart = algn == 'c' ? target - segW / 2 : target - segW;
+            }
+            double advancePt = anchorStart - tabCtx.ColumnPt;
+            if (advancePt < 0) advancePt = 0;
             sb.Append($"<span class=\"tab-spacer\" style=\"display:inline-block;width:{advancePt:0.##}pt\"></span>");
+            // Move the pen to where the following segment now begins so subsequent
+            // text/tabs measure from the right place.
+            tabCtx.ColumnPt += advancePt;
             start = i + 1;
         }
         string tail = text.Substring(start);
