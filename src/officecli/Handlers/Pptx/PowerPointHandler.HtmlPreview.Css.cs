@@ -1704,6 +1704,43 @@ public partial class PowerPointHandler
              + $"0 {P(yb)}%,0 {P(yt)}%,{P(xl)}% {P(yt)}%)";
     }
 
+    // mathMultiply: a diagonal multiplication X pointing to the four corners. adj1
+    // (default 23520, pinned [0,51965]) is the arm thickness: th = ss*adj1/100000.
+    // The 12 vertices come straight from the ECMA-376 guide chain (atan2 diagonal
+    // angle, half-diagonal arm length rw = dl*0.51965). The old literal was a fixed
+    // corner-X that ignored adj1 (and was a touch too wide). Even at max adj1 all
+    // vertices stay inside the box. Formula verified against the ECMA definition and
+    // real PowerPoint (default + adj1=40000).
+    private static string MathMultiplyCss(long widthEmu, long heightEmu, Drawing.PresetGeometry? presetGeom)
+    {
+        double w = widthEmu, h = heightEmu;
+        var a1 = Math.Clamp(ReadAdjValueCss(presetGeom, 0, 23520), 0, 51965);
+        double ss = Math.Min(w, h);
+        double th = ss * a1 / 100000.0;
+        double a = Math.Atan2(h, w);
+        double sa = Math.Sin(a), ca = Math.Cos(a), ta = Math.Tan(a);
+        double hc = w / 2, vc = h / 2;
+        double dl = Math.Sqrt(w * w + h * h);
+        double rw = dl * 51965 / 100000.0;
+        double lM = dl - rw;
+        double xM = ca * lM / 2, yM = sa * lM / 2;
+        double dxAM = sa * th / 2, dyAM = ca * th / 2;
+        double xA = xM - dxAM, yA = yM + dyAM;
+        double xB = xM + dxAM, yB = yM - dyAM;
+        double yC = (hc - xB) * ta + yB;
+        double xD = w - xB, xE = w - xA;
+        double yFE = vc - yA, xFE = yFE / ta;
+        double xF = xE - xFE, xL = xA + xFE;
+        double yG = h - yA, yH = h - yB, yI = h - yC;
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        string X(double v) => (v / w * 100).ToString("0.##", ci);
+        string Y(double v) => (v / h * 100).ToString("0.##", ci);
+        string Pt(double x, double y) => $"{X(x)}% {Y(y)}%";
+        return "clip-path:polygon("
+             + $"{Pt(xA, yA)},{Pt(xB, yB)},{Pt(hc, yC)},{Pt(xD, yB)},{Pt(xE, yA)},{Pt(xF, vc)},"
+             + $"{Pt(xE, yG)},{Pt(xD, yH)},{Pt(hc, yI)},{Pt(xB, yH)},{Pt(xA, yG)},{Pt(xL, vc)})";
+    }
+
     private static string PresetGeometryToCss(string preset, long widthEmu, long heightEmu,
         Drawing.PresetGeometry? presetGeom)
     {
@@ -1778,6 +1815,8 @@ public partial class PowerPointHandler
             return MoonPolygon(presetGeom);
         if (preset == "mathPlus" && widthEmu > 0 && heightEmu > 0)
             return MathPlusCss(widthEmu, heightEmu, presetGeom);
+        if (preset == "mathMultiply" && widthEmu > 0 && heightEmu > 0)
+            return MathMultiplyCss(widthEmu, heightEmu, presetGeom);
         // corner (L-shape): adj1 = bottom (horizontal) arm height %, adj2 = left
         // (vertical) arm width %; both default 50000. Inner corner at (adj2, 100-adj1).
         // The old hardcoded 50/50 ignored both, so a thin-armed L looked fat.
