@@ -887,6 +887,13 @@ public partial class WordHandler
         public readonly Dictionary<int, int> OlCountPerLevel = new();
         public readonly Dictionary<int, int> MultiLevelCounters = new();
         public readonly Dictionary<int, Dictionary<int, int>> AbsNumLevelCounters = new();
+        // Levels of the active num that carry an un-consumed per-instance
+        // <w:startOverride> (or override-embedded <w:lvl><w:start>). Re-armed on
+        // every numId switch; a level fires its override the FIRST time it is
+        // directly advanced under that num, then is removed. This lets the
+        // override win over abstractNum continuation even when a deeper item
+        // appeared first and carried the level over (ECMA-376 §17.9.7).
+        public readonly HashSet<int> PendingInstanceOverride = new();
     }
 
     /// <summary>
@@ -1022,9 +1029,21 @@ public partial class WordHandler
             }
         }
         var seed = SeedOrderedStart(st, numId, absId, ilvl);
-        var prev = st.OlCountPerLevel.GetValueOrDefault(ilvl, seed);
-        // Saturate at int.MaxValue to avoid overflow when w:start is INT_MAX.
-        st.OlCountPerLevel[ilvl] = prev == int.MaxValue ? int.MaxValue : prev + 1;
+        // A per-instance startOverride fires on the FIRST direct advance of its
+        // level under the new num — taking the override value verbatim (a
+        // restart), not continuing from the carried-over count. The override is
+        // consumed once; later advances of the same level continue normally.
+        if (st.PendingInstanceOverride.Remove(ilvl)
+            && GetNumInstanceOverrideStart(numId, ilvl) is int ovrStart)
+        {
+            st.OlCountPerLevel[ilvl] = ovrStart;
+        }
+        else
+        {
+            var prev = st.OlCountPerLevel.GetValueOrDefault(ilvl, seed);
+            // Saturate at int.MaxValue to avoid overflow when w:start is INT_MAX.
+            st.OlCountPerLevel[ilvl] = prev == int.MaxValue ? int.MaxValue : prev + 1;
+        }
         st.MultiLevelCounters[ilvl] = st.OlCountPerLevel[ilvl];
         for (int lk = ilvl + 1; lk <= 8; lk++)
         {
@@ -1184,6 +1203,13 @@ public partial class WordHandler
             st.OlCountPerLevel.Clear();
             st.MultiLevelCounters.Clear();
             st.CurrentNumId = numId.Value;
+            // Re-arm per-instance startOverrides for the new num: each overridden
+            // level fires its override the next time it is DIRECTLY advanced,
+            // even if a deeper item carried the level over first.
+            st.PendingInstanceOverride.Clear();
+            for (int lv = 0; lv <= 8; lv++)
+                if (GetNumInstanceOverrideStart(numId.Value, lv).HasValue)
+                    st.PendingInstanceOverride.Add(lv);
         }
 
         var absId = GetAbstractNumId(numId.Value);

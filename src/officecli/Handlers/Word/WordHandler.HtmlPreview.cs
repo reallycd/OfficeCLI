@@ -2039,6 +2039,20 @@ public partial class WordHandler
                     var picBulletUri = listStyle == "bullet" ? GetPicBulletDataUri(numId, ilvl) : null;
                     var tag = listStyle == "bullet" ? "ul" : "ol";
 
+                    // Re-arm per-instance startOverrides whenever the active num
+                    // changes (including the first list): the override fires on
+                    // the first DIRECT advance of its level under the new num,
+                    // even when a deeper item carried the level over. Mirrors the
+                    // text path (GetListPrefix), which arms on every CurrentNumId
+                    // change — both feed the same AdvanceOrderedCounter.
+                    if (numId != currentNumId)
+                    {
+                        olState.PendingInstanceOverride.Clear();
+                        for (int lv = 0; lv <= 8; lv++)
+                            if (GetNumInstanceOverrideStart(numId, lv).HasValue)
+                                olState.PendingInstanceOverride.Add(lv);
+                    }
+
                     // When numId changes, decide: nesting or new list
                     if (currentNumId != null && numId != currentNumId)
                     {
