@@ -191,17 +191,23 @@ public partial class PowerPointHandler
                 //   eaVert  → East-Asian top-to-bottom, upright glyphs
                 //   wordArtVert → stacked upright (approximate with upright)
                 var vertDir = tcPr?.Vertical?.HasValue == true ? tcPr.Vertical.InnerText : null;
+                string? cellTextTransform = null;
                 if (vertDir != null)
                 {
                     var wm = vertDir switch
                     {
                         "vert" => "vertical-rl",
-                        "vert270" => "vertical-rl;transform:rotate(180deg)",
+                        "vert270" => "vertical-rl",
                         "eaVert" => "vertical-rl;text-orientation:upright",
                         "wordArtVert" or "wordArtVertRtl" => "vertical-rl;text-orientation:upright",
                         _ => null,
                     };
                     if (wm != null) cellStyles.Add($"writing-mode:{wm}");
+                    // vert270 = 90° CCW (bottom-to-top): vertical-rl gives 90° CW, so flip
+                    // 180°. CSS `transform` is IGNORED on a display:table-cell <td>, so the
+                    // rotation must go on an inner wrapper around the cell content, not the
+                    // <td>'s own style (which is why vert270 previously rendered like vert).
+                    if (vertDir == "vert270") cellTextTransform = "rotate(180deg)";
                 }
 
                 // Cell text formatting
@@ -376,6 +382,9 @@ public partial class PowerPointHandler
                     diagOverlay = $"<svg class=\"cell-diag\" width=\"100%\" height=\"100%\" style=\"position:absolute;inset:0;pointer-events:none;overflow:visible\" preserveAspectRatio=\"none\">{diagLines}</svg>";
                 }
 
+                // vert270 rotation must wrap the content (transform is inert on the <td>).
+                if (cellTextTransform != null)
+                    cellHtml = $"<div style=\"transform:{cellTextTransform};display:inline-block\">{cellHtml}</div>";
                 sb.AppendLine($"          <td{spanAttrs}{styleStr}>{diagOverlay}{cellHtml}</td>");
                 colIndex += Math.Max((int)(gridSpan ?? 1), 1);
             }
