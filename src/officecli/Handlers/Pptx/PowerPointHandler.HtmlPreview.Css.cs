@@ -2056,6 +2056,24 @@ public partial class PowerPointHandler
              + $"{P(w, y4)},{P(x6, h)},{P(x6, y5)},{P(x1, y5)},{P(x1, h)})";
     }
 
+    // nonIsoscelesTrapezoid: a trapezoid (wide bottom, narrow top) whose two top vertices
+    // are inset independently. Was missing from the switch (rendered as a plain rectangle).
+    // adj1=left inset, adj2=right inset (both default 25000). Insets are ABSOLUTE lengths
+    // (ss-based), so for a non-square shape they are NOT simply adj% of width. 4 straight-
+    // edge vertices, single connected. Verified against real PowerPoint (default + asymmetric).
+    private static string NonIsoscelesTrapezoidPolygon(long widthEmu, long heightEmu, Drawing.PresetGeometry? presetGeom)
+    {
+        double w = widthEmu, h = heightEmu, ss = Math.Min(w, h);
+        double maxAdj = 50000.0 * w / ss;
+        var a1 = Math.Clamp(ReadAdjValueCss(presetGeom, 0, 25000), 0, maxAdj);
+        var a2 = Math.Clamp(ReadAdjValueCss(presetGeom, 1, 25000), 0, maxAdj);
+        double x2 = ss * a1 / 100000.0;
+        double x3 = w - ss * a2 / 100000.0;
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        string X(double v) => (v / w * 100).ToString("0.##", ci);
+        return $"clip-path:polygon(0 100%,{X(x2)}% 0,{X(x3)}% 0,100% 100%)";
+    }
+
     private static string PresetGeometryToCss(string preset, long widthEmu, long heightEmu,
         Drawing.PresetGeometry? presetGeom)
     {
@@ -2154,6 +2172,8 @@ public partial class PowerPointHandler
             return LeftUpArrowPolygon(widthEmu, heightEmu, presetGeom);
         if (preset == "leftRightUpArrow" && widthEmu > 0 && heightEmu > 0)
             return LeftRightUpArrowPolygon(widthEmu, heightEmu, presetGeom);
+        if (preset == "nonIsoscelesTrapezoid" && widthEmu > 0 && heightEmu > 0)
+            return NonIsoscelesTrapezoidPolygon(widthEmu, heightEmu, presetGeom);
         // corner (L-shape): adj1 = bottom (horizontal) arm height %, adj2 = left
         // (vertical) arm width %; both default 50000. Inner corner at (adj2, 100-adj1).
         // The old hardcoded 50/50 ignored both, so a thin-armed L looked fat.
