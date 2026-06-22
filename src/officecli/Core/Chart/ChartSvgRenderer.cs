@@ -1742,7 +1742,9 @@ internal partial class ChartSvgRenderer
     public void RenderAreaChartSvg(StringBuilder sb, List<(string name, double[] values)> series,
         string[] categories, List<string> colors, int ox, int oy, int pw, int ph, bool stacked = false,
         bool percent = false,
-        double? axisMin = null, double? axisMax = null, double? majorUnit = null, string? valNumFmt = null)
+        double? axisMin = null, double? axisMax = null, double? majorUnit = null, string? valNumFmt = null,
+        bool showDataLabels = false, bool showVal = true, bool showSerName = false,
+        bool showCatName = false, string? dataLabelNumFmt = null)
     {
         if (series.Count == 0) return;
         var catCount = Math.Max(categories.Length, series.Max(s => s.values.Length));
@@ -1898,6 +1900,32 @@ internal partial class ChartSvgRenderer
                 EmitVAxisTick(sb, ox, ty, ValMajorTickMark!);
             sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{ty:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\" text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
         }
+
+        // Data labels at each vertex (parity with bar/line/pie). The label TEXT is
+        // the original per-series value; the label POSITION sits at the plotted
+        // vertex — for stacked/percent that is the cumulative top, for non-stacked
+        // the raw value. Emitted last so labels sit above fills and gridlines.
+        if (showDataLabels)
+        for (int s = 0; s < series.Count; s++)
+            for (int c = 0; c < catCount; c++)
+            {
+                var rawVal = c < series[s].values.Length ? series[s].values[c] : 0;
+                var plotVal = stacked ? cumulative[s, c] : rawVal;
+                // For percentStacked the displayed value is the original datum,
+                // not the normalized 0..100 stack height.
+                var textVal = rawVal;
+                var px = ox + (catCount > 1 ? (double)pw * c / (catCount - 1) : pw / 2.0);
+                var py = stacked ? ClampY(plotVal) : DataToY(plotVal);
+                var valuePart = !string.IsNullOrEmpty(dataLabelNumFmt) ? FormatAxisValue(textVal, dataLabelNumFmt)
+                    : !string.IsNullOrEmpty(valNumFmt) ? FormatAxisValue(textVal, valNumFmt)
+                    : textVal % 1 == 0 ? $"{(int)textVal}" : $"{textVal:0.#}";
+                var lparts = new List<string>();
+                if (showSerName && s < series.Count) lparts.Add(series[s].name);
+                if (showCatName && c < categories.Length) lparts.Add(categories[c]);
+                if (showVal) lparts.Add(valuePart);
+                var vlabel = string.Join(", ", lparts);
+                sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{px:0.#}\" y=\"{py - 6:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\">{HtmlEncode(vlabel)}</text>");
+            }
     }
 
     public void RenderRadarChartSvg(StringBuilder sb, List<(string name, double[] values)> series,
@@ -3884,7 +3912,9 @@ internal partial class ChartSvgRenderer
                     info.IsStacked, info.RotateX, info.RotateY);
             else
                 RenderAreaChartSvg(sb, info.Series, info.Categories, info.Colors, marginLeft, marginTop, areaW, plotH, info.IsStacked, info.IsPercent,
-                    info.AxisMin, info.AxisMax, info.MajorUnit, info.ValNumFmt);
+                    info.AxisMin, info.AxisMax, info.MajorUnit, info.ValNumFmt,
+                    info.ShowDataLabels, info.ShowDataLabelVal, info.ShowDataLabelSerName,
+                    info.ShowDataLabelCatName, info.DataLabelsNumFmt);
         }
         else if (chartType == "combo")
         {
