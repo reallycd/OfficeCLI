@@ -1186,6 +1186,21 @@ public partial class WordHandler
         // text). Same content-type predicates so the two factories stay in sync.
         _ when IsEmbeddedPackageContentType(ct)
             => parent.AddNewPart<EmbeddedPackagePart>(ct, relId),
+        // BUG-DUMP-CHART-OLEDATA: a native chart's <c:externalData r:id> can point
+        // at a LEGACY embedded OLE workbook (relationship type oleObject →
+        // oleObject1.bin) rather than a modern .xlsx package. The SDK's ChartPart
+        // does not list EmbeddedObjectPart among its allowed children, so
+        // AddNewPart<EmbeddedObjectPart> on a ChartPart throws "The part cannot be
+        // added here" — failing the whole chart inlined-parts op and leaving the
+        // chart with a dangling externalData ref (chart renders without its data).
+        // Attach it via AddExtendedPart with the source oleObject relationship type
+        // (which bypasses the typed-child constraint) keeping the source rel id so
+        // the chart's verbatim <c:externalData r:id> resolves. Non-chart parents
+        // keep the typed EmbeddedObjectPart (valid there, used by VML shapes).
+        _ when IsEmbeddedOleObjectContentType(ct) && parent is ChartPart
+            => parent.AddExtendedPart(
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject",
+                ct, ".bin", relId),
         _ when IsEmbeddedOleObjectContentType(ct)
             => parent.AddNewPart<EmbeddedObjectPart>(ct, relId),
         _ when ct.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
