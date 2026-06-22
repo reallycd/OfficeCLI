@@ -2012,8 +2012,18 @@ public static partial class WordBatchEmitter
                     // rather than the content).
                     var srcHlPath = run.Path.Substring(0, idxEq); // …/hyperlink[K]
                     var hlSeg = derived.Substring(hlIdx); // /hyperlink[K]
-                    int alreadyEmitted = items.Count(it => it.Type == "hyperlink"
-                        && string.Equals(it.Parent, paraTargetPath, StringComparison.Ordinal));
+                    // BUG-DUMP-FIELDHL-XPARA: count hyperlink rows since THIS
+                    // paragraph's own `add p` — paraTargetPath ("/…/p[last()]") is
+                    // shared by every paragraph, so a global count let an earlier
+                    // paragraph's hyperlink suppress the missing-hyperlink emit here
+                    // and route the equation to a non-existent /hyperlink[K].
+                    int eqLastParaAdd = items.FindLastIndex(it =>
+                        it.Command == "add" && it.Type == "p");
+                    int alreadyEmitted = 0;
+                    for (int hi = eqLastParaAdd + 1; hi < items.Count; hi++)
+                        if (items[hi].Type == "hyperlink"
+                            && string.Equals(items[hi].Parent, paraTargetPath, StringComparison.Ordinal))
+                            alreadyEmitted++;
                     var rebasedHl = paraTargetPath + hlSeg;
                     int wantK = 0;
                     var kStr = hlSeg.Length > 11 ? hlSeg[11..^1] : "";
@@ -2513,8 +2523,25 @@ public static partial class WordBatchEmitter
                     {
                         var rebased = paraTargetPath
                             + candidateHlParent.Substring(hlIdxStart);
-                        int emittedHls = items.Count(it => it.Type == "hyperlink"
-                            && string.Equals(it.Parent, paraTargetPath, StringComparison.Ordinal));
+                        // BUG-DUMP-FIELDHL-XPARA: paraTargetPath is the literal
+                        // "/…/p[last()]" — IDENTICAL for every paragraph (dump always
+                        // targets the most-recently-added p). Counting hyperlink rows
+                        // by Parent==paraTargetPath therefore tallied hyperlinks from
+                        // ALL prior paragraphs, so a field-ONLY hyperlink (no separate
+                        // display run → no `add hyperlink` row of its own) inherited a
+                        // phantom "hyperlink exists" from an unrelated earlier
+                        // paragraph and routed the field to /hyperlink[1] that doesn't
+                        // exist in THIS paragraph — "Path not found" on replay dropped
+                        // the whole REF/PAGEREF field and its visible text. Count only
+                        // hyperlink rows emitted SINCE the current paragraph's own
+                        // `add p` boundary so the tally is paragraph-local.
+                        int lastParaAdd = items.FindLastIndex(it =>
+                            it.Command == "add" && it.Type == "p");
+                        int emittedHls = 0;
+                        for (int hi = lastParaAdd + 1; hi < items.Count; hi++)
+                            if (items[hi].Type == "hyperlink"
+                                && string.Equals(items[hi].Parent, paraTargetPath, StringComparison.Ordinal))
+                                emittedHls++;
                         if (emittedHls >= kIdx)
                             fldParent = rebased;
                     }
@@ -4382,8 +4409,18 @@ public static partial class WordBatchEmitter
             hlEnd - hlIdxStart - hlMarker.Length);
         if (!int.TryParse(kStr, out var kIdx)) return paraTargetPath;
         var rebased = paraTargetPath + candidateHlParent.Substring(hlIdxStart);
-        int emittedHls = items.Count(it => it.Type == "hyperlink"
-            && string.Equals(it.Parent, paraTargetPath, StringComparison.Ordinal));
+        // BUG-DUMP-FIELDHL-XPARA: paraTargetPath ("/…/p[last()]") is identical for
+        // every paragraph, so counting hyperlink rows by Parent==paraTargetPath
+        // tallied hyperlinks from ALL prior paragraphs — a tab/ptab/equation run in
+        // a hyperlink that emitted no `add hyperlink` row of its own would inherit a
+        // phantom hyperlink from an earlier paragraph and route to a non-existent
+        // /hyperlink[K]. Count only rows since this paragraph's own `add p`.
+        int lastParaAdd = items.FindLastIndex(it => it.Command == "add" && it.Type == "p");
+        int emittedHls = 0;
+        for (int hi = lastParaAdd + 1; hi < items.Count; hi++)
+            if (items[hi].Type == "hyperlink"
+                && string.Equals(items[hi].Parent, paraTargetPath, StringComparison.Ordinal))
+                emittedHls++;
         return emittedHls >= kIdx ? rebased : paraTargetPath;
     }
 
