@@ -3290,9 +3290,15 @@ public static partial class WordBatchEmitter
         // Mirrors WordHandler.CountTextboxesInHost / Navigation's textbox
         // selector — a textbox is a wps:wsp with txBox=1 cNvSpPr or a
         // wps:txbx child carrying w:txbxContent.
+        // BUG-DUMP-TXBXCONTENT-LITERAL (H31 family): the third probe must match
+        // the <w:txbxContent> ELEMENT open tag, not the bare token — a run whose
+        // visible text literally contains "txbxContent" (docs describing OOXML
+        // textbox internals) would otherwise be misrouted through the textbox
+        // drawing path, which extracts no drawing payload and silently drops the
+        // plain text. The sibling clauses already use element-anchored forms.
         return rawXml.Contains("txBox=\"1\"")
             || rawXml.Contains("<wps:txbx")
-            || rawXml.Contains("txbxContent");
+            || System.Text.RegularExpressions.Regex.IsMatch(rawXml, @"<\w*:?txbxContent[\s/>]");
     }
 
     /// <summary>
