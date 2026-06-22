@@ -5297,6 +5297,34 @@ public partial class WordHandler
                         if (delAnc.Date?.Value is DateTime delAncDate)
                             synthNode.Format["revision.date"] = delAncDate.ToString("o");
                     }
+                    else
+                    {
+                        // BUG-DUMP-SMARTTAG-DELWRAP: when the tracked-change wrapper
+                        // sits INSIDE a <w:smartTag>/<w:customXml> (itself an
+                        // OpenXmlUnknownElement), the <w:ins>/<w:del>/<w:moveFrom>/
+                        // <w:moveTo> between the wrapper and this run also parses as
+                        // an OpenXmlUnknownElement — the typed Ancestors<> probes
+                        // above both miss it, so a deletion nested in a smartTag lost
+                        // its revision entirely and round-tripped as live <w:t> text
+                        // (delText silently un-deleted). Walk the unknown-element
+                        // ancestors for the w:ns revision wrapper and read its
+                        // w:author/w:date attributes by name.
+                        var revAnc = unkRun.Ancestors<DocumentFormat.OpenXml.OpenXmlUnknownElement>()
+                            .FirstOrDefault(a => a.NamespaceUri == wNs
+                                && a.LocalName is "ins" or "del" or "moveFrom" or "moveTo");
+                        if (revAnc != null)
+                        {
+                            string? RevAttr(string n) => revAnc.GetAttributes()
+                                .FirstOrDefault(a => a.LocalName == n && a.NamespaceUri == wNs).Value;
+                            synthNode.Format["revision.type"] = revAnc.LocalName;
+                            if (RevAttr("author") is { Length: > 0 } revAuthor)
+                                synthNode.Format["revision.author"] = revAuthor;
+                            if (RevAttr("date") is { Length: > 0 } revDate)
+                                synthNode.Format["revision.date"] = revDate;
+                            if (RevAttr("id") is { Length: > 0 } revId)
+                                synthNode.Format["revision.id"] = revId;
+                        }
+                    }
                 }
                 // BUG-DUMP-R29-SMARTTAG: insert at the wrapper run's true document
                 // position instead of appending at the tail, so a mid-paragraph
