@@ -1429,49 +1429,79 @@ internal class WatchServer : IDisposable
         return patches;
     }
 
-    // Block-level container tags. If a patch payload opens one of these without
-    // closing it (or closes one it never opened), the source block's <wb>/<we>
-    // markers straddle that container and the payload is unsafe to splice into
-    // the live DOM. <p>/<span> are intentionally excluded — they are always
-    // self-contained within a single block and counting them would only add
-    // noise. grep CONSISTENCY(word-patch-straddle) for the rendering side.
-    private static readonly System.Text.RegularExpressions.Regex _wordContainerTagRx =
-        new(@"<(/?)(div|ol|ul|li|table|tbody|thead|tr|td|th|section)\b[^>]*?(/?)>",
-            System.Text.RegularExpressions.RegexOptions.Compiled
-            | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    // Matches any HTML start/end tag: group1 = "/" for an end tag, group2 = tag
+    // name, group3 = "/" for an explicit self-close (<x/>). Comments (<!-- -->)
+    // and the XML/doctype declarations don't match — group2 requires a leading
+    // ASCII letter. Attribute values never contain a raw '>' (the renderer
+    // HTML-encodes them), so a greedy `[^>]*?` to the tag's own '>' is safe.
+    private static readonly System.Text.RegularExpressions.Regex _htmlTagRx =
+        new(@"<(/?)([a-zA-Z][a-zA-Z0-9:-]*)\b[^>]*?(/?)>",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Tags excluded from the balance count. Two groups, same reason — neither
+    // can make a block straddle a structural boundary:
+    //   • void elements — never carry children (<br>, <img>, <col> …);
+    //   • inline elements — the renderer always opens AND closes them within a
+    //     single run/paragraph render, so they are self-contained inside one
+    //     block by construction. Skipping them also hardens the balance count
+    //     against malformed inline markup buried in an attribute value (a raw
+    //     '>' the real renderer would have encoded as &gt;).
+    // Everything NOT in this set is treated as a potential block-level container
+    // and counted — so a future block container the renderer starts emitting is
+    // covered without editing this list. grep CONSISTENCY(word-patch-straddle).
+    private static readonly HashSet<string> _inlineOrVoidHtmlTags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // void
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+        // inline / phrasing
+        "a", "abbr", "b", "bdi", "bdo", "cite", "code", "data", "dfn", "em",
+        "font", "i", "kbd", "label", "mark", "q", "rp", "rt", "ruby", "s",
+        "samp", "small", "span", "strong", "sub", "sup", "time", "u", "var",
+    };
 
     /// <summary>
-    /// True when a Word block-diff patch payload is structurally unbalanced —
-    /// i.e. the source block straddles a structural container (page-wrapper,
-    /// list, multi-column / drop-cap div, table). Such a payload must NOT be
-    /// spliced incrementally; the caller falls back to a full refresh.
-    /// CONSISTENCY(word-patch-straddle).
+    /// True when a Word block-diff patch payload is unsafe to splice into the
+    /// live DOM incrementally — i.e. the source block's &lt;wb&gt;/&lt;we&gt;
+    /// markers straddle a structural element.
+    ///
+    /// Root invariant (not a list of known cases): the client splice
+    /// (wordPatchUpdate) walks DOM *siblings* between the &lt;wb&gt; and
+    /// &lt;we&gt; markers. That only works when both markers sit at the same DOM
+    /// depth, which holds **iff** the captured payload is a well-balanced HTML
+    /// fragment with no leading orphan-close. So we test exactly that, over
+    /// EVERY element tag — no enumeration of containers (page-wrapper, ol/ul,
+    /// multi-column / drop-cap div, table, …). Any present-or-future renderer
+    /// shape that straddles a container is rejected, and the caller falls back
+    /// to a full refresh. CONSISTENCY(word-patch-straddle).
     /// </summary>
     internal static bool WordPatchPayloadStraddlesStructure(string? html)
     {
         if (string.IsNullOrEmpty(html)) return false;
 
-        // page boundary: the surrounding <div>s may net to zero yet the payload
-        // still carries a page-wrapper open tag that the browser parses into a
-        // nested page. Catch it explicitly rather than relying on div balance.
-        if (html.Contains("class=\"page-wrapper\"", StringComparison.Ordinal)) return true;
-
-        var depth = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (System.Text.RegularExpressions.Match m in _wordContainerTagRx.Matches(html))
+        var depth = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (System.Text.RegularExpressions.Match m in _htmlTagRx.Matches(html))
         {
-            if (m.Groups[3].Value == "/") continue; // self-closing, e.g. <td/>
-            var tag = m.Groups[2].Value.ToLowerInvariant();
-            var d = depth.GetValueOrDefault(tag);
+            var tag = m.Groups[2].Value;
+            if (m.Groups[3].Value == "/") continue;            // explicit self-close <x/>
+            if (_inlineOrVoidHtmlTags.Contains(tag)) continue; // inline / void — never straddles
+
             if (m.Groups[1].Value == "/")
             {
-                // A close with no matching open already seen in this payload —
-                // the open lives in a sibling block. Straddle.
-                if (--d < 0) return true;
+                // A close whose matching open was never seen in this payload —
+                // it lives in a sibling block (e.g. </ol> after a list block,
+                // </page-wrapper> from a mid-paragraph page break). The markers
+                // are at different DOM depths → unsafe.
+                var d = depth.GetValueOrDefault(tag) - 1;
+                if (d < 0) return true;
+                depth[tag] = d;
             }
-            else d++;
-            depth[tag] = d;
+            else
+            {
+                depth[tag] = depth.GetValueOrDefault(tag) + 1;
+            }
         }
-        // Any container left open at the end straddles into the next block.
+        // Any element left open at the end straddles into the next block.
         foreach (var d in depth.Values) if (d != 0) return true;
         return false;
     }
