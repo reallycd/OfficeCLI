@@ -1064,6 +1064,16 @@ public partial class WordHandler
 
         var fnFmt = GetFootnoteNumFmt();
         int num = 0;
+        // Inline images inside a footnote body carry r:embed ids that resolve
+        // against footnotes.xml.rels, NOT document.xml.rels. Point the image
+        // host part at the FootnotesPart for the duration of body rendering so
+        // LoadImageAsDataUri picks the right .rels (mirrors header/footer setup
+        // in RenderHeaderFooter). Otherwise an rId collision (e.g. footnote
+        // rId4→image2.png vs document rId4→settings.xml) loads the wrong bytes.
+        var fnSavedHost = _ctx.ImageHostPart;
+        _ctx.ImageHostPart = fnPart;
+        try
+        {
         // Snapshot: rendering a footnote body may itself reach a run carrying a
         // FootnoteReference, which appends to _ctx.FootnoteRefs. Iterating the
         // live List<int> mutates-during-enumerate → InvalidOperationException.
@@ -1080,11 +1090,22 @@ public partial class WordHandler
             var fnLabel = _ctx.FnLabels.TryGetValue(fnId, out var cached)
                 ? cached
                 : FormatNoteNumber(num, fnFmt);
+            // Only synthesize the auto-number marker <sup> when the footnote body
+            // carries a <w:footnoteRef/> (FootnoteReferenceMark). A custom-marker
+            // footnote (no footnoteRef — the author typed a literal marker like "b"
+            // as the first run) already renders its own marker; emitting a synthetic
+            // <sup> on top would duplicate it (e.g. "ᵇ ᵇ"). Word behaves the same:
+            // a literal marker suppresses auto-number synthesis.
+            var fnHasRefMark = fn.Descendants<FootnoteReferenceMark>().Any();
             var fnSupStyle = ResolveNoteListSupStyle("FootnoteText");
-            sb.Append($"<div id=\"fn{fnId}\" style=\"margin:0.3em 0\"><sup style=\"{fnSupStyle}\">{fnLabel}</sup> ");
+            sb.Append($"<div id=\"fn{fnId}\" style=\"margin:0.3em 0\">");
+            if (fnHasRefMark)
+                sb.Append($"<sup style=\"{fnSupStyle}\">{fnLabel}</sup> ");
             RenderFootnoteChildren(sb, fn);
             sb.AppendLine($" <a href=\"#fnref{fnId}\" style=\"color:inherit;text-decoration:none\">\u21A9</a></div>");
         }
+        }
+        finally { _ctx.ImageHostPart = fnSavedHost; }
         sb.AppendLine("</div>");
     }
 
@@ -1199,6 +1220,13 @@ public partial class WordHandler
 
         var enFmt = GetEndnoteNumFmt();
         int num = 0;
+        // Endnote inline images resolve r:embed against endnotes.xml.rels — point
+        // the image host part at EndnotesPart for the body render (mirrors the
+        // footnote handling above).
+        var enSavedHost = _ctx.ImageHostPart;
+        _ctx.ImageHostPart = enPart;
+        try
+        {
         foreach (var enId in _ctx.EndnoteRefs)
         {
             num++;
@@ -1208,14 +1236,22 @@ public partial class WordHandler
             var enLabel = FormatNoteNumber(num, enFmt);
             var enIndent = ResolveStyleIndent("EndnoteText");
             var enIndentCss = enIndent != null ? $"text-indent:{enIndent}" : "";
+            // Mirror the footnote rule: only synthesize the auto-number <sup> when
+            // the endnote body carries a <w:endnoteRef/> (EndnoteReferenceMark).
+            // A custom-marker endnote renders its own literal marker.
+            var enHasRefMark = en.Descendants<EndnoteReferenceMark>().Any();
             var enSupStyle = ResolveNoteListSupStyle("EndnoteText");
-            sb.Append($"<div id=\"en{enId}\" style=\"margin:0.3em 0;{enIndentCss}\"><sup style=\"{enSupStyle}\">{enLabel}</sup> ");
+            sb.Append($"<div id=\"en{enId}\" style=\"margin:0.3em 0;{enIndentCss}\">");
+            if (enHasRefMark)
+                sb.Append($"<sup style=\"{enSupStyle}\">{enLabel}</sup> ");
             RenderFootnoteChildren(sb, en);
             // Back-reference link to the in-body endnote marker (id="enref{N}",
             // emitted at ref-render time). Mirrors the footnote back-link so the
             // two note lists are internally consistent.
             sb.AppendLine($" <a href=\"#enref{enId}\" style=\"color:inherit;text-decoration:none\">↩</a></div>");
         }
+        }
+        finally { _ctx.ImageHostPart = enSavedHost; }
         sb.AppendLine("</div>");
     }
 
