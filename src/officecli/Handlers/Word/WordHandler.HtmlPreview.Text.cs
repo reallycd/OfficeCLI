@@ -125,6 +125,22 @@ public partial class WordHandler
         return $"border-bottom:{width} {lineStyle} {color};";
     }
 
+    /// <summary>
+    /// True when <paramref name="run"/> holds the LAST &lt;w:tab&gt; in the
+    /// paragraph (counting tabs at any depth, e.g. inside a &lt;w:hyperlink&gt;
+    /// wrapping the whole TOC entry). Used to snap a TOC entry's single/final
+    /// tab to the right+leader stop even when positional tab-stop indexing
+    /// landed on an earlier (left) stop — TOC entries without a leading number
+    /// emit fewer &lt;w:tab&gt; runs than the TOC style declares stops.
+    /// </summary>
+    private static bool IsLastTabInParagraph(Run run, Paragraph para)
+    {
+        var tab = run.Descendants<TabChar>().FirstOrDefault();
+        if (tab == null) return false;
+        var lastTab = para.Descendants<TabChar>().LastOrDefault();
+        return ReferenceEquals(tab, lastTab);
+    }
+
     private static bool RunHasContentAfter(Run run, Paragraph para)
     {
         bool seenRun = false;
@@ -846,9 +862,37 @@ public partial class WordHandler
                 int curTabIdx = _ctx.CurrentParagraphTabIndex;
                 var curStop = (leaderOrderedStops != null && curTabIdx < leaderOrderedStops.Count)
                     ? leaderOrderedStops[curTabIdx] : null;
-                var rightLeaderTab = (curStop?.Val?.InnerText == "right"
-                    && curStop.Leader?.InnerText is "dot" or "hyphen" or "underscore" or "middleDot" or "dash" or "heavy")
-                    ? curStop : null;
+                // TOC entry with FEWER <w:tab/> runs than tab stops: a TOC1 style
+                // declares both a left stop (indent for the leading number) AND a
+                // right+leader stop (the dot leader before the page number). An
+                // entry WITHOUT a leading number (e.g. "INTRODUCTION TO THE
+                // TEMPLATE\t3") emits only ONE <w:tab/>, so positional indexing
+                // maps tabIdx 0 → the LEFT stop and the dot leader is lost (the
+                // page number glues to the title). Word instead advances the
+                // single tab to the next stop at/after the pen, which for the
+                // final tab before the page number is the right+leader stop.
+                // Promote curStop to that leader stop when THIS is the last
+                // <w:tab/> in the paragraph and a right+leader stop sits later in
+                // the ordered list — recovering the dot leader without disturbing
+                // the multi-tab "center, right:dot" bookkeeping (which keeps its
+                // positional stop because its current tab is NOT the last one, or
+                // already lands on the leader stop).
+                bool curIsLeaderStop = curStop?.Val?.InnerText == "right"
+                    && curStop.Leader?.InnerText is "dot" or "hyphen" or "underscore" or "middleDot" or "dash" or "heavy";
+                if (!curIsLeaderStop && leaderOrderedStops != null
+                    && IsLastTabInParagraph(run, para))
+                {
+                    var trailingLeaderStop = leaderOrderedStops
+                        .Skip(curTabIdx + 1)
+                        .FirstOrDefault(t => t.Val?.InnerText == "right"
+                            && t.Leader?.InnerText is "dot" or "hyphen" or "underscore" or "middleDot" or "dash" or "heavy");
+                    if (trailingLeaderStop != null)
+                    {
+                        curStop = trailingLeaderStop;
+                        curIsLeaderStop = true;
+                    }
+                }
+                var rightLeaderTab = curIsLeaderStop ? curStop : null;
                 if (rightLeaderTab != null)
                 {
                     if (needsSpan) { sb.Append("</span>"); needsSpan = false; }
