@@ -731,7 +731,7 @@ public partial class PowerPointHandler
     /// <summary>
     /// Parse outline into (widthPt, ooxmlDashType, color). Returns null if NoFill.
     /// </summary>
-    private static (double widthPt, string dashType, string color, string cap, string cmpd)? ParseOutline(Drawing.Outline outline, Dictionary<string, string> themeColors)
+    private static (double widthPt, string dashType, string color, string cap, string cmpd, string join)? ParseOutline(Drawing.Outline outline, Dictionary<string, string> themeColors)
     {
         if (outline.GetFirstChild<Drawing.NoFill>() != null) return null;
 
@@ -780,7 +780,17 @@ public partial class PowerPointHandler
         var cap = outline.CapType?.HasValue == true ? (outline.CapType.InnerText ?? "flat") : "flat";
         var cmpd = outline.CompoundLineType?.HasValue == true ? (outline.CompoundLineType.InnerText ?? "sng") : "sng";
 
-        return (widthPt, dashType, color, cap, cmpd);
+        // Line join (<a:ln> child <a:round/> | <a:bevel/> | <a:miter/>) → SVG
+        // stroke-linejoin. PowerPoint's DEFAULT outline join is ROUND (verified: a
+        // thick-outlined shape with no explicit join renders rounded corners), whereas
+        // SVG's default is "miter" (sharp). So default to "round" here; the SVG stroke
+        // sites that omit stroke-linejoin were rendering sharp corners where PowerPoint
+        // rounds them.
+        var join = outline.GetFirstChild<Drawing.LineJoinBevel>() != null ? "bevel"
+            : outline.GetFirstChild<Drawing.Miter>() != null ? "miter"
+            : "round"; // explicit <a:round/> or absent → round (PowerPoint default)
+
+        return (widthPt, dashType, color, cap, cmpd, join);
     }
 
     /// <summary>
@@ -985,7 +995,7 @@ public partial class PowerPointHandler
     {
         var parsed = ParseOutline(outline, themeColors);
         if (parsed == null) return "";
-        var (widthPt, dashType, color, _, cmpd) = parsed.Value;
+        var (widthPt, dashType, color, _, cmpd, _) = parsed.Value;
 
         var borderStyle = dashType switch
         {
