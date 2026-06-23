@@ -78,6 +78,8 @@ public partial class PowerPointHandler
             OpenXmlElement? inheritedLvlPpr = null;
             Drawing.DefaultRunProperties? inheritedDefRp = null;
             Drawing.DefaultRunProperties? inheritedCapsRp = null;
+            Drawing.DefaultRunProperties? inheritedUnderlineRp = null;
+            Drawing.DefaultRunProperties? inheritedStrikeRp = null;
             if (placeholderShape != null && placeholderPart != null)
             {
                 int level = para.ParagraphProperties?.Level?.Value ?? 0;
@@ -98,6 +100,15 @@ public partial class PowerPointHandler
                 // inheritance level, bold on another).
                 inheritedCapsRp = ResolvePlaceholderDefRp(placeholderShape, placeholderPart, level,
                     dr => dr.Capital?.HasValue == true);
+                // Underline / strike from a master/layout placeholder defRPr get their
+                // OWN dedicated lookups too (same reasoning as caps): a theme may set
+                // u="sng"/strike on a placeholder level's defRPr with no bold/italic, so
+                // the bold/italic predicate never matched and the decoration was dropped
+                // (PowerPoint renders the underline; the preview rendered plain text).
+                inheritedUnderlineRp = ResolvePlaceholderDefRp(placeholderShape, placeholderPart, level,
+                    dr => dr.Underline?.HasValue == true);
+                inheritedStrikeRp = ResolvePlaceholderDefRp(placeholderShape, placeholderPart, level,
+                    dr => dr.Strike?.HasValue == true);
             }
             // R11-3: style-matrix fontRef schemeClr is the FINAL fallback run color
             // when no explicit run color and no inherited placeholder color is found.
@@ -544,9 +555,13 @@ public partial class PowerPointHandler
                 // paragraph-local defRPr): applied as a fallback when the run sets no cap.
                 Drawing.TextCapsValues? inhCap = paraDefRp?.Capital?.HasValue == true ? paraDefRp.Capital.Value
                     : inheritedCapsRp?.Capital?.HasValue == true ? inheritedCapsRp.Capital.Value : null;
-                // Inherited underline / strike from the paragraph defRPr.
-                Drawing.TextUnderlineValues? inhU = paraDefRp?.Underline?.HasValue == true ? paraDefRp.Underline.Value : null;
-                Drawing.TextStrikeValues? inhStrike = paraDefRp?.Strike?.HasValue == true ? paraDefRp.Strike.Value : null;
+                // Inherited underline / strike: paragraph defRPr wins, else the
+                // master/layout placeholder defRPr (mirrors inhBold/inhItalic — was
+                // previously read from paraDefRp only, dropping master/layout u/strike).
+                Drawing.TextUnderlineValues? inhU = paraDefRp?.Underline?.HasValue == true ? paraDefRp.Underline.Value
+                    : inheritedUnderlineRp?.Underline?.HasValue == true ? inheritedUnderlineRp.Underline.Value : null;
+                Drawing.TextStrikeValues? inhStrike = paraDefRp?.Strike?.HasValue == true ? paraDefRp.Strike.Value
+                    : inheritedStrikeRp?.Strike?.HasValue == true ? inheritedStrikeRp.Strike.Value : null;
                 // Paragraph defRPr font size / color override the placeholder defaults.
                 int? paraSize = paraDefRp?.FontSize?.HasValue == true ? paraDefRp.FontSize.Value : defaultFontSizeHundredths;
                 var paraColor = ResolveFillColor(paraDefRp?.GetFirstChild<Drawing.SolidFill>(), themeColors) ?? defaultRunColor;
