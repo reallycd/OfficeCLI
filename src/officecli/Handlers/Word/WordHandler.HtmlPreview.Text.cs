@@ -1071,7 +1071,19 @@ public partial class WordHandler
                             // width + overflow:hidden/nowrap instead CLIPPED any
                             // leading text wider than the gap, silently dropping
                             // visible body text (Word never clips at a tab stop).
-                            sb.Append($"<span style=\"display:inline-block;min-width:{widthPt:0.##}pt;{cssLeader}vertical-align:bottom\">{leading}</span>");
+                            //
+                            // text-align:left is FORCED on the box: the retro-wrap
+                            // model only positions correctly when the leading text
+                            // sits at the box's LEFT edge so the min-width gap forms
+                            // to its RIGHT (the following text then lands on the
+                            // absolute tab stop). In a right/center/justify paragraph
+                            // (e.g. a financial-table cell whose TableParagraph style
+                            // carries w:jc="right") the box would otherwise inherit
+                            // text-align:right, pulling the leading text to the box's
+                            // right edge — collapsing the visible gap and gluing the
+                            // two tab-separated values together ("(51.3)507.9"). For
+                            // a left-aligned paragraph this is a no-op.
+                            sb.Append($"<span style=\"display:inline-block;min-width:{widthPt:0.##}pt;{cssLeader}vertical-align:bottom;text-align:left\">{leading}</span>");
                         }
                         else
                         {
