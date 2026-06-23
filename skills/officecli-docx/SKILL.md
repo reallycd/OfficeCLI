@@ -43,7 +43,7 @@ If in doubt, `view text` after writing and compare character-for-character.
 
 **Incremental execution.** `officecli` mutates the file on every call. Run commands one at a time and check each exit code — a 50-command script that fails at command 3 cascades silently. After any structural op (new style, table, TOC, section break) run `get` on it before stacking more.
 
-**Resident mode is the default**, not an optimization: `officecli open <file>` at the start, `officecli close <file>` at the end — it avoids re-parsing the XML every call. For many paragraphs of one style, use `batch` (≤ 12 ops per block for reliability).
+**Resident mode is the default**, not an optimization: `officecli open <file>` at the start, `officecli close <file>` at the end — it avoids re-parsing the XML every call. For many paragraphs of one style, use `batch` (one open/save cycle for the whole array).
 
 **`$FILE` convention.** All commands use `"$FILE"` — set it once (`FILE="your-doc.docx"`). Never copy a literal `doc.docx` / `review.docx` into output — always substitute your actual target.
 
@@ -251,7 +251,7 @@ officecli add "$FILE" / --type footer --prop type=first --prop text=""
 officecli add "$FILE" / --type footer --prop type=default --prop align=center --prop size=9pt --prop text="Page " --prop field=page
 ```
 
-When both exist, the default footer is `/footer[2]`; alone it is `/footer[1]`. **Verify**: `get --depth 3` must show `fldChar` children, not just a run with literal `"Page"` (`view outline` prints "Footer: Page" for both live fields AND static text — don't rely on it). Do NOT `set --prop differentFirstPage=true` — that prop is UNSUPPORTED and silently fails; adding a first-type footer flips the bit. For composite **Page X of Y**, see recipe (b).
+When both exist, the default footer is `/footer[2]`; alone it is `/footer[1]`. **Verify**: `get --depth 3` must show `fldChar` children, not just a run with literal `"Page"` (`view outline` prints "Footer: Page" for both live fields AND static text — don't rely on it). Do NOT `set --prop differentFirstPage=true` — that prop is unsupported (rejected with exit 2, not silently); adding a first-type footer flips the bit. For composite **Page X of Y**, see recipe (b).
 
 ### Table of Contents
 
@@ -520,7 +520,7 @@ Before calling a color/field/chart broken, open the file in the user's target vi
 | `raw-set` when dotted-attr would work | Prefer L2 dotted-attr over L3 raw-set |
 | Next paragraph inherits the previous Heading style | Set explicit `--prop style=Normal` on the following paragraph |
 | Modifying a file open in Word | Close it in Word first |
-| Batch + resident "Failed to send to resident" (1-in-10) | Retry, or close/reopen; split batches into ≤ 12-op chunks |
+| Resident command "could not be delivered" (rare — main pipe busy) | Retry (the connect retries automatically; a surfaced error means re-issue is safe), or close/reopen |
 | Echo into batch breaks on `$`/`'` | Heredoc with single-quoted delimiter: `cat <<'EOF' \| officecli batch …` |
 
 ## Raw-set XML appendix (L3 patterns)
