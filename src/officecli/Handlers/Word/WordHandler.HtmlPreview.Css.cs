@@ -3045,7 +3045,7 @@ public partial class WordHandler
            capped to a third. No overflow:hidden / text-overflow:ellipsis — a
            tab advances the pen to AT LEAST the stop and over-long content
            simply extends past it; Word never clips at a tab stop. Same
-           "don't clip body text at a tab" principle as the positional-tab
+           ''don't clip body text at a tab'' principle as the positional-tab
            min-width path. */
         p.has-aligned-tab, div.has-aligned-tab {{ display: flex; align-items: baseline; flex-wrap: nowrap; }}
         .atab-band {{ flex: 1 1 auto; min-width: 0; white-space: nowrap; }}
