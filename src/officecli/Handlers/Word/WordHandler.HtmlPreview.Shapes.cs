@@ -174,12 +174,30 @@ public partial class WordHandler
             long shapeHeight = extent?.Cy?.Value ?? 0;
             if (shapeWidth > 0 && shapeHeight > 0)
             {
-                // Full-page shapes → render as background layer
+                // Full-page shapes → render as a page-level background layer.
+                // The fill div is position:absolute;height:100%, so its
+                // height resolves against the nearest POSITIONED ancestor.
+                // Emitting it inline keeps it inside the host paragraph; when
+                // that paragraph ALSO anchors a non-full-page sub-paragraph
+                // shape (e.g. a checkbox/connector/logo with its own
+                // posOffset), BuildParagraphOpenTag makes the <p>
+                // position:relative for those siblings, and the fill's
+                // height:100% then collapses onto the ~19px paragraph box
+                // instead of the page. Hoist the fill div to page start via
+                // the TopAnchoredImages marker (same mechanism the top-anchored
+                // background IMAGE path uses) so it becomes a direct child of
+                // .page (position:relative, definite min-height) and covers the
+                // full page regardless of host-paragraph siblings.
                 if (IsFullPageSize(shapeWidth, shapeHeight))
                 {
                     var fillCss = ResolveShapeFillCss(shape.Elements().FirstOrDefault(e => e.LocalName == "spPr"));
                     if (!string.IsNullOrEmpty(fillCss))
-                        sb.Append($"<div style=\"position:absolute;top:0;left:0;width:100%;height:100%;z-index:-1;{fillCss}\"></div>");
+                    {
+                        var fillDiv = $"<div style=\"position:absolute;top:0;left:0;width:100%;height:100%;z-index:-1;{fillCss}\"></div>";
+                        var markerId = $"TOP_ANCHOR_{_ctx.TopAnchoredImages.Count}";
+                        _ctx.TopAnchoredImages.Add((markerId, fillDiv));
+                        sb.Append($"<!--{markerId}-->");
+                    }
                     return;
                 }
                 // wrapNone shape anchored relative to the column/paragraph with
@@ -821,12 +839,22 @@ public partial class WordHandler
     /// position:relative on the paragraph's host div so those absolute children
     /// resolve against the paragraph instead of the .page box.
     /// </summary>
-    private static bool ParagraphAnchorsSubParagraphShape(Paragraph para)
+    private bool ParagraphAnchorsSubParagraphShape(Paragraph para)
     {
         foreach (var drawing in para.Descendants<Drawing>())
         {
-            if (drawing.Descendants().Any(e => e.LocalName == "wsp")
-                && ComputeParagraphAnchorAbsoluteCss(drawing) != null)
+            if (!drawing.Descendants().Any(e => e.LocalName == "wsp"))
+                continue;
+            // A full-page-size shape is rendered as a page-background fill
+            // (RenderDrawingHtml line ~178) whose width/height:100% must resolve
+            // against the .page box. If we made the host paragraph
+            // position:relative for it, that 100% would collapse onto the single
+            // paragraph box (a ~478×448px sliver) instead of covering the page.
+            // Such shapes get NO per-paragraph relative containing block.
+            var extent = drawing.Descendants<DW.Extent>().FirstOrDefault();
+            if (extent != null && IsFullPageSize(extent.Cx?.Value ?? 0, extent.Cy?.Value ?? 0))
+                continue;
+            if (ComputeParagraphAnchorAbsoluteCss(drawing) != null)
                 return true;
         }
         return false;
@@ -840,7 +868,7 @@ public partial class WordHandler
     /// paragraph div — because a relative div whose only in-flow content is
     /// wrapped text inside a table cell collapses the row height to zero.
     /// </summary>
-    private static bool CellAnchorsSubParagraphShape(TableCell cell)
+    private bool CellAnchorsSubParagraphShape(TableCell cell)
     {
         foreach (var para in cell.Descendants<Paragraph>())
         {
@@ -1131,8 +1159,22 @@ public partial class WordHandler
 
         if (txbx != null)
         {
-            // Render text box content (standard Word paragraphs)
-            sb.Append("<div style=\"width:100%\">");
+            // Render text box content (standard Word paragraphs).
+            //
+            // A shape's <wps:style><a:fontRef> supplies the DEFAULT text color for
+            // the text box: a cover-title box filled dark teal commonly carries
+            // <a:fontRef><a:schemeClr val="lt1"/> (white) with the title runs
+            // themselves carrying NO explicit w:color. Word paints the runs white
+            // via the fontRef; emit that color on the content wrapper so runs
+            // without an explicit color inherit it (runs WITH a w:color override
+            // it via their own inline color:). Without this the title reads black
+            // on the dark fill. lt1→white / dk1→black / accentN resolve through
+            // the theme via ResolveSchemeColor.
+            var fontRefColor = ResolveShapeFontRefColor(shape);
+            var txbxWrapStyle = fontRefColor != null
+                ? $"width:100%;color:{fontRefColor}"
+                : "width:100%";
+            sb.Append($"<div style=\"{txbxWrapStyle}\">");
 
             // Inject pending float images into this text box
             if (floatImages != null && floatImages.Count > 0)
@@ -1232,6 +1274,32 @@ public partial class WordHandler
             else if (child is SdtBlock sdt && sdt.SdtContentBlock is { } content)
                 RenderTextBoxContentChildren(sb, content);
         }
+    }
+
+    /// <summary>
+    /// Resolve the default text color a DrawingML shape's
+    /// <c>&lt;wps:style&gt;&lt;a:fontRef&gt;</c> contributes to its text box.
+    /// fontRef's color is either an <c>&lt;a:schemeClr&gt;</c> (lt1/dk1/accentN —
+    /// resolved through the theme, lt1 → white, dk1 → black) or a literal
+    /// <c>&lt;a:srgbClr&gt;</c>. Returns a CSS color string or null when the shape
+    /// has no style/fontRef or the color can't be resolved.
+    /// </summary>
+    private string? ResolveShapeFontRefColor(OpenXmlElement shape)
+    {
+        var style = shape.Elements().FirstOrDefault(e => e.LocalName == "style");
+        var fontRef = style?.Elements().FirstOrDefault(e => e.LocalName == "fontRef");
+        if (fontRef == null) return null;
+
+        var scheme = fontRef.Elements().FirstOrDefault(e => e.LocalName == "schemeClr");
+        if (scheme != null)
+            return ResolveSchemeColor(scheme);
+
+        var rgb = fontRef.Elements().FirstOrDefault(e => e.LocalName == "srgbClr");
+        var val = rgb?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+        if (val != null && IsHexColor(val))
+            return $"#{val}";
+
+        return null;
     }
 
     // ==================== #7a prstGeom SVG helpers ====================

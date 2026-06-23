@@ -3038,6 +3038,7 @@ public partial class WordHandler
             min-height: {pageH}; line-height: {lh}; font-size: {sz}; position: relative; overflow-x: auto;
             display: flex; flex-direction: column; font-kerning: none; letter-spacing: 0;
             transform-origin: left top; transition: transform 0.15s ease;
+            isolation: isolate;
             }}
         /* The white page fill lives on a pseudo-element behind everything so a
            behind-text float (z-index:-1) paints ON the page, not under it. A
