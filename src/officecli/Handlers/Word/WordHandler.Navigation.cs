@@ -4153,6 +4153,17 @@ public partial class WordHandler
                 if (sbTextDir?.Val != null)
                     node.Format["sectionBreak.textDirection"] = sbTextDir.Val.InnerText;
 
+                // BUG-DUMP-SECT-RTL: a mid-document section carrier can be RTL
+                // (Hebrew/Arabic/Persian multi-section docs) via <w:bidi/> (page
+                // direction) and <w:rtlGutter/> (binding gutter on the right).
+                // The body-sectPr readback reads both; without surfacing them on
+                // the carrier every non-trailing section silently flipped LTR and
+                // the gutter moved to the left. AddSection consumes bidi/rtlGutter.
+                if (IsToggleOn(inlineSectPr.GetFirstChild<BiDi>()))
+                    node.Format["sectionBreak.bidi"] = "rtl";
+                if (IsToggleOn(inlineSectPr.GetFirstChild<GutterOnRight>()))
+                    node.Format["sectionBreak.rtlGutter"] = "true";
+
                 // Page border on a mid-document section carrier (e.g. a cover
                 // page that boxes only its own first page via display="firstPage").
                 // Surface per-side detail + offsetFrom/zOrder/display under the
