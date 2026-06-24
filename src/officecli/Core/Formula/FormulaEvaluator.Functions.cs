@@ -134,6 +134,8 @@ internal partial class FormulaEvaluator
             "ROW" => EvalRowCol(args, true), "COLUMN" => EvalRowCol(args, false),
             "ROWS" => EvalRowsCols(args, true), "COLUMNS" => EvalRowsCols(args, false),
             "ADDRESS" => EvalAddress(args),
+            "SHEET" => EvalSheet(args), "SHEETS" => EvalSheets(args),
+            "CELL" => EvalCell(args),
             "VLOOKUP" => EvalVlookup(args),
             "HLOOKUP" => EvalHlookup(args),
             "LOOKUP" => EvalLookup(args),
@@ -749,6 +751,98 @@ internal partial class FormulaEvaluator
         var abs = args.Count > 2 && args[2] is FormulaResult r3 ? (int)r3.AsNumber() : 1;
         var cs = IndexToCol(col);
         return abs switch { 1 => FR_S($"${cs}${row}"), 2 => FR_S($"{cs}${row}"), 3 => FR_S($"${cs}{row}"), _ => FR_S($"{cs}{row}") };
+    }
+
+    // SHEET([value]) — 1-based position of a sheet in workbook tab order. No arg
+    // = the sheet holding the formula; a reference = that ref's sheet; a text
+    // name = the named sheet.
+    private FormulaResult? EvalSheet(List<object> args)
+    {
+        var sheets = _workbookPart?.Workbook?
+            .Descendants<DocumentFormat.OpenXml.Spreadsheet.Sheet>().ToList();
+        if (sheets == null) return args.Count == 0 ? FR(1) : null;
+
+        FormulaResult? Current() { var i = CurrentSheetIndex(sheets); return FR(i > 0 ? i : 1); }
+        if (args.Count == 0) return Current();
+
+        string? name = args[0] switch
+        {
+            RefArg ra => string.IsNullOrEmpty(ra.Sheet) ? null : ra.Sheet,
+            FormulaResult { IsRange: true } fr => string.IsNullOrEmpty(fr.RangeValue!.BaseSheet) ? null : fr.RangeValue.BaseSheet,
+            FormulaResult r => r.AsString(),
+            _ => null,
+        };
+        if (name == null) return Current();   // same-sheet ref → current sheet
+        for (int i = 0; i < sheets.Count; i++)
+            if (string.Equals(sheets[i].Name?.Value, name, StringComparison.OrdinalIgnoreCase)) return FR(i + 1);
+        return FormulaResult.Error("#N/A");
+    }
+
+    // Match _sheetData (the sheet being evaluated) to its tab position. The same
+    // SheetData instance hangs off the owning WorksheetPart, so reference
+    // equality identifies the current sheet without a name being threaded in.
+    private int CurrentSheetIndex(List<DocumentFormat.OpenXml.Spreadsheet.Sheet> sheets)
+    {
+        if (_workbookPart == null) return 0;
+        for (int i = 0; i < sheets.Count; i++)
+        {
+            try
+            {
+                var wsPart = (DocumentFormat.OpenXml.Packaging.WorksheetPart)_workbookPart.GetPartById(sheets[i].Id!.Value!);
+                if (ReferenceEquals(wsPart.Worksheet.GetFirstChild<DocumentFormat.OpenXml.Spreadsheet.SheetData>(), _sheetData))
+                    return i + 1;
+            }
+            catch { /* malformed rel — skip */ }
+        }
+        return 0;
+    }
+
+    // SHEETS([reference]) — number of sheets. No arg = total in the workbook; a
+    // single-area reference spans one sheet (3D references are not modeled).
+    private FormulaResult? EvalSheets(List<object> args)
+    {
+        var count = _workbookPart?.Workbook?
+            .Descendants<DocumentFormat.OpenXml.Spreadsheet.Sheet>().Count() ?? 1;
+        return args.Count == 0 ? FR(count) : FR(1);
+    }
+
+    // CELL(info_type, [reference]) — deterministic subtypes only. address/row/
+    // col/contents/type are computed; format/color/protect/width/prefix/filename
+    // depend on cell formatting or the file path the evaluator does not model and
+    // return null (cache stays unverified rather than guessed). Reference is
+    // required (the "last changed cell" default is non-deterministic).
+    private FormulaResult? EvalCell(List<object> args)
+    {
+        if (args.Count == 0) return null;
+        string info = (args[0] is FormulaResult t ? t.AsString() : "").ToLowerInvariant();
+
+        string? sheet = null; int col = 0, row = 0; bool haveRef = false;
+        if (args.Count > 1)
+            switch (args[1])
+            {
+                case RefArg ra: sheet = ra.Sheet; col = ra.Col; row = ra.Row; haveRef = true; break;
+                case FormulaResult { IsRange: true } fr when fr.RangeValue!.BaseRow > 0:
+                    sheet = fr.RangeValue.BaseSheet; col = fr.RangeValue.BaseCol; row = fr.RangeValue.BaseRow; haveRef = true; break;
+            }
+        if (!haveRef) return null;
+
+        FormulaResult? Inner()
+        {
+            var a = ResolveRef(new RefArg(sheet, col, row, 1, 1));
+            return a is { IsRange: true } area ? area.RangeValue!.Cells[0, 0] : a;
+        }
+        switch (info)
+        {
+            case "address": return FR_S($"${IndexToCol(col)}${row}");
+            case "row": return FR(row);
+            case "col": return FR(col);
+            case "contents": return Inner() ?? FR(0);
+            case "type":
+                var v = Inner();
+                if (v == null || v.IsBlank || (v.IsString && v.AsString() == "")) return FR_S("b");
+                return FR_S(v.IsString ? "l" : "v");
+            default: return null;   // unsupported subtype — leave cache unverified
+        }
     }
 
     // ==================== Statistical ====================

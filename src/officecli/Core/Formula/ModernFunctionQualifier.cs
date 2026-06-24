@@ -32,7 +32,7 @@ public static class ModernFunctionQualifier
         "STOCKHISTORY",
         "TEXTBEFORE", "TEXTAFTER", "TEXTSPLIT",
         "REGEXTEST", "REGEXEXTRACT", "REGEXREPLACE",
-        "ISFORMULA",
+        "ISFORMULA", "SHEET", "SHEETS",
         "TAKE", "DROP",
         "CHOOSECOLS", "CHOOSEROWS",
         "ARRAYTOTEXT", "VALUETOTEXT",
