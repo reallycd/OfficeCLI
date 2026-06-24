@@ -2549,7 +2549,8 @@ internal partial class ChartSvgRenderer
     public void RenderComboChartSvg(StringBuilder sb, PlotArea plotArea,
         List<(string name, double[] values)> seriesList, string[] categories, List<string> colors,
         int ox, int oy, int pw, int ph,
-        bool showDataLabels = false, string? dataLabelNumFmt = null)
+        bool showDataLabels = false, string? dataLabelNumFmt = null,
+        double? ooxmlMax = null)
     {
         // Value-label formatter (honors <c:dLbls><c:numFmt>; falls back to a bare value),
         // mirroring the bar/line renderers' data-label formatting.
@@ -2619,6 +2620,11 @@ internal partial class ChartSvgRenderer
 
         var priMax = primaryValues.Length > 0 ? primaryValues.Max() : 0; if (priMax <= 0) priMax = 1;
         var (priNiceMax, _, _) = ComputeNiceAxis(priMax);
+        // Honor an explicit primary value-axis max (<c:valAx><c:scaling><c:max>): the
+        // bar/line renderers pin the top to the entered value (R25); the combo renderer
+        // dropped it entirely and always auto-scaled. priNiceMax feeds both the series
+        // scaling (axMax) and the tick labels, so overriding it fixes both.
+        if (ooxmlMax.HasValue && ooxmlMax.Value > 0) priNiceMax = ooxmlMax.Value;
         var hasSecondary = secondaryValues.Length > 0;
         double secNiceMax = 1;
         if (hasSecondary)
@@ -4344,7 +4350,7 @@ internal partial class ChartSvgRenderer
         else if (chartType == "combo")
         {
             RenderComboChartSvg(sb, info.PlotArea!, info.Series, info.Categories, info.Colors, marginLeft, marginTop, plotW, plotH,
-                info.ShowDataLabels, info.DataLabelsNumFmt);
+                info.ShowDataLabels, info.DataLabelsNumFmt, info.AxisMax);
         }
         else if (chartType.Contains("radar"))
         {
