@@ -3532,11 +3532,11 @@ internal partial class ChartSvgRenderer
 
         // Plot / chart fill
         var plotSpPr = plotArea.Elements().FirstOrDefault(e => e.LocalName == "spPr");
-        info.PlotFillColor = ExtractFillColor(plotSpPr);
+        info.PlotFillColor = ExtractFillColor(plotSpPr, themeColors);
         info.PlotBorderColor = ExtractLineColor(plotSpPr, themeColors);
         info.PlotBorderWidthEmu = ExtractLineWidthEmu(plotSpPr);
         var chartSpPr = chart?.Parent?.Elements().FirstOrDefault(e => e.LocalName == "spPr");
-        info.ChartFillColor = ExtractFillColor(chartSpPr);
+        info.ChartFillColor = ExtractFillColor(chartSpPr, themeColors);
         info.ChartBorderColor = ExtractLineColor(chartSpPr, themeColors);
         info.ChartBorderWidthEmu = ExtractLineWidthEmu(chartSpPr);
 
