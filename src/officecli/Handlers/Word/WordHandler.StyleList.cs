@@ -787,7 +787,11 @@ public partial class WordHandler
         if (numProps != null)
         {
             var nid = numProps.NumberingId?.Val?.Value;
-            if (nid != null && nid != 0)
+            // numId=0 is OOXML's "no numbering" sentinel — it explicitly removes
+            // any inherited list reference, so stop here rather than walking the
+            // style chain (which would resurrect the based-on style's numbering).
+            if (nid == 0) return null;
+            if (nid != null)
                 return (nid.Value, numProps.NumberingLevelReference?.Val?.Value ?? 0);
         }
 
@@ -807,7 +811,12 @@ public partial class WordHandler
             if (styleNumPr != null)
             {
                 var nid = styleNumPr.NumberingId?.Val?.Value;
-                if (nid != null && nid != 0)
+                // A style that sets numId=0 explicitly cancels numbering for
+                // everything based on it (e.g. a title style based on Heading1
+                // that opts out of the heading's auto-number). Stop the walk so
+                // the based-on style's numbering is not inherited.
+                if (nid == 0) return null;
+                if (nid != null)
                     return (nid.Value, styleNumPr.NumberingLevelReference?.Val?.Value ?? 0);
             }
 
