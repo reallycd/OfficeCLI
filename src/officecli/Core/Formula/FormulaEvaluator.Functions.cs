@@ -151,6 +151,16 @@ internal partial class FormulaEvaluator
             "QUARTILE" or "QUARTILE_INC" => EvalQuartile(args, exclusive: false),
             "QUARTILE_EXC" => EvalQuartile(args, exclusive: true),
             "PERCENTILE_EXC" => EvalPercentileExc(args),
+            // Hypothesis tests (W4d) — dotted modern + legacy aliases.
+            "T_TEST" or "TTEST" => EvalTTest(args),
+            "CHISQ_TEST" or "CHITEST" => EvalChisqTest(args),
+            "F_TEST" or "FTEST" => EvalFTest(args),
+            "Z_TEST" or "ZTEST" => EvalZTest(args),
+            // Array regression (W4d) — spill {coefficients}/{predictions}.
+            "LINEST" => EvalLinest(args, log: false),
+            "LOGEST" => EvalLinest(args, log: true),
+            "TREND" => EvalTrend(args, log: false),
+            "GROWTH" => EvalTrend(args, log: true),
 
             // ===== Logical =====
             "IF" => EvalIf(args), "IFS" => EvalIfs(args),

@@ -51,6 +51,7 @@ public static class ModernFunctionQualifier
         "F.DIST", "F.DIST.RT", "F.INV", "F.INV.RT",
         "BINOM.DIST", "BINOM.INV", "NEGBINOM.DIST",
         "WEIBULL.DIST", "LOGNORM.DIST", "LOGNORM.INV", "HYPGEOM.DIST",
+        "T.TEST", "CHISQ.TEST", "F.TEST", "Z.TEST",
         "SKEW.P", "COVARIANCE.P", "COVARIANCE.S", "QUARTILE.INC", "QUARTILE.EXC",
         "PERCENTILE.EXC", "FORECAST.LINEAR", "PERMUTATIONA",
         "TAKE", "DROP",
@@ -85,6 +86,7 @@ public static class ModernFunctionQualifier
         "TAKE", "DROP", "CHOOSECOLS", "CHOOSEROWS",
         "TOCOL", "TOROW", "WRAPCOLS", "WRAPROWS", "EXPAND",
         "HSTACK", "VSTACK", "TRANSPOSE",
+        "LINEST", "LOGEST", "TREND", "GROWTH",
         "TEXTSPLIT",
         "ANCHORARRAY",
     };
