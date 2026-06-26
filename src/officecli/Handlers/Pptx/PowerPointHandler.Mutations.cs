@@ -783,7 +783,11 @@ public partial class PowerPointHandler
                 if (toMatch.Success)
                 {
                     var ti = int.Parse(toMatch.Groups[1].Value);
-                    if (ti < 1) throw new ArgumentException($"Invalid --to target: {targetParentPath}");
+                    // Reject an out-of-range target instead of silently clamping
+                    // to the end (a typo'd /slide[99] used to reorder to last and
+                    // report success). Mirrors Swap's slide-bounds check.
+                    if (ti < 1 || ti > slideIds.Count)
+                        throw new ArgumentException($"--to target /slide[{ti}] not found (total: {slideIds.Count})");
                     toIdxFromTarget = ti;
                 }
             }
