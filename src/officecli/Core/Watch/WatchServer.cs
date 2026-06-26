@@ -166,7 +166,13 @@ internal class WatchServer : IDisposable
         var markerPath = GetWatchMarkerPath(filePath);
         try
         {
-            if (!File.Exists(markerPath)) return null;
+            var info = new FileInfo(markerPath);
+            if (!info.Exists) return null;
+            // The marker path is predictable ($TMPDIR/officecli-watch-<hash>.port),
+            // so on a shared temp dir a local attacker can plant a symlink there.
+            // Only a regular file we could have written is a trustworthy marker:
+            // never read through (or delete) a symlink / reparse point (CWE-59).
+            if ((info.Attributes & FileAttributes.ReparsePoint) != 0) return null;
             var lines = File.ReadAllLines(markerPath);
             if (lines.Length < 2) return null;
             if (!int.TryParse(lines[0], out var pid)) return null;
@@ -207,8 +213,27 @@ internal class WatchServer : IDisposable
         var markerPath = GetWatchMarkerPath(_filePath);
         try
         {
-            File.WriteAllText(markerPath,
+            // Refuse to follow a pre-planted symlink at the predictable marker
+            // path: a local attacker who creates the marker as a symlink to a
+            // victim-writable file would otherwise have us truncate that file
+            // (CWE-59 symlink-follow). FileMode.CreateNew maps to O_CREAT|O_EXCL,
+            // which by POSIX fails — without following — when the path already
+            // exists, including when it is a symlink. A stale regular marker from
+            // a dead writer was cleared by GetExistingWatchPort just above; if a
+            // squatter still holds the name we simply skip the marker (IsWatching
+            // then reports false — fail-safe, no clobber).
+            var bytes = Encoding.UTF8.GetBytes(
                 $"{System.Diagnostics.Process.GetCurrentProcess().Id}\n{_port}\n");
+            var opts = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+            };
+            if (!OperatingSystem.IsWindows())
+                opts.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; // 0600
+            using var fs = new FileStream(markerPath, opts);
+            fs.Write(bytes);
         }
         catch { /* best-effort; IsWatching just reports false if marker absent */ }
     }
