@@ -510,6 +510,13 @@ internal static partial class ChartHelper
             if (!k.EndsWith(".color", StringComparison.OrdinalIgnoreCase)) continue;
             var mid = k.Substring(6, k.Length - 6 - ".color".Length);
             if (!int.TryParse(mid, out var idx) || idx < 1) continue;
+            // Mark this series{N}.color key consumed. A `foreach` over a
+            // Dictionary<>-typed parameter binds to the base struct enumerator,
+            // which bypasses TrackingPropertyDictionary's consumption tracking
+            // (only TryGetValue/ContainsKey/indexer route through the recording
+            // comparer). Without this ContainsKey, the Add path reports an
+            // applied series color as UNSUPPORTED and exits non-zero.
+            _ = properties.ContainsKey(k);
             if (!string.IsNullOrWhiteSpace(kv.Value))
                 dotted[idx] = kv.Value.Trim();
         }
@@ -547,6 +554,9 @@ internal static partial class ChartHelper
             if (!k.EndsWith(".color", StringComparison.OrdinalIgnoreCase)) continue;
             var mid = k.Substring(6, k.Length - 6 - ".color".Length);
             if (!int.TryParse(mid, out var idx) || idx < 1) continue;
+            // Mark consumed — see ParseSeriesColors: foreach over a
+            // Dictionary<>-typed param bypasses the tracking enumerator.
+            _ = properties.ContainsKey(k);
             if (!string.IsNullOrWhiteSpace(kv.Value))
                 dotted[idx] = kv.Value.Trim();
         }
