@@ -172,6 +172,8 @@ function sendOnce(sockPath, line, connectTimeoutMs) {
 function decodeLine(raw) {
   let text = raw.toString('utf8');
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // strip UTF-8 BOM (unix StreamWriter)
+  if (text.charCodeAt(text.length - 1) === 0x0a) text = text.slice(0, -1); // drop the '\n' terminator
+  if (text.charCodeAt(text.length - 1) === 0x0d) text = text.slice(0, -1); // and a trailing '\r'
   return text;
 }
 
@@ -557,10 +559,11 @@ async function open(filePath, { binary = 'officecli', timeoutMs = 30000, autoIns
 
 /**
  * Install the officecli CLI binary via its OFFICIAL installer — explicit by
- * design (this SDK never auto-downloads behind your back). Note: when installed
+ * design (this SDK never auto-downloads behind your back). Runs install.ps1 via
+ * PowerShell on Windows and install.sh via bash elsewhere. Note: when installed
  * via npm, @officecli/officecli already bundles an auto-updating binary, so this
- * is only needed for a standalone ~/.local/bin install. Not supported on Windows
- * (install.sh needs bash) — download from GitHub Releases and put it on PATH.
+ * is only needed for a standalone (~/.local/bin or %LOCALAPPDATA%\OfficeCLI)
+ * install.
  */
 function install() {
   if (IS_WIN) {
