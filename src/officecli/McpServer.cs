@@ -207,8 +207,20 @@ public static class McpServer
                 var commandVal = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("command", out var cmd)
                     ? cmd.GetString() : null;
                 if (string.IsNullOrWhiteSpace(commandVal))
-                    throw new ArgumentException(
-                        "Missing required 'command' field. Set command to one of: " + string.Join(", ", CommandNames) + ".");
+                {
+                    // Do NOT silently route: an inferred verb can be wrong, and
+                    // guessing a mutation (batch) from a stray field would hide a
+                    // real mistake. Instead, when the caller supplied a field
+                    // that belongs to exactly one command, name it as a strong
+                    // suggestion and let the caller re-send with an explicit
+                    // 'command'. Falls back to the plain list when there is no
+                    // unambiguous signal.
+                    var hint = SuggestCommandFromExclusiveField(args);
+                    throw new ArgumentException(hint is var (field, guess) && field != null
+                        ? $"Missing required 'command' field. You provided '{field}', which only '{guess}' uses — "
+                          + $"did you mean command=\"{guess}\"? Otherwise set command to one of: {string.Join(", ", CommandNames)}."
+                        : "Missing required 'command' field. Set command to one of: " + string.Join(", ", CommandNames) + ".");
+                }
                 toolName = commandVal;
             }
             else
@@ -898,6 +910,34 @@ public static class McpServer
     // enum AND the missing-command guard both read this, so they cannot drift.
     private static readonly string[] CommandNames =
         { "create", "view", "get", "query", "set", "add", "remove", "move", "swap", "validate", "batch", "raw", "help", "load_skill" };
+
+    // Fields used by exactly one command. When 'command' is omitted, the
+    // presence of one of these uniquely identifies the intended verb, so we can
+    // route without erroring. Shared (path/parent/props/file/...) fields are
+    // deliberately excluded — they are ambiguous across commands.
+    private static readonly (string Field, string Command)[] ExclusiveFields =
+        { ("commands", "batch"), ("selector", "query"), ("part", "raw"), ("path2", "swap") };
+
+    // Returns the (field, command) pair when the args carry exactly such a
+    // command-exclusive field, so the missing-command error can name a precise
+    // suggestion. This only *suggests* — it never routes.
+    private static (string? Field, string? Command) SuggestCommandFromExclusiveField(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object) return (null, null);
+        foreach (var (field, command) in ExclusiveFields)
+        {
+            if (!args.TryGetProperty(field, out var v)) continue;
+            var present = v.ValueKind switch
+            {
+                JsonValueKind.String => !string.IsNullOrEmpty(v.GetString()),
+                JsonValueKind.Array => v.GetArrayLength() > 0,
+                JsonValueKind.Null or JsonValueKind.Undefined => false,
+                _ => true,
+            };
+            if (present) return (field, command);
+        }
+        return (null, null);
+    }
 
     // MCP-specific guidance prepended to every help response. Cannot be derived
     // from schemas/help/*.json — it's about how to use the *tool*, not what the
