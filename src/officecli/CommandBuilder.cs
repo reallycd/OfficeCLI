@@ -68,7 +68,7 @@ static partial class CommandBuilder
 
         // ==================== close command (stop resident) ====================
         var closeFileArg = new Argument<FileInfo>("file") { Description = "Office document path (required even with open/close mode)" };
-        var closeCommand = new Command("close", "Stop the resident process for the document");
+        var closeCommand = new Command("close", "Flush pending in-memory changes to disk and stop the resident process. Run this (or 'save') before another program reads the file: while a resident is alive, edits are held in memory and the file on disk is only rewritten on save/close/idle-timeout.");
         closeCommand.Add(closeFileArg);
         closeCommand.Add(jsonOption);
 

@@ -312,6 +312,16 @@ officecli batch deck.pptx --commands '[{"op":"set","path":"/slide[1]/shape[1]","
 officecli batch deck.pptx --input updates.json --force --json
 ```
 
+> **Reading the file with another tool? Flush to disk first.**
+> While a resident is alive, edits (`set`/`add`/`remove`/`batch`) are applied to the in‑memory document and reported as success, but the **`.docx`/`.xlsx`/`.pptx` on disk is only rewritten on `officecli save` / `officecli close` (or idle‑timeout).** Commands routed through OfficeCLI see the change immediately; a **third‑party reader that opens the file directly** (python‑docx, PizZip, openpyxl, pandas, Microsoft Word, …) sees the *pre‑edit* file until you flush. So before handing off to any external reader:
+> ```bash
+> officecli set report.docx /body/p[1] --prop bold=true
+> officecli save report.docx           # ← flush to disk, KEEP the resident (stays fast)
+> python my_reader.py report.docx      # now sees the edit
+> officecli close report.docx          # final flush + stop the resident when done
+> ```
+> Use `save` for a mid‑session flush (more edits coming) and `close` when you are finished with the file. Or set `OFFICECLI_NO_AUTO_RESIDENT=1` to skip the resident entirely — every command then opens once and saves once, so the file on disk is always current (at the cost of per‑command file I/O).
+
 ### Three-Layer Architecture
 
 Start simple, go deep only when needed.
