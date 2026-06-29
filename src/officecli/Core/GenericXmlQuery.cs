@@ -574,8 +574,29 @@ internal static class GenericXmlQuery
                 SetGenericAttribute(newChild, key, value);
             }
 
-            // Insert: use schema-aware AddChild for correct element ordering,
-            // fall back to manual index-based insertion if specified
+            // Insert. Explicit index → manual positional insertion.
+            //
+            // No index: the `add` verb means "append a NEW element", so a
+            // schema-repeatable type must produce a DISTINCT sibling. But
+            // OpenXmlCompositeElement.AddChild places by particle slot and, for
+            // some repeatable CT_* members (e.g. a second <w:tblStylePr> in a
+            // table style), COLLAPSES the new element onto the existing one —
+            // silently dropping it. This is the latent bug the dump→batch
+            // recursive-decomposition path exposes; single hand-authored adds
+            // never stacked repeatable children, so it stayed hidden, and a
+            // batch replay of such a sequence would drop them identically.
+            //
+            // Fix without regressing first-occurrence positioning:
+            //   • A same-name sibling already exists → insert right AFTER the
+            //     last one. Repeatable members are contiguous in a CT_ sequence,
+            //     so this keeps the group together and in its correct slot
+            //     relative to other element types, and never collapses.
+            //   • No same-name sibling → AddChild, which positions the element
+            //     in its correct CT_ slot (and cannot collapse — nothing to
+            //     merge onto). This preserves AddChild's ordering for cases the
+            //     reflection-based SchemaOrder comparator can't order (e.g.
+            //     DrawingML/Chart particles, where Compare returns null), so the
+            //     first <c:dPt> still lands before <c:cat>/<c:val> as before.
             if (index.HasValue)
             {
                 var children = parent.ChildElements.ToList();
@@ -584,15 +605,27 @@ internal static class GenericXmlQuery
                 else
                     parent.AppendChild(newChild);
             }
-            else if (parent is OpenXmlCompositeElement composite)
-            {
-                // AddChild uses Metadata.Particle.Set() to find correct schema position
-                if (!composite.AddChild(newChild, throwOnError: false))
-                    parent.AppendChild(newChild); // fallback if schema doesn't define this child
-            }
             else
             {
-                parent.AppendChild(newChild);
+                var lastSameName = parent.ChildElements.LastOrDefault(e =>
+                    e.LocalName == newChild.LocalName
+                    && e.NamespaceUri == newChild.NamespaceUri);
+                if (lastSameName != null)
+                {
+                    lastSameName.InsertAfterSelf(newChild);
+                }
+                else if (parent is OpenXmlCompositeElement composite)
+                {
+                    if (!composite.AddChild(newChild, throwOnError: false))
+                    {
+                        parent.AppendChild(newChild); // schema doesn't define this child
+                        SchemaOrder.Place(parent, newChild);
+                    }
+                }
+                else
+                {
+                    parent.AppendChild(newChild);
+                }
             }
 
             return newChild;
