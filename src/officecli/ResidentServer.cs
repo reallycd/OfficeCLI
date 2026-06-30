@@ -762,7 +762,7 @@ public class ResidentServer : IDisposable
                 //   - stderr contains UNSUPPORTED (unsupported_property) -> 2
                 //   - otherwise                                      -> 0
                 int jsonExitCode = 0;
-                if (stderr.Contains("UNSUPPORTED"))
+                if (stderr.Contains("UNSUPPORTED") || stderr.Contains(UnrecognizedLatexMarker))
                     jsonExitCode = 2;
                 else if (!EnvelopeSuccess(envelope) || batchFailure || validateFailure || stderr.Contains("VALIDATION:"))
                     jsonExitCode = 1;
@@ -772,7 +772,7 @@ public class ResidentServer : IDisposable
             // BUG-DUMP12-01: surface stderr "VALIDATION:" token (emitted by
             // ExecuteRawSet / ExecuteAddPart when the SDK validator gains new
             // errors) as exit 1 so callers can detect rejected raw mutations.
-            int exitCode = stderr.Contains("UNSUPPORTED") ? 2
+            int exitCode = (stderr.Contains("UNSUPPORTED") || stderr.Contains(UnrecognizedLatexMarker)) ? 2
                 : ((batchFailure || validateFailure || stderr.Contains("VALIDATION:")) ? 1 : 0);
             return MakeResponse(exitCode, stdout, stderr);
         }
@@ -887,7 +887,15 @@ public class ResidentServer : IDisposable
         return lines.Select(line =>
         {
             var warning = new CliWarning { Message = line.Trim() };
-            if (line.Contains("UNSUPPORTED")) warning.Code = "unsupported_property";
+            if (line.Contains(UnrecognizedLatexMarker))
+            {
+                warning.Code = "unrecognized_latex_command";
+                // Strip any "WARNING:" prefix so the envelope message matches the
+                // one-shot CLI's form ("unrecognized_latex_command: \foo").
+                var idx = line.IndexOf(UnrecognizedLatexMarker, StringComparison.Ordinal);
+                warning.Message = line.Substring(idx).Trim();
+            }
+            else if (line.Contains("UNSUPPORTED")) warning.Code = "unsupported_property";
             else if (line.Contains("VALIDATION")) warning.Code = "validation_error";
             // CONSISTENCY(dump-warning-code): mirror the
             // unsupported_element code emitted by CommandBuilder.Dump.cs so
@@ -1934,6 +1942,10 @@ public class ResidentServer : IDisposable
             }
         }
 
+        // Unrecognized LaTeX from an equation Set (formula=). Same emission as
+        // ExecuteAdd — distinctive stderr line drives exit 2 + envelope code.
+        EmitUnrecognizedLatex(_handler);
+
         if (unsupported.Count > 0)
         {
             // /styles/<id> on Word: targeted curated hints, no raw-set push.
@@ -1955,6 +1967,26 @@ public class ResidentServer : IDisposable
     // alternative props (e.g. "fill (valid slide props: background, ...)"), the
     // generic "use raw-set instead" prefix misdirects the user away from the
     // real fix. Drop the prefix in that case and let the handler hint stand.
+    // Stderr marker for unrecognized LaTeX commands/environments. Doubles as
+    // the user-facing warning text (same string the one-shot CLI emits) AND
+    // the token the dispatcher keys off (alongside UNSUPPORTED) to set exit 2
+    // and that BuildWarnings maps to the unrecognized_latex_command envelope
+    // code — keeping the resident path's UX identical to CommandBuilder.Add/Set.
+    internal const string UnrecognizedLatexMarker = "unrecognized_latex_command:";
+
+    private static void EmitUnrecognizedLatex(IDocumentHandler handler)
+    {
+        var tokens = handler switch
+        {
+            WordHandler wlx => wlx.LastUnrecognizedLatex,
+            PowerPointHandler plx => plx.LastUnrecognizedLatex,
+            _ => null,
+        };
+        if (tokens is not { Count: > 0 }) return;
+        foreach (var tok in tokens)
+            Console.Error.WriteLine($"  WARNING: {UnrecognizedLatexMarker} {tok}");
+    }
+
     private static string FormatUnsupportedLine(List<string> unsupported, string? scope = null)
     {
         bool hasNamedAlternative = unsupported.Any(u => u.Contains("(valid ", StringComparison.Ordinal));
@@ -2012,6 +2044,12 @@ public class ResidentServer : IDisposable
                 foreach (var w in residWh.LastAddWarnings)
                     Console.Error.WriteLine($"  WARNING: {w}");
             }
+
+            // Unrecognized LaTeX commands/environments from an equation parse.
+            // Emit a distinctive stderr line so the dispatcher maps it to
+            // exit 2 and the envelope to the unrecognized_latex_command code,
+            // mirroring the one-shot CLI path (CommandBuilder.Add).
+            EmitUnrecognizedLatex(_handler);
 
             if (allUnsupported.Count > 0)
             {

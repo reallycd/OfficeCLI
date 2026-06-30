@@ -1788,7 +1788,7 @@ public partial class WordHandler
                     catch { /* malformed — fall through to the formula string */ }
                 }
             }
-            var parsed = FormulaParser.Parse(formula);
+            var parsed = FormulaParser.Parse(formula, LastUnrecognizedLatex);
             return parsed as M.OfficeMath ?? new M.OfficeMath(parsed.CloneNode(true));
         }
 

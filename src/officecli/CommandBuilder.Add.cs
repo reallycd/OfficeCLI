@@ -248,6 +248,30 @@ static partial class CommandBuilder
                     });
                 }
 
+                // Unrecognized LaTeX commands/environments from an equation
+                // parse. Surfaced with the same UX as unsupported_property
+                // (warning + JSON envelope + exit 2) — the equation is still
+                // written (lenient accept), but the literal-text fallback is no
+                // longer silent. CONSISTENCY: mirrored in ResidentServer.ExecuteAdd.
+                var unrecognizedLatex = handler switch
+                {
+                    OfficeCli.Handlers.WordHandler wlx => wlx.LastUnrecognizedLatex,
+                    OfficeCli.Handlers.PowerPointHandler plx => plx.LastUnrecognizedLatex,
+                    _ => null,
+                };
+                if (unrecognizedLatex is { Count: > 0 })
+                {
+                    foreach (var tok in unrecognizedLatex)
+                    {
+                        addWarnings.Add(new OfficeCli.Core.CliWarning
+                        {
+                            Message = $"unrecognized_latex_command: {tok}",
+                            Code = "unrecognized_latex_command",
+                            Suggestion = "Check the command spelling; see https://katex.org/docs/supported.html for supported syntax.",
+                        });
+                    }
+                }
+
                 // Advisory warnings from the Word handler (e.g. unknown styleId
                 // referenced as-is, unresolved styleName with spaces skipped).
                 // These do NOT flip the exit code: the requested value was still
@@ -291,6 +315,7 @@ static partial class CommandBuilder
                 else NotifyWatch(handler, file.FullName, parentPath);
 
                 if (unsupported.Count > 0) return 2;
+                if (unrecognizedLatex is { Count: > 0 }) return 2;
             }
 
             return hadWarnings ? 2 : 0;

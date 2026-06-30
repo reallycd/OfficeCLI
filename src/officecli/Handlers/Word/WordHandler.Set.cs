@@ -15,6 +15,7 @@ public partial class WordHandler
     {
         Modified = true;
         LastSetWarnings = new List<string>();
+        LastUnrecognizedLatex = new List<string>();
         var unsupported = new List<string>();
 
         // Bare `revision=` key was retired when the namespace split into

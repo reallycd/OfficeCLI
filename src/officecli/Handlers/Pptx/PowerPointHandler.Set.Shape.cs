@@ -467,7 +467,7 @@ public partial class PowerPointHandler
                 firstPara.Append(seededRun);
             allRuns = new List<Drawing.Run> { seededRun };
         }
-        var unsupported = SetRunOrShapeProperties(properties, allRuns, shape, slidePart);
+        var unsupported = SetRunOrShapeProperties(properties, allRuns, shape, slidePart, unrecognizedLatex: LastUnrecognizedLatex);
         GetSlide(slidePart).Save();
         return unsupported;
     }
@@ -518,7 +518,7 @@ public partial class PowerPointHandler
                 firstPara.Append(seededRun);
             allRuns = new List<Drawing.Run> { seededRun };
         }
-        var unsupported = SetRunOrShapeProperties(properties, allRuns, shape, slidePart);
+        var unsupported = SetRunOrShapeProperties(properties, allRuns, shape, slidePart, unrecognizedLatex: LastUnrecognizedLatex);
         GetSlide(slidePart).Save();
         return unsupported;
     }
@@ -1546,7 +1546,7 @@ public partial class PowerPointHandler
                 .Where(kv => !excludeKeys.Contains(kv.Key))
                 .ToDictionary(kv => kv.Key, kv => kv.Value);
 
-            var unsupported = SetRunOrShapeProperties(shapeProps, allRuns, shape, slidePart);
+            var unsupported = SetRunOrShapeProperties(shapeProps, allRuns, shape, slidePart, unrecognizedLatex: LastUnrecognizedLatex);
 
             if (animValue != null)
             {

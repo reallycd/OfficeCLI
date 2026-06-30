@@ -165,7 +165,8 @@ public partial class PowerPointHandler
     private static List<string> SetRunOrShapeProperties(
         Dictionary<string, string> properties, List<Drawing.Run> runs, Shape shape, OpenXmlPart? part = null,
         bool runContext = false,
-        string? unsupportedContextHint = null)
+        string? unsupportedContextHint = null,
+        ICollection<string>? unrecognizedLatex = null)
     {
         var unsupported = new List<string>();
 
@@ -2240,7 +2241,7 @@ public partial class PowerPointHandler
                     var textBody = shape.TextBody;
                     if (textBody == null) { unsupported.Add(key); break; }
 
-                    var mathContent = FormulaParser.Parse(value);
+                    var mathContent = FormulaParser.Parse(value, unrecognizedLatex);
                     M.OfficeMath oMath = mathContent is M.OfficeMath dm
                         ? dm : new M.OfficeMath(mathContent.CloneNode(true));
                     var mathPara = new M.Paragraph(oMath);

@@ -666,7 +666,7 @@ public partial class WordHandler
                 case "formula":
                 {
                     // Replace this run with an inline oMath in the same position
-                    var mathContent = FormulaParser.Parse(value);
+                    var mathContent = FormulaParser.Parse(value, LastUnrecognizedLatex);
                     M.OfficeMath oMath = mathContent is M.OfficeMath dm
                         ? dm : new M.OfficeMath(mathContent.CloneNode(true));
                     run.InsertAfterSelf(oMath);
@@ -914,7 +914,7 @@ public partial class WordHandler
                     // Clear existing oMath children and rebuild from new formula
                     foreach (var child in mPara.ChildElements.ToList())
                         child.Remove();
-                    var mathContent = FormulaParser.Parse(value);
+                    var mathContent = FormulaParser.Parse(value, LastUnrecognizedLatex);
                     M.OfficeMath oMath = mathContent is M.OfficeMath dm
                         ? dm : new M.OfficeMath(mathContent.CloneNode(true));
                     mPara.AppendChild(oMath);
@@ -1108,7 +1108,7 @@ public partial class WordHandler
                     foreach (var child in para.ChildElements
                         .Where(c => c is not ParagraphProperties).ToList())
                         child.Remove();
-                    var mathContent = FormulaParser.Parse(value);
+                    var mathContent = FormulaParser.Parse(value, LastUnrecognizedLatex);
                     M.OfficeMath oMath = mathContent is M.OfficeMath dm
                         ? dm : new M.OfficeMath(mathContent.CloneNode(true));
                     para.AppendChild(new M.Paragraph(oMath));

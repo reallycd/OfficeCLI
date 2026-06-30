@@ -17,6 +17,7 @@ public partial class PowerPointHandler
     public string Add(string parentPath, string type, InsertPosition? position, Dictionary<string, string> properties)
     {
         Modified = true;
+        LastUnrecognizedLatex = new List<string>();
         // CONSISTENCY(prop-key-case): property keys are case-insensitive
         // ("SRC"/"src"/"Src" all resolve the same). Normalize once at the
         // dispatch entry so every AddXxx helper can rely on TryGetValue("src").

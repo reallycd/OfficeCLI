@@ -178,7 +178,7 @@ public partial class PowerPointHandler
             var allRuns = shape.Descendants<Drawing.Run>().ToList();
             // Pass the owning part so fill/image/effect helpers that need a
             // relationship anchor (e.g. picture fills) write to the correct part.
-            var unsupp = SetRunOrShapeProperties(properties, allRuns, shape, ownerPart);
+            var unsupp = SetRunOrShapeProperties(properties, allRuns, shape, ownerPart, unrecognizedLatex: LastUnrecognizedLatex);
             rootEl.Save();
             return unsupp;
         }

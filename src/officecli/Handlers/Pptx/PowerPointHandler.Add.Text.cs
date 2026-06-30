@@ -37,7 +37,7 @@ public partial class PowerPointHandler
                 var eqShapeName = properties.GetValueOrDefault("name", $"Equation {eqShapeTree.Elements<Shape>().Count() + 1}");
 
                 // Parse formula to OMML
-                var mathContent = FormulaParser.Parse(eqFormula);
+                var mathContent = FormulaParser.Parse(eqFormula, LastUnrecognizedLatex);
                 M.OfficeMath oMath;
                 if (mathContent is M.OfficeMath directMath)
                     oMath = directMath;

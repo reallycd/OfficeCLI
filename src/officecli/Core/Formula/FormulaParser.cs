@@ -53,8 +53,38 @@ internal static class FormulaParser
     // hint; the tree walkers throw CliException).
     [ThreadStatic] private static int _groupDepth;
 
-    public static OpenXmlElement Parse(string latex)
+    // Collector for LaTeX commands / environments that the parser does not
+    // recognize and silently renders as literal text. Threaded as a
+    // [ThreadStatic] field (same convention as _groupDepth) rather than a
+    // parameter so the many recursive parse helpers stay untouched. When
+    // non-null, the two text-fallback sites (unknown command default arm,
+    // unknown environment arm) append the token here. The CLI/handler layer
+    // then surfaces these as `unrecognized_latex_command` warnings, mirroring
+    // the `unsupported_property` UX (warning + JSON envelope + exit 2). Lenient
+    // accept is preserved: the text fallback still happens regardless.
+    [ThreadStatic] private static ICollection<string>? _unrecognized;
+
+    private static void RecordUnrecognized(string token)
     {
+        var sink = _unrecognized;
+        if (sink == null) return;
+        // De-duplicate so a command used twice is reported once.
+        if (!sink.Contains(token)) sink.Add(token);
+    }
+
+    public static OpenXmlElement Parse(string latex) => Parse(latex, null);
+
+    /// <summary>
+    /// Parse LaTeX to OMML, additionally collecting any unrecognized commands
+    /// or environments into <paramref name="unrecognized"/> (de-duplicated).
+    /// Unknown tokens are still rendered as literal text (lenient accept); the
+    /// collector is purely a diagnostics out-channel so callers can surface a
+    /// visible warning. Pass <c>null</c> for the legacy no-diagnostics behavior.
+    /// </summary>
+    public static OpenXmlElement Parse(string latex, ICollection<string>? unrecognized)
+    {
+        var prevUnrecognized = _unrecognized;
+        _unrecognized = unrecognized;
         try
         {
             // Preprocess: fix double-escaped backslashes (common AI/JSON over-escaping)
@@ -80,6 +110,10 @@ internal static class FormulaParser
         {
             throw new FormulaParseException(
                 $"Failed to parse formula: {ex.Message} {KatexDocsHint}", ex);
+        }
+        finally
+        {
+            _unrecognized = prevUnrecognized;
         }
     }
 
@@ -1305,6 +1339,7 @@ internal static class FormulaParser
                 }
 
                 // Unknown environment, render as text
+                RecordUnrecognized($"\\begin{{{envName}}}");
                 return MakeMathRun($"\\begin{{{envName}}}");
             }
             case "end":
@@ -1939,6 +1974,7 @@ internal static class FormulaParser
 
             default:
                 // Unknown command: render as text with backslash
+                RecordUnrecognized($"\\{cmd}");
                 return MakeMathRun($"\\{cmd}");
         }
     }

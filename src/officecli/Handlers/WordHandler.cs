@@ -130,6 +130,15 @@ public partial class WordHandler : IDocumentHandler, Rendering.IRenderModelHost
     public List<string> LastSetWarnings { get; internal set; } = new();
 
     /// <summary>
+    /// LaTeX commands/environments the most recent Add()/Set() equation parse
+    /// did not recognize and silently rendered as literal text. Surfaced to the
+    /// CLI layer as <c>unrecognized_latex_command</c> warnings (exit code 2),
+    /// mirroring the <c>unsupported_property</c> UX — lenient accept is kept
+    /// (the equation is still written). Reset at the start of each Add/Set.
+    /// </summary>
+    public List<string> LastUnrecognizedLatex { get; internal set; } = new();
+
+    /// <summary>
     /// Set true by Add/Set/Remove/RawSet, consumed by Save/Dispose to decide
     /// whether to stamp <c>docProps/custom.xml</c> with an OfficeCLI audit
     /// trail. Pure Get/Query sessions leave this false and never touch the

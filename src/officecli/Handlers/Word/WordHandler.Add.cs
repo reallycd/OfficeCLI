@@ -44,6 +44,7 @@ public partial class WordHandler
         // it as a WARNING line so curated-surface gaps stop being silent.
         LastAddUnsupportedProps = new List<string>();
         LastAddWarnings = new List<string>();
+        LastUnrecognizedLatex = new List<string>();
 
         // Reject negative --index up front with a clean message instead of
         // letting it fall through and surface as a raw .NET
