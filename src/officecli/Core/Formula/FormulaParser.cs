@@ -2350,6 +2350,20 @@ internal static class FormulaParser
             rows.Add(currentRow);
         }
 
+        // R2-fuzz-4 / WB-R2-1: an EMPTY environment (\begin{matrix}\end{matrix},
+        // \begin{cases}\end{cases}, an unclosed \begin{matrix} with no tokens,
+        // …) leaves `rows` empty. OMML CT_M requires ≥1 m:mr and CT_MR ≥1 m:e,
+        // so an empty matrix is schema-invalid (Word refuses the file); the
+        // cases/star/array column code also called rows.Max(...) which throws
+        // "Sequence contains no elements" on an empty list. Synthesize one
+        // minimal row holding one empty cell so every empty environment yields
+        // valid minimal OMML instead of crashing or writing a corrupt file.
+        if (rows.Count == 0)
+            rows.Add(new List<List<OpenXmlElement>>
+            {
+                new List<OpenXmlElement> { MakeMathRun("") }
+            });
+
         // ECMA-376 CT_M caps a matrix at 64 rows (m:mr) and CT_MR caps a row
         // at 64 columns (m:e). Exceeding either silently produces a
         // schema-invalid document that Word refuses to open. Clamp both and
