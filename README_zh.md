@@ -309,6 +309,15 @@ officecli batch deck.pptx --commands '[{"op":"set","path":"/slide[1]/shape[1]","
 officecli batch deck.pptx --input updates.json --force --json
 ```
 
+> **要用其他工具读这个文件?先落盘。**
+> OfficeCLI 自己的读(`get`/`query`/`view`)永远能看到最新改动,所以在 officecli 内部无需操心保存。但常驻进程会延迟写盘,因此**在非-officecli 程序读取该文件之前**——python-docx/openpyxl、Microsoft Word、渲染器、交付/上传——先落盘:
+> ```bash
+> officecli set report.docx /body/p[1] --prop bold=true
+> officecli save report.docx           # 落盘, 保留常驻进程(或 `close` = 落盘 + 释放)
+> python my_reader.py report.docx      # 此时才能看到改动
+> ```
+> 常驻进程闲置约 10s 后也会自动落盘一次。完整落盘模型(auto-save / auto-close / save / close、环境变量调节):[wiki → open / close](https://github.com/iOfficeAI/OfficeCLI/wiki/command-open#when-the-file-on-disk-is-refreshed)。
+
 ### 三层架构
 
 从简单开始，仅在需要时深入。

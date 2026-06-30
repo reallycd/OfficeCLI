@@ -291,7 +291,7 @@ officecli batch new.docx --input blueprint.json
 
 ### Resident Mode & Batch
 
-For multi-step workflows, resident mode keeps the document in memory. Batch mode runs multiple operations in one open/save cycle.
+For multi-step workflows, resident mode keeps the document in memory. Batch mode applies multiple operations in a single pass.
 
 ```bash
 # Resident mode — near-zero latency via named pipes
@@ -300,7 +300,7 @@ officecli set report.docx /body/p[1]/r[1] --prop bold=true
 officecli set report.docx /body/p[2]/r[1] --prop color=FF0000
 officecli close report.docx
 
-# Batch mode — atomic multi-command execution (stops on first error by default)
+# Batch mode — multi-command execution (continues on error by default; --stop-on-error to abort)
 echo '[{"command":"set","path":"/slide[1]/shape[1]","props":{"text":"Hello"}},
       {"command":"set","path":"/slide[1]/shape[2]","props":{"fill":"FF0000"}}]' \
   | officecli batch deck.pptx --json
@@ -308,9 +308,18 @@ echo '[{"command":"set","path":"/slide[1]/shape[1]","props":{"text":"Hello"}},
 # Inline batch with --commands (no stdin needed)
 officecli batch deck.pptx --commands '[{"op":"set","path":"/slide[1]/shape[1]","props":{"text":"Hi"}}]'
 
-# Use --force to continue past errors
-officecli batch deck.pptx --input updates.json --force --json
+# Abort on the first failing command (default is continue-on-error)
+officecli batch deck.pptx --input updates.json --stop-on-error --json
 ```
+
+> **Reading the file with another tool? Flush to disk first.**
+> officecli's own reads (`get`/`query`/`view`) always see your latest edits, so within officecli you never need to save. But a live resident defers the disk write, so **before a non‑officecli program reads the file** — python‑docx/openpyxl, Microsoft Word, a renderer, delivery/upload — flush it:
+> ```bash
+> officecli set report.docx /body/p[1] --prop bold=true
+> officecli save report.docx           # flush, keep the resident warm (or `close` to flush + release)
+> python my_reader.py report.docx      # now sees the edit
+> ```
+> A live resident also auto‑flushes ~10s after going idle. Full flush model (auto‑save / auto‑close / save / close, env tuning): [wiki → open / close](https://github.com/iOfficeAI/OfficeCLI/wiki/command-open#when-the-file-on-disk-is-refreshed).
 
 ### Three-Layer Architecture
 
@@ -498,7 +507,7 @@ See `officecli --help` for full details on exit codes and error formats.
 | [`swap`](https://github.com/iOfficeAI/OfficeCLI/wiki/command-swap) | Swap two elements |
 | [`validate`](https://github.com/iOfficeAI/OfficeCLI/wiki/command-validate) | Validate against OpenXML schema |
 | `view <file> issues` | Enumerate document issues (text overflow, missing alt text, formula errors, ...) |
-| [`batch`](https://github.com/iOfficeAI/OfficeCLI/wiki/command-batch) | Multiple operations in one open/save cycle (stdin, `--input`, or `--commands`; stops on first error, `--force` to continue) |
+| [`batch`](https://github.com/iOfficeAI/OfficeCLI/wiki/command-batch) | Multiple operations applied in a single pass (stdin, `--input`, or `--commands`; continues on error by default, `--stop-on-error` to abort) |
 | [`dump`](https://github.com/iOfficeAI/OfficeCLI/wiki/command-dump) | Serialize a `.docx` or `.pptx` into a replayable batch JSON (round-trip via `batch`); accepts a subtree path |
 | [`refresh`](https://github.com/iOfficeAI/OfficeCLI/wiki/command-refresh) | Recalculate TOC page numbers / `PAGE` / cross-references (`.docx`; Word backend on Windows, headless-HTML fallback) |
 | [`plugins`](https://github.com/iOfficeAI/OfficeCLI/wiki/command-plugins) | List / inspect / lint installed plugins (extend to `.doc`, `.hwpx`, `.pdf` export via dump-reader / exporter / format-handler kinds) |

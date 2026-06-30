@@ -390,13 +390,17 @@ async function ensureCliBinary(binary, autoInstall) {
   return binary; // give up → runCli raises the helpful MISSING_CLI
 }
 
-// Quote one token for a cmd.exe command line: wrap in double quotes when it
-// holds whitespace or a cmd metacharacter, doubling any embedded quote. Plain
-// tokens pass through unquoted. (Windows filenames can't contain '"', so the
-// escape is just defensive.)
+// Quote one token for a cmd.exe command line: ALWAYS wrap in double quotes,
+// doubling any embedded quote. Unconditional quoting (rather than "only when it
+// looks dangerous") is deliberate — it removes any reliance on enumerating every
+// cmd metacharacter. A double-quoted token cannot be re-tokenized by cmd.exe, so
+// & | < > ^ ( ) " are inert, and a %VAR% expansion stays *inside* the quotes and
+// thus can never inject a command separator (at worst the argument is mangled —
+// there is no command-line escape for %, a documented cmd.exe limitation). This
+// matters because the binary path / args may be untrusted when the SDK is driven
+// by a server. cmd /s strips the outer wrapper, leaving these per-token quotes.
 function quoteForCmd(s) {
-  if (s === '') return '""';
-  return /[\s&|<>^()"]/.test(s) ? `"${String(s).replace(/"/g, '""')}"` : String(s);
+  return `"${String(s).replace(/"/g, '""')}"`;
 }
 
 function spawnCli(binary, argv, extraOpts) {

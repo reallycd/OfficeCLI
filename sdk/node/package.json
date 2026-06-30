@@ -1,6 +1,6 @@
 {
   "name": "@officecli/sdk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Node.js SDK for officecli — a thin async client over the officecli resident pipe (read/write .docx/.xlsx/.pptx).",
   "license": "Apache-2.0",
   "author": "goworm",

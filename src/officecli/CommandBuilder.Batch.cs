@@ -16,7 +16,7 @@ static partial class CommandBuilder
     // which fails with "Unknown command". Document the per-item shape and a
     // concrete example here so `help batch` actually teaches it.
     private const string BatchHelpDescription =
-        "Execute multiple commands from a JSON array (one open/save cycle).\n\n"
+        "Execute multiple commands from a JSON array in a single pass. Standalone, this is one open/save cycle; through a live resident the items apply in memory and the disk write is deferred to save/close/idle-autosave (officecli's own reads still see the changes immediately).\n\n"
         + "Each array item is an OBJECT whose \"command\" is the bare verb "
         + "(add/set/remove/move/swap/get/query/...); the verb's arguments are SIBLING fields, "
         + "not a CLI string inside \"command\". Common fields: \"parent\" (add target), "
@@ -307,11 +307,15 @@ static partial class CommandBuilder
             // path checks just after it opens the handler (below). Reading the
             // live tree — not the on-disk copy — also keeps the gate correct
             // when a resident holds uncommitted in-memory protection changes
-            // (resident sessions flush only on save/close).
+            // (resident sessions flush only on save/close/idle-autosave).
 
             // If a resident process is running, send the entire batch as a
-            // single "batch" command so it executes in one open/save cycle
-            // inside the resident process (same semantics as non-resident mode).
+            // single "batch" command so all items run in one pass inside the
+            // resident. NOTE: unlike the standalone path, this does NOT save to
+            // disk per batch — the resident applies the items in memory and
+            // defers the flush to the next save/close/idle-autosave. A reader
+            // that bypasses the resident must flush first (see command-open /
+            // command-batch wiki "Persisting changes").
             if (ResidentClient.TryConnect(file.FullName, out _))
             {
                 var req = new ResidentRequest
