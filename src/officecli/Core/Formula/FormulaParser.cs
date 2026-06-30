@@ -2301,6 +2301,29 @@ internal static class FormulaParser
             rows.Add(currentRow);
         }
 
+        // ECMA-376 CT_M caps a matrix at 64 rows (m:mr) and CT_MR caps a row
+        // at 64 columns (m:e). Exceeding either silently produces a
+        // schema-invalid document that Word refuses to open. Clamp both and
+        // surface an `unrecognized_latex_command`-style warning so the
+        // truncation is visible rather than a silent corrupt file.
+        const int MatrixMaxDim = 64;
+        if (rows.Count > MatrixMaxDim)
+        {
+            RecordUnrecognized($"\\begin{{{envName}}} (>{MatrixMaxDim} rows, truncated)");
+            rows = rows.Take(MatrixMaxDim).ToList();
+        }
+        var clampedCols = false;
+        foreach (var row in rows)
+        {
+            if (row.Count > MatrixMaxDim)
+            {
+                clampedCols = true;
+                row.RemoveRange(MatrixMaxDim, row.Count - MatrixMaxDim);
+            }
+        }
+        if (clampedCols)
+            RecordUnrecognized($"\\begin{{{envName}}} (>{MatrixMaxDim} columns, truncated)");
+
         // Build OMML Matrix
         var matrix = new M.Matrix(new M.MatrixProperties());
         foreach (var row in rows)
