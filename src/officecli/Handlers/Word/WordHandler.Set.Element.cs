@@ -962,6 +962,74 @@ public partial class WordHandler
         return unsupported;
     }
 
+    // An INLINE equation resolves to a bare m:oMath sitting directly inside a
+    // w:p (no m:oMathPara wrapper). The display form is m:oMathPara wrapping
+    // m:oMath; SetElementMPara owns the m:oMathPara (display) case, so this
+    // helper owns the inline case. BUG-BT3: a `set mode=display` on an inline
+    // equation previously fell through SetElement with no matching arm,
+    // returning an empty unsupported list — the CLI printed "Updated … exit 0"
+    // while writing nothing (a silent no-op). Implement inline→display by
+    // wrapping the m:oMath in an m:oMathPara in place.
+    private List<string> SetElementOMath(M.OfficeMath oMath, Dictionary<string, string> properties)
+    {
+        var unsupported = new List<string>();
+        foreach (var (key, value) in properties)
+        {
+            var k = key.ToLowerInvariant();
+            switch (k)
+            {
+                case "formula":
+                {
+                    // Rebuild the equation contents from the new formula, keeping
+                    // it inline (mirrors the run-level formula set path).
+                    foreach (var child in oMath.ChildElements.ToList())
+                        child.Remove();
+                    var mathContent = FormulaParser.Parse(value, LastUnrecognizedLatex);
+                    if (mathContent is M.OfficeMath parsed)
+                        foreach (var c in parsed.ChildElements.ToList())
+                            oMath.AppendChild(c.CloneNode(true));
+                    else
+                        oMath.AppendChild(mathContent.CloneNode(true));
+                    break;
+                }
+                case "mode":
+                {
+                    var modeNorm = value.ToLowerInvariant();
+                    if (modeNorm == "display")
+                    {
+                        // Wrap the inline m:oMath in an m:oMathPara so it renders
+                        // as a centered display block. m:oMathPara is the only
+                        // legal parent that gives display placement.
+                        var mPara = new M.Paragraph();
+                        oMath.InsertBeforeSelf(mPara);
+                        oMath.Remove();
+                        mPara.AppendChild(oMath);
+                    }
+                    else if (modeNorm == "inline")
+                    {
+                        // Already inline — no-op.
+                    }
+                    else
+                    {
+                        unsupported.Add($"mode (valid: inline, display)");
+                    }
+                    break;
+                }
+                default:
+                    unsupported.Add(unsupported.Count == 0
+                        ? $"{key} (valid equation props: formula, mode)"
+                        : key);
+                    break;
+            }
+        }
+
+        var affectedPara = oMath.Ancestors<Paragraph>().FirstOrDefault();
+        if (affectedPara != null)
+            affectedPara.TextId = GenerateParaId();
+        SaveDoc();
+        return unsupported;
+    }
+
     // Apply the paragraph-MARK tracked-change revisions the dump carries as the
     // .author/.date/.id namespaces — paraMarkIns (<w:pPr><w:rPr><w:ins/>),
     // paraMarkDel (<w:del/>) and numPrIns (<w:numPr><w:ins/>) — onto a paragraph's
