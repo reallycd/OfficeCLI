@@ -2913,6 +2913,7 @@ internal static class FormulaParser
         "supseteq" => "⊇",
         "in" => "∈",
         "notin" => "∉",
+        "ni" => "∋",   // contains-as-member (∋); forward was missing
         // Additional relations
         "propto" => "∝",
         "cong" => "≅",
@@ -3182,6 +3183,15 @@ internal static class FormulaParser
         // \Leftrightarrow (shares glyph with \iff/⟺ which is a distinct
         // codepoint), ↦ → \mapsto.
         ("↔", "\\leftrightarrow "), ("⇔", "\\Leftrightarrow "), ("↦", "\\mapsto "),
+        // R3 completeness pass — remaining reverse orphans (forward-only in
+        // CommandToSymbol, previously round-tripped to bare Unicode): dots,
+        // set/relation glyphs, operators and letter-like symbols. ∅ is shared
+        // with \varnothing; canonical reverse is \emptyset. (Spacing commands
+        // \,/\;/\quad/\qquad map to whitespace, which is its own reverse.)
+        ("∙", "\\bullet "), ("⋯", "\\cdots "), ("⋱", "\\ddots "), ("⋮", "\\vdots "),
+        ("∅", "\\emptyset "), ("…", "\\ldots "), ("∇", "\\nabla "), ("∂", "\\partial "),
+        ("⊆", "\\subseteq "), ("⊇", "\\supseteq "), ("∁", "\\complement "),
+        ("∋", "\\ni "),
     };
 
     // ==================== Unicode subscript/superscript ====================
