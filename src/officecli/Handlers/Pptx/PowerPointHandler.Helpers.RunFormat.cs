@@ -335,6 +335,20 @@ public partial class PowerPointHandler
     {
         if (gradFill.Flip?.HasValue == true) return true;
         if (gradFill.GetFirstChild<Drawing.TileRectangle>() != null) return true;
+        // A path (radial/shape) gradient's <a:fillToRect> focus is only coarsely
+        // represented by the semantic focus keyword (tl/tr/bl/br/center). An
+        // off-center rect (e.g. t=150000 b=-50000, focus pushed below centre)
+        // collapses to "center" and the focus is lost on replay (sample01).
+        // Preserve the gradient verbatim whenever the fillToRect is not the
+        // centred default (50000 on all four sides).
+        var pathGrad = gradFill.GetFirstChild<Drawing.PathGradientFill>();
+        var ftr = pathGrad?.GetFirstChild<Drawing.FillToRectangle>();
+        if (ftr != null)
+        {
+            long l = ftr.Left?.Value ?? 50000, t = ftr.Top?.Value ?? 50000,
+                 r = ftr.Right?.Value ?? 50000, b = ftr.Bottom?.Value ?? 50000;
+            if (!(l == 50000 && t == 50000 && r == 50000 && b == 50000)) return true;
+        }
         return false;
     }
 
