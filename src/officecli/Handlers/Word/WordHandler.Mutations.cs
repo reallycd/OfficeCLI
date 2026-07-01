@@ -1338,7 +1338,11 @@ public partial class WordHandler
         }
         else
         {
-            targetParent.AppendChild(element);
+            // AppendToParent (not raw AppendChild): a body-level append must land
+            // BEFORE the trailing w:sectPr, which must remain the last child of
+            // w:body. `move … --to /body` with no anchor/index otherwise placed
+            // the element after sectPr → schema-invalid ("unexpected child").
+            AppendToParent(targetParent, element);
         }
 
         SaveDoc();
