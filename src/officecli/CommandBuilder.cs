@@ -1448,7 +1448,11 @@ static partial class CommandBuilder
 
             foreach (var child in slideNode.Children)
             {
-                if (child.Path == path) continue;
+                // Skip the element itself. `path` may be an index form
+                // (/slide[1]/group[1]) while Get returns the canonical id form
+                // (/slide[1]/group[@id=100000]); compare against BOTH so an
+                // element never reports overlapping with itself.
+                if (child.Path == path || child.Path == node.Path) continue;
                 if (!child.Format.ContainsKey("x") || !child.Format.ContainsKey("y")) continue;
                 var cx = child.Format["x"]?.ToString();
                 var cy = child.Format["y"]?.ToString();
