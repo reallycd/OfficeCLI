@@ -353,6 +353,19 @@ internal static class OutputFormatter
             return;
         }
 
+        // Diagram input-validation failures: no mermaid source supplied, or the
+        // source parsed to an empty graph (bare header / all statements
+        // malformed). These are bad-input values the caller can fix, not handler
+        // crashes — keep them out of internal_error. (The empty-graph case used
+        // to leak a raw LINQ "Sequence contains no elements".)
+        if (msg.StartsWith("diagram requires ", StringComparison.Ordinal)
+            || msg.StartsWith("diagram has no nodes", StringComparison.Ordinal)
+            || msg.StartsWith("sequence diagram has no ", StringComparison.Ordinal))
+        {
+            result.Code = "invalid_value";
+            return;
+        }
+
         // Pattern: "Row <N> in cell reference '...' is out of valid range. …" /
         // "Column '<X>' in cell reference '...' is out of range. …" —
         // raised by ParseCellReference (ExcelHandler.Selector.cs) when a

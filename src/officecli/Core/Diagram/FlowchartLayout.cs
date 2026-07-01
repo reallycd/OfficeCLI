@@ -46,6 +46,16 @@ public static class FlowchartLayout
 
     public static LaidOutGraph Layout(DiagramGraph g)
     {
+        // A header with no node/edge statements (e.g. a bare "flowchart TD", or
+        // input whose only line failed to parse into a node) leaves zero nodes.
+        // Guard here with a clear message — otherwise the bounding-box Min/Max
+        // below throws a bare "Sequence contains no elements" that surfaces as
+        // internal_error. Mirrors SequenceLayout's empty-participants guard.
+        if (g.Nodes.Count == 0)
+            throw new ArgumentException(
+                "diagram has no nodes — the mermaid source has no node/edge statements "
+                + "(e.g. 'flowchart TD; A[Start] --> B[End]').");
+
         bool td = g.Direction == FlowDirection.TopDown;
         var nodes = new Dictionary<string, WNode>();
         var real = new List<string>();
