@@ -1812,6 +1812,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 OpenXmlPartContainer erHost;
                 var erSm = Regex.Match(parentPartPath, @"^/slideMaster\[(\d+)\]$");
                 var erSl = erSm.Success ? null : Regex.Match(parentPartPath, @"^/slideLayout\[(\d+)\]$");
+                var erSld = (erSm.Success || (erSl?.Success ?? false)) ? null : Regex.Match(parentPartPath, @"^/slide\[(\d+)\]$");
                 if (erSm.Success)
                 {
                     var i = int.Parse(erSm.Groups[1].Value);
@@ -1828,8 +1829,15 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                     if (i < 1 || i > ps.Count) throw new ArgumentException($"slideLayout index {i} out of range");
                     erHost = ps[i - 1];
                 }
+                else if (erSld != null && erSld.Success)
+                {
+                    var i = int.Parse(erSld.Groups[1].Value);
+                    var ps = GetSlideParts().ToList();
+                    if (i < 1 || i > ps.Count) throw new ArgumentException($"slide index {i} out of range");
+                    erHost = ps[i - 1];
+                }
                 else
-                    throw new ArgumentException("add-part extrel: parent must be /slideMaster[N] or /slideLayout[N]");
+                    throw new ArgumentException("add-part extrel: parent must be /slide[N], /slideMaster[N] or /slideLayout[N]");
                 // Idempotent.
                 if (erHost.ExternalRelationships.Any(r => r.Id == erRid)
                     || erHost.Parts.Any(p => p.RelationshipId == erRid))
@@ -3308,6 +3316,87 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
     }
 
     /// <summary>
+    /// A <c>&lt;p:pic&gt;</c> that hosts a <c>&lt;a:videoFile&gt;</c> /
+    /// <c>&lt;a:audioFile&gt;</c> but is NOT a modern embedded-media shape
+    /// (no <c>p14:media</c> extension resolving to a local MediaDataPart) —
+    /// typically a legacy PowerPoint 2007 external linked movie
+    /// (<c>videoFile r:link</c> pointing at a <c>TargetMode="External"</c>
+    /// file:// URI, with a local poster image in the blipFill). GetMediaOnSlide
+    /// rejects these (it requires an embedded MediaDataPart), and the typed
+    /// walk skips <c>video</c>/<c>audio</c> nodes, so without this pass the
+    /// entire picture is silently dropped on dump∘replay. We round-trip the
+    /// shape verbatim plus its external link relationship(s) and poster
+    /// image(s), so the poster still renders and the videoFile r:link no
+    /// longer dangles.
+    /// </summary>
+    internal readonly record struct ExternalMediaPicInfo(
+        string PicXml,
+        IReadOnlyList<(string Rid, string RelType, string Target)> ExternalRels,
+        IReadOnlyList<string> ImageRids);
+
+    internal IReadOnlyList<ExternalMediaPicInfo> GetExternalMediaPicsOnSlide(int slideIdx)
+    {
+        var result = new List<ExternalMediaPicInfo>();
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return result;
+        var slidePart = parts[slideIdx - 1];
+        var slide = GetSlide(slidePart);
+        var spTree = slide.CommonSlideData?.ShapeTree;
+        if (spTree == null) return result;
+
+        foreach (var pic in spTree.Descendants<Picture>())
+        {
+            var nvPr = pic.NonVisualPictureProperties?.ApplicationNonVisualDrawingProperties;
+            if (nvPr == null) continue;
+
+            var videoFile = nvPr.GetFirstChild<DocumentFormat.OpenXml.Drawing.VideoFromFile>();
+            var audioFile = nvPr.GetFirstChild<DocumentFormat.OpenXml.Drawing.AudioFromFile>();
+            if (videoFile == null && audioFile == null) continue;
+
+            // If a p14:media extension resolves to a local MediaDataPart, this
+            // is a modern embedded-media shape owned by EmitMediaForSlide; skip
+            // it here to avoid double-emit.
+            var p14Media = nvPr.Descendants<DocumentFormat.OpenXml.Office2010.PowerPoint.Media>().FirstOrDefault();
+            var mediaEmbedRid = p14Media?.Embed?.Value;
+            bool hasLocalMedia = false;
+            if (!string.IsNullOrEmpty(mediaEmbedRid))
+            {
+                foreach (var rel in slidePart.DataPartReferenceRelationships)
+                    if (rel.Id == mediaEmbedRid && rel.DataPart is MediaDataPart) { hasLocalMedia = true; break; }
+            }
+            if (hasLocalMedia) continue;
+
+            // Collect every relationship id the pic references (r:embed / r:link /
+            // r:id on any descendant attribute), then classify each as an
+            // external relationship (carry via add-part extrel) or a local
+            // ImagePart (carry via add-part image).
+            var refRids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Match m in Regex.Matches(pic.OuterXml, @"r:(?:embed|link|id)=""(rId\d+)"""))
+                refRids.Add(m.Groups[1].Value);
+
+            var extRels = new List<(string, string, string)>();
+            var imageRids = new List<string>();
+            foreach (var rid in refRids)
+            {
+                var ext = slidePart.ExternalRelationships.FirstOrDefault(r => r.Id == rid);
+                if (ext != null)
+                {
+                    extRels.Add((rid, ext.RelationshipType, ext.Uri.OriginalString));
+                    continue;
+                }
+                try
+                {
+                    if (slidePart.GetPartById(rid) is ImagePart) imageRids.Add(rid);
+                }
+                catch { /* media/other data-part rel — not an ImagePart, ignore */ }
+            }
+
+            result.Add(new ExternalMediaPicInfo(pic.OuterXml, extRels, imageRids));
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Per-slide am3d 3D-model info for PptxBatchEmitter Phase 3c-3d
     /// passthrough. Returns one entry per &lt;mc:AlternateContent&gt; block
     /// whose &lt;mc:Choice Requires="am3d"&gt; carries an &lt;am3d:model3d&gt;
@@ -4016,6 +4105,65 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
             ordinal = shapeIdx;
         }
         var styleEl = shape.GetFirstChild<ShapeStyle>();
+        if (styleEl == null) return null;
+        return (styleEl.OuterXml, ordinal);
+    }
+
+    // Connector <p:style> round-trip, mirroring GetShapeStyleXmlWithOrdinal.
+    // A <p:cxnSp>'s theme-reference block (<a:lnRef>/<a:fillRef>/<a:effectRef>/
+    // <a:fontRef>) has no typed Add/Set vocabulary and NodeBuilder doesn't
+    // surface it, so the connector's styled line colour (commonly lnRef→accent1)
+    // was silently dropped on dump∘replay — the line fell back to the theme's
+    // default near-black stroke. Return the verbatim <p:style> XML + the
+    // connector's ordinal within its parent scope so the emitter can raw-set
+    // append it onto the replayed <p:cxnSp>.
+    internal (string Xml, int CxnOrdinal)? GetConnectorStyleXmlWithOrdinal(string cxnPath)
+    {
+        var m = Regex.Match(cxnPath,
+            @"^/slide\[(\d+)\]((?:/group\[(?:@id=)?\d+\])*)/connector\[(@id=)?(\d+)\]$");
+        if (!m.Success) return null;
+        var slideIdx = int.Parse(m.Groups[1].Value);
+        var grpChain = m.Groups[2].Value;
+        var byId = m.Groups[3].Value.Length > 0;
+        var cxnIdx = int.Parse(m.Groups[4].Value);
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return null;
+        var slidePart = parts[slideIdx - 1];
+        OpenXmlCompositeElement? scope = GetSlide(slidePart).CommonSlideData?.ShapeTree;
+        if (scope == null) return null;
+        foreach (Match gm in Regex.Matches(grpChain, @"/group\[(@id=)?(\d+)\]"))
+        {
+            var groupsHere = scope.Elements<GroupShape>().ToList();
+            GroupShape? grp;
+            if (gm.Groups[1].Value.Length > 0)
+                grp = groupsHere.FirstOrDefault(g =>
+                    g.NonVisualGroupShapeProperties?.NonVisualDrawingProperties?.Id?.Value
+                        == (uint)int.Parse(gm.Groups[2].Value));
+            else
+            {
+                var gIdx = int.Parse(gm.Groups[2].Value);
+                grp = (gIdx >= 1 && gIdx <= groupsHere.Count) ? groupsHere[gIdx - 1] : null;
+            }
+            if (grp == null) return null;
+            scope = grp;
+        }
+        var cxns = scope.Elements<ConnectionShape>().ToList();
+        ConnectionShape? cxn;
+        int ordinal;
+        if (byId)
+        {
+            cxn = cxns.FirstOrDefault(
+                c => c.NonVisualConnectionShapeProperties?.NonVisualDrawingProperties?.Id?.Value == (uint)cxnIdx);
+            if (cxn == null) return null;
+            ordinal = cxns.IndexOf(cxn) + 1;
+        }
+        else
+        {
+            if (cxnIdx < 1 || cxnIdx > cxns.Count) return null;
+            cxn = cxns[cxnIdx - 1];
+            ordinal = cxnIdx;
+        }
+        var styleEl = cxn.GetFirstChild<ShapeStyle>();
         if (styleEl == null) return null;
         return (styleEl.OuterXml, ordinal);
     }

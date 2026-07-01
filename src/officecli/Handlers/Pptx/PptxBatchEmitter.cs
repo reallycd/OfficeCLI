@@ -861,6 +861,15 @@ public static partial class PptxBatchEmitter
         // passthrough. The typed walk skipped video/audio children above.
         EmitMediaForSlide(ppt, slideNum, slidePath, items, ctx);
 
+        // Phase 3c-media (legacy/external): <p:pic> video/audio hosts that are
+        // NOT modern embedded media (e.g. a PowerPoint 2007 external linked
+        // movie: <a:videoFile r:link> → TargetMode="External" file, with a
+        // local poster image). GetMediaOnSlide rejects these, and the typed
+        // walk skipped the video/audio child, so without this pass the whole
+        // picture is dropped. Round-trip it verbatim + its external link rel +
+        // poster image rel.
+        EmitExternalMediaForSlide(ppt, slideNum, slidePath, items, ctx);
+
         // Timing / transition SOUND relationships: <p:sndTgt r:embed> in the
         // raw-passed-through <p:timing> tree (and <p:snd r:embed> in a
         // <p:transition>) reference a bare `.../audio` rel that the media pass

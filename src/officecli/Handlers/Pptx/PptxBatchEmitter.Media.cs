@@ -302,6 +302,78 @@ public static partial class PptxBatchEmitter
         }
     }
 
+    // Phase 3c-media (legacy/external). Companion to EmitMediaForSlide for
+    // <p:pic> video/audio hosts that GetMediaOnSlide rejects because they carry
+    // no embedded MediaDataPart — the classic case is a PowerPoint 2007 movie
+    // linked to an external file (<a:videoFile r:link="rIdN"/> where rIdN is a
+    // TargetMode="External" file:// relationship, plus a local poster image in
+    // the blipFill). The typed walk skips video/audio children (EmitSlide's
+    // switch routes them here), and GetMediaOnSlide skips no-embed pics, so
+    // without this pass the whole picture — poster and all — is silently lost.
+    //
+    // For each such pic we emit: one `add-part extrel` per external link rel
+    // (re-creating the TargetMode="External" relationship with its pinned rId
+    // so <a:videoFile r:link> no longer dangles), one `add-part image` per
+    // local poster/blipFill image (pinned rId), then a raw-set append of the
+    // <p:pic> verbatim. Same append-at-spTree-end model as EmitMediaForSlide.
+    internal static void EmitExternalMediaForSlide(PowerPointHandler ppt, int slideNum,
+                                                   string slidePath, List<BatchItem> items,
+                                                   SlideEmitContext ctx)
+    {
+        IReadOnlyList<PowerPointHandler.ExternalMediaPicInfo> pics;
+        try { pics = ppt.GetExternalMediaPicsOnSlide(slideNum); }
+        catch { return; }
+        if (pics.Count == 0) return;
+
+        foreach (var p in pics)
+        {
+            foreach (var (rid, relType, target) in p.ExternalRels)
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "add-part",
+                    Parent = slidePath,
+                    Type = "extrel",
+                    Props = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["rid"] = rid,
+                        ["rel-type"] = relType,
+                        ["target"] = target,
+                    },
+                });
+            }
+
+            if (p.ImageRids.Count > 0)
+            {
+                foreach (var img in ppt.GetSlideImagePartsByRelId(slideNum, p.ImageRids.ToList()))
+                    items.Add(new BatchItem
+                    {
+                        Command = "add-part",
+                        Parent = slidePath,
+                        Type = "image",
+                        Props = new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["rid"] = img.RelId,
+                            ["content-type"] = img.ContentType,
+                            ["data"] = img.Base64Data,
+                        },
+                    });
+            }
+
+            string picCanon;
+            try { picCanon = NormalizeSlideRawSlice(p.PicXml); }
+            catch { picCanon = p.PicXml; }
+            items.Add(new BatchItem
+            {
+                Command = "raw-set",
+                Part = slidePath,
+                Xpath = "/p:sld/p:cSld/p:spTree",
+                Action = "append",
+                Xml = picCanon,
+            });
+        }
+    }
+
     // Phase 3c-3d. Mirrors EmitMediaForSlide (Phase 3c-media). Per slide,
     // scan for <mc:AlternateContent> blocks whose <mc:Choice Requires="am3d">
     // carries <am3d:model3d>; emit an `add-part model3d` row that creates
