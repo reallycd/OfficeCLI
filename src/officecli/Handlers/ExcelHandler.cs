@@ -184,8 +184,11 @@ public partial class ExcelHandler : IDocumentHandler, Rendering.IRenderModelHost
             var chartIdx = int.Parse(chartMatch.Groups[2].Value);
             var chartWs = FindWorksheet(chartSheetName)
                 ?? throw SheetNotFoundException(chartSheetName);
-            var chartPart = GetChartPart(chartWs, chartIdx);
-            return chartPart.ChartSpace!.OuterXml;
+            // Resolve via GetExcelCharts (document order, both legacy ChartPart and
+            // extended cx ChartPart) so `raw` reaches the same charts `query`/`get`
+            // list. The legacy-only GetChartPart missed funnel/treemap/sunburst/
+            // boxWhisker/waterfall/histogram (all ExtendedChartPart) → "out of range".
+            return GetChartSpaceOuterXml(chartWs.DrawingsPart, chartIdx);
         }
 
         // Global chart: /chart[N] — searches all sheets
@@ -193,8 +196,12 @@ public partial class ExcelHandler : IDocumentHandler, Rendering.IRenderModelHost
         if (globalChartMatch.Success)
         {
             var chartIdx = int.Parse(globalChartMatch.Groups[1].Value);
-            var chartPart = GetGlobalChartPart(chartIdx);
-            return chartPart.ChartSpace!.OuterXml;
+            var all = new List<ExcelChartInfo>();
+            foreach (var (_, wsp) in GetWorksheets())
+                if (wsp.DrawingsPart != null) all.AddRange(GetExcelCharts(wsp.DrawingsPart));
+            if (all.Count == 0)
+                throw new ArgumentException("No charts found in workbook");
+            return ChartSpaceOuterXmlAt(all, chartIdx);
         }
 
         // Try as sheet name
@@ -354,8 +361,10 @@ public partial class ExcelHandler : IDocumentHandler, Rendering.IRenderModelHost
                 var chartIdx = int.Parse(chartMatch.Groups[2].Value);
                 var chartWs = FindWorksheet(chartSheetName)
                     ?? throw SheetNotFoundException(chartSheetName);
-                var chartPart = GetChartPart(chartWs, chartIdx);
-                rootElement = chartPart.ChartSpace!;
+                // Resolve via GetExcelCharts so raw-set writes reach extended (cx)
+                // charts too — mirrors the Raw() read path. GetChartPart was
+                // legacy-only and 422'd cx charts with "out of range".
+                rootElement = GetChartSpaceElement(chartWs.DrawingsPart, chartIdx);
             }
             else
             {
@@ -363,8 +372,12 @@ public partial class ExcelHandler : IDocumentHandler, Rendering.IRenderModelHost
                 if (globalChartMatch.Success)
                 {
                     var chartIdx = int.Parse(globalChartMatch.Groups[1].Value);
-                    var chartPart = GetGlobalChartPart(chartIdx);
-                    rootElement = chartPart.ChartSpace!;
+                    var all = new List<ExcelChartInfo>();
+                    foreach (var (_, wsp) in GetWorksheets())
+                        if (wsp.DrawingsPart != null) all.AddRange(GetExcelCharts(wsp.DrawingsPart));
+                    if (all.Count == 0)
+                        throw new ArgumentException("No charts found in workbook");
+                    rootElement = ChartSpaceElementAt(all, chartIdx);
                 }
                 else
                 {

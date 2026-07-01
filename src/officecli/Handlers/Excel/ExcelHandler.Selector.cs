@@ -328,4 +328,47 @@ public partial class ExcelHandler
             throw new ArgumentException($"Chart index {index} out of range (1..{allCharts.Count})");
         return allCharts[index - 1];
     }
+
+    /// <summary>Raw-XML resolver for a sheet-scoped chart path (/Sheet/chart[N]).
+    /// Uses GetExcelCharts so both legacy and extended (cx) charts resolve in the
+    /// same document order that query/get expose.</summary>
+    private static string GetChartSpaceOuterXml(DrawingsPart? drawingsPart, int index)
+    {
+        if (drawingsPart == null)
+            throw new ArgumentException("Sheet has no drawings/charts");
+        return ChartSpaceOuterXmlAt(GetExcelCharts(drawingsPart), index);
+    }
+
+    /// <summary>Return the ChartSpace OuterXml of the 1-based chart in <paramref name="charts"/>,
+    /// picking the legacy or extended root as appropriate.</summary>
+    private static string ChartSpaceOuterXmlAt(List<ExcelChartInfo> charts, int index)
+    {
+        if (index < 1 || index > charts.Count)
+            throw new ArgumentException($"Chart index {index} out of range (1..{charts.Count})");
+        var info = charts[index - 1];
+        return info.IsExtended
+            ? info.ExtendedPart!.ChartSpace!.OuterXml
+            : info.StandardPart!.ChartSpace!.OuterXml;
+    }
+
+    /// <summary>Live ChartSpace root for raw-set writes on a sheet-scoped chart
+    /// path. Resolves both legacy and extended (cx) charts (see GetExcelCharts).</summary>
+    private static DocumentFormat.OpenXml.OpenXmlPartRootElement GetChartSpaceElement(DrawingsPart? drawingsPart, int index)
+    {
+        if (drawingsPart == null)
+            throw new ArgumentException("Sheet has no drawings/charts");
+        return ChartSpaceElementAt(GetExcelCharts(drawingsPart), index);
+    }
+
+    /// <summary>Live ChartSpace root of the 1-based chart in <paramref name="charts"/>,
+    /// legacy or extended.</summary>
+    private static DocumentFormat.OpenXml.OpenXmlPartRootElement ChartSpaceElementAt(List<ExcelChartInfo> charts, int index)
+    {
+        if (index < 1 || index > charts.Count)
+            throw new ArgumentException($"Chart index {index} out of range (1..{charts.Count})");
+        var info = charts[index - 1];
+        return info.IsExtended
+            ? info.ExtendedPart!.ChartSpace!
+            : info.StandardPart!.ChartSpace!;
+    }
 }

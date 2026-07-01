@@ -2862,6 +2862,10 @@ public partial class WordHandler
         //   shadow        → <a:effectLst><a:outerShdw>    ("true" or "blur;dist;dir;color;alpha")
         string geom = SanitizeGeometry(
             properties.GetValueOrDefault("geometry") ?? properties.GetValueOrDefault("shape") ?? "rect");
+        // Adjust handle for shapes with a single "adj" guide (most notably
+        // roundRect's corner radius). Empty when unset → bare <a:avLst/>.
+        string avLstXml = BuildAdjXml(
+            properties.GetValueOrDefault("cornerRadius") ?? properties.GetValueOrDefault("adj"));
         string rotAttr = BuildRotAttr(
             properties.GetValueOrDefault("rotation") ?? properties.GetValueOrDefault("rot"));
         string vert = properties.GetValueOrDefault("textDirection") ?? properties.GetValueOrDefault("vert") ?? "";
@@ -2888,9 +2892,13 @@ public partial class WordHandler
         string fillXml;
         if (!string.IsNullOrEmpty(gradient))
             fillXml = BuildGradientXml(gradient);
-        else if (!string.IsNullOrEmpty(fillColor))
+        else if (!string.IsNullOrEmpty(fillColor) && !IsNoFillColor(fillColor))
             fillXml = BuildSolidFillXml(fillColor, fillOpacity);
         else
+            // Unset, or the documented `fill=none` / `fill=transparent` sentinel
+            // (see `help docx add textbox`) → explicit no-fill. Previously a
+            // literal "none" fell through to BuildSolidFillXml and the color
+            // parser rejected it, so a borderless/transparent box was impossible.
             fillXml = "<a:noFill/>";
         string lnXml = BuildLineXml(lineStyle, lineWidth, lineColor);
         // effectLst follows fill+ln in CT_ShapeProperties schema order.
@@ -2901,10 +2909,20 @@ public partial class WordHandler
 
         string wrapInnerXml = WrapXmlFragment(wrap);
 
+        // Z-order: behindDoc pushes the box behind body text; relativeHeight
+        // (alias zorder) is the stacking order (higher = front). Defaults keep the
+        // legacy in-front, auto-incrementing behaviour.
+        string behindDocVal = IsTruthy(properties.GetValueOrDefault("behindDoc", "")) ? "1" : "0";
+        string relHeightRaw = properties.GetValueOrDefault("relativeHeight") ?? properties.GetValueOrDefault("zorder");
+        string relHeightVal = !string.IsNullOrWhiteSpace(relHeightRaw)
+            && long.TryParse(relHeightRaw.Trim(), out var rh) && rh >= 0
+            ? rh.ToString()
+            : $"251{siblingShapes:D3}";
+
         // Drawing scaffolding. EffectExtent + DocProperties + a:graphic with
         // a:graphicData uri = wordprocessingShape; inner wps:wsp carries
         // spPr (preset rect geometry + fill + line) + txbx (body paragraphs) + bodyPr.
-        string drawingXml = $@"<w:drawing xmlns:w=""http://schemas.openxmlformats.org/wordprocessingml/2006/main"" xmlns:wp=""http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"" xmlns:a=""http://schemas.openxmlformats.org/drawingml/2006/main"" xmlns:wps=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape""><wp:anchor distT=""0"" distB=""0"" distL=""114300"" distR=""114300"" simplePos=""0"" relativeHeight=""251{siblingShapes:D3}"" behindDoc=""0"" locked=""0"" layoutInCell=""1"" allowOverlap=""1""><wp:simplePos x=""0"" y=""0""/><wp:positionH relativeFrom=""{hRel}"">{posHInner}</wp:positionH><wp:positionV relativeFrom=""{vRel}"">{posVInner}</wp:positionV><wp:extent cx=""{cxEmu}"" cy=""{cyEmu}""/><wp:effectExtent l=""0"" t=""0"" r=""0"" b=""0""/>{wrapInnerXml}<wp:docPr id=""{docPropId}"" name=""{System.Security.SecurityElement.Escape(altText)}""/><wp:cNvGraphicFramePr/><a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape""><wps:wsp><wps:cNvSpPr txBox=""1""/><wps:spPr><a:xfrm{rotAttr}><a:off x=""0"" y=""0""/><a:ext cx=""{cxEmu}"" cy=""{cyEmu}""/></a:xfrm><a:prstGeom prst=""{geom}""><a:avLst/></a:prstGeom>{fillXml}{lnXml}{effectXml}</wps:spPr><wps:txbx><w:txbxContent>{txbxBodyXml}</w:txbxContent></wps:txbx><wps:bodyPr rot=""0""{vertAttr}{bodyWrapAttr} lIns=""{lIns}"" tIns=""{tIns}"" rIns=""{rIns}"" bIns=""{bIns}"" anchor=""{anchorVal}"" anchorCtr=""0"">{spAutoFitXml}</wps:bodyPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>";
+        string drawingXml = $@"<w:drawing xmlns:w=""http://schemas.openxmlformats.org/wordprocessingml/2006/main"" xmlns:wp=""http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"" xmlns:a=""http://schemas.openxmlformats.org/drawingml/2006/main"" xmlns:wps=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape""><wp:anchor distT=""0"" distB=""0"" distL=""114300"" distR=""114300"" simplePos=""0"" relativeHeight=""{relHeightVal}"" behindDoc=""{behindDocVal}"" locked=""0"" layoutInCell=""1"" allowOverlap=""1""><wp:simplePos x=""0"" y=""0""/><wp:positionH relativeFrom=""{hRel}"">{posHInner}</wp:positionH><wp:positionV relativeFrom=""{vRel}"">{posVInner}</wp:positionV><wp:extent cx=""{cxEmu}"" cy=""{cyEmu}""/><wp:effectExtent l=""0"" t=""0"" r=""0"" b=""0""/>{wrapInnerXml}<wp:docPr id=""{docPropId}"" name=""{System.Security.SecurityElement.Escape(altText)}""/><wp:cNvGraphicFramePr/><a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape""><wps:wsp><wps:cNvSpPr txBox=""1""/><wps:spPr><a:xfrm{rotAttr}><a:off x=""0"" y=""0""/><a:ext cx=""{cxEmu}"" cy=""{cyEmu}""/></a:xfrm><a:prstGeom prst=""{geom}""><a:avLst>{avLstXml}</a:avLst></a:prstGeom>{fillXml}{lnXml}{effectXml}</wps:spPr><wps:txbx><w:txbxContent>{txbxBodyXml}</w:txbxContent></wps:txbx><wps:bodyPr rot=""0""{vertAttr}{bodyWrapAttr} lIns=""{lIns}"" tIns=""{tIns}"" rIns=""{rIns}"" bIns=""{bIns}"" anchor=""{anchorVal}"" anchorCtr=""0"">{spAutoFitXml}</wps:bodyPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>";
 
         var drawing = ParseDrawingFromXml(drawingXml);
         var run = new Run(drawing);
@@ -3091,9 +3109,12 @@ public partial class WordHandler
             if (lnWidthEmu == 0 && double.TryParse(width, out var pts)) lnWidthEmu = (long)Math.Round(pts * EmuConverter.EmuPerPoint);
         }
         string widthAttr = lnWidthEmu > 0 ? $" w=\"{lnWidthEmu}\"" : "";
-        // Style: "none" emits a:noFill, anything else emits a:solidFill +
-        // optional a:prstDash for non-solid line types.
-        bool isNone = string.Equals(style, "none", StringComparison.OrdinalIgnoreCase);
+        // Style "none" — or the color sentinels "none"/"transparent" — emit
+        // a:noFill (a borderless box), anything else emits a:solidFill + optional
+        // a:prstDash for non-solid line types. Accepting the color sentinel keeps
+        // `line.color=none` symmetric with `fill=none`.
+        bool isNone = string.Equals(style, "none", StringComparison.OrdinalIgnoreCase)
+            || IsNoFillColor(color);
         if (isNone) return $"<a:ln{widthAttr}><a:noFill/></a:ln>";
         string fill = !string.IsNullOrEmpty(color)
             ? $"<a:solidFill><a:srgbClr val=\"{SanitizeHex(color)}\"/></a:solidFill>"
@@ -3118,6 +3139,22 @@ public partial class WordHandler
         "sysdot"                      => "sysDot",
         _                             => "solid",
     };
+
+    /// <summary>Build the <c>&lt;a:avLst&gt;</c> inner XML for a shape's single
+    /// adjust handle (roundRect corner radius, etc.). Accepts a percentage 0-100
+    /// (the friendly form; ×1000 into the OOXML guide value where 100000 = 100%)
+    /// or a raw guide value > 100. Returns "" when unset → callers emit an empty
+    /// <c>&lt;a:avLst/&gt;</c> and the shape keeps its preset default.</summary>
+    private static string BuildAdjXml(string? adj)
+    {
+        if (string.IsNullOrWhiteSpace(adj)) return "";
+        var v = adj.Trim().TrimEnd('%');
+        if (!double.TryParse(v, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var n)) return "";
+        long val = n <= 100 ? (long)Math.Round(n * 1000) : (long)Math.Round(n);
+        val = Math.Clamp(val, 0, 100000);
+        return $"<a:gd name=\"adj\" fmla=\"val {val}\"/>";
+    }
 
     /// <summary>Build the <c>rot</c> attribute (with leading space) for
     /// <c>&lt;a:xfrm&gt;</c>. Accepts raw OOXML 60000ths-of-a-degree (the dump
@@ -3181,6 +3218,13 @@ public partial class WordHandler
         return $" wrap=\"{sane}\"";
     }
 
+    /// <summary><c>none</c>/<c>transparent</c> are the documented sentinels for
+    /// an explicit no-fill / no-line (<c>a:noFill</c>), distinct from an unset
+    /// value (which leaves the theme default in place).</summary>
+    private static bool IsNoFillColor(string? color) =>
+        string.Equals(color, "none", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(color, "transparent", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>solidFill, optionally translucent. Opacity accepts 0-100000
     /// (OOXML alpha, the dump form), a "NN%" string, or a 0-1 / 0-100 number.</summary>
     private static string BuildSolidFillXml(string color, string? opacity)
@@ -3209,11 +3253,47 @@ public partial class WordHandler
         return Math.Clamp((int)Math.Round(alpha), 0, 100000);
     }
 
-    /// <summary>Build <c>&lt;a:gradFill&gt;</c> from a stop list. Each stop is
-    /// <c>color</c> with an optional <c>@pos</c> (0-100000); positions are spread
-    /// evenly when omitted. e.g. "FF6B6B@0;FFE66D@100000" or "FF6B6B,FFE66D".</summary>
+    /// <summary>Build <c>&lt;a:gradFill&gt;</c> from a gradient spec. Two forms are
+    /// accepted so a spec is portable between charts and textboxes:
+    /// <list type="bullet">
+    /// <item>stop list — <c>color[@pos]</c> separated by <c>;</c>/<c>,</c>, positions
+    /// (0-100000) spread evenly when omitted. e.g. "FF6B6B@0;FFE66D@100000".</item>
+    /// <item>chart form — <c>C1-C2[-C3…][:angleDeg]</c>, the syntax cChart
+    /// <c>chartFill</c> uses. e.g. "FF6B6B-FFE66D:90". The angle emits <c>a:lin</c>.</item>
+    /// </list></summary>
     private static string BuildGradientXml(string gradient)
     {
+        gradient = gradient.Trim();
+        // Chart-style "C1-C2[-…][:angle]": distinguished by the '-' color separator
+        // and the absence of any stop-list punctuation (','/';'/'@'). Hex/named
+        // colors never contain '-', so this is unambiguous.
+        if (gradient.IndexOfAny(new[] { ',', ';', '@' }) < 0 && gradient.Contains('-'))
+        {
+            string linXml = "";
+            var colonIdx = gradient.IndexOf(':');
+            if (colonIdx >= 0)
+            {
+                var angleStr = gradient[(colonIdx + 1)..].Trim();
+                gradient = gradient[..colonIdx];
+                if (double.TryParse(angleStr, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var deg))
+                {
+                    long ang = ((long)Math.Round(deg * 60000) % 21_600_000 + 21_600_000) % 21_600_000;
+                    linXml = $"<a:lin ang=\"{ang}\" scaled=\"1\"/>";
+                }
+            }
+            var cols = gradient.Split('-', StringSplitOptions.RemoveEmptyEntries);
+            if (cols.Length == 0) return "<a:noFill/>";
+            var csb = new System.Text.StringBuilder("<a:gradFill><a:gsLst>");
+            for (int i = 0; i < cols.Length; i++)
+            {
+                int pos = cols.Length == 1 ? 0 : (int)Math.Round(i * 100000.0 / (cols.Length - 1));
+                csb.Append($"<a:gs pos=\"{pos}\"><a:srgbClr val=\"{SanitizeHex(cols[i].Trim())}\"/></a:gs>");
+            }
+            csb.Append("</a:gsLst>").Append(linXml).Append("</a:gradFill>");
+            return csb.ToString();
+        }
+
         var stops = gradient.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries);
         if (stops.Length == 0) return "<a:noFill/>";
         var sb = new System.Text.StringBuilder("<a:gradFill><a:gsLst>");
