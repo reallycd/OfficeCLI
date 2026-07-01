@@ -1248,6 +1248,20 @@ public partial class WordHandler
                 ?? throw new ArgumentException($"Before anchor not found: {position.Before}");
         }
 
+        // Symmetric to the source-wrapper redirect above: a `/body/oMathPara[N]`
+        // anchor resolves to the INNER m:oMathPara, but its body-level sibling is
+        // the wrapping <w:p>. Insert relative to the wrapper — otherwise
+        // InsertBefore/AfterSelf nests the moved paragraph INSIDE the anchor's
+        // <w:p> (schema-invalid <w:p><w:p>…) and the sibling equations are lost.
+        static OpenXmlElement RedirectToMathWrapper(OpenXmlElement a) =>
+            a is DocumentFormat.OpenXml.Math.Paragraph
+                && a.Parent is Paragraph awp
+                && awp.ChildElements.All(c =>
+                    c is DocumentFormat.OpenXml.Math.Paragraph || c is ParagraphProperties)
+                ? awp : a;
+        if (afterAnchor != null) afterAnchor = RedirectToMathWrapper(afterAnchor);
+        if (beforeAnchor != null) beforeAnchor = RedirectToMathWrapper(beforeAnchor);
+
         // Determine target parent
         string effectiveParentPath;
         OpenXmlElement targetParent;
@@ -1328,6 +1342,22 @@ public partial class WordHandler
         }
 
         SaveDoc();
+
+        // A moved display-equation wrapper <w:p> is addressed as
+        // /parent/oMathPara[N] (the resolver flattens these wrappers to
+        // oMathPara), not /parent/p[N] which would not resolve. Mirror
+        // AddEquation's ordinal counting (bare m:oMathPara + wrapper w:p's).
+        if (element is Paragraph movedWrap && IsOMathParaWrapperParagraph(movedWrap))
+        {
+            var ord = 0;
+            foreach (var el in targetParent.ChildElements)
+            {
+                if (el is DocumentFormat.OpenXml.Math.Paragraph) ord++;
+                else if (el is Paragraph wpp && IsOMathParaWrapperParagraph(wpp)) ord++;
+                if (ReferenceEquals(el, element)) break;
+            }
+            return $"{effectiveParentPath}/oMathPara[{ord}]";
+        }
 
         var siblings = targetParent.ChildElements.Where(e => e.LocalName == element.LocalName).ToList();
         var newIdx = siblings.IndexOf(element) + 1;
