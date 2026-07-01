@@ -2673,7 +2673,17 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         // preserving the group's transform/scaling. Without this a group-nested
         // SmartArt was relocated to the slide top level and rendered at the
         // wrong (unscaled) size — overflowing the slide.
-        string ParentXpath);
+        string ParentXpath,
+        // cNvPr id of the first following sibling in the SOURCE parent that is a
+        // "stable" main-walk element (plain shape / connector / group /
+        // chart|table graphicFrame — one guaranteed present in the rebuilt slide
+        // by the time the SmartArt pass runs). The emitter inserts the SmartArt's
+        // graphicFrame BEFORE that element so z-order is preserved. null when the
+        // SmartArt is the last child (or is only followed by deferred/exotic
+        // elements) → the emitter appends, as before. Without this a SmartArt
+        // that sat BEHIND a later shape was appended last and rendered ON TOP,
+        // occluding that shape (bnc880763).
+        string? InsertBeforeShapeId);
 
     // External (TargetMode="External") hyperlink relationships on a part's own
     // .rels, surfaced as (rId, target-uri). Mirrors GetLayoutExternalHyperlinks
@@ -2834,6 +2844,22 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
             }
             var parentXpath = "/p:sld/p:cSld/p:spTree" + string.Concat(grpChain);
 
+            // Z-order anchor: the first following sibling in the SAME parent that
+            // is a "stable" element already present when the SmartArt pass runs.
+            // A SmartArt is emitted last (add-part + raw-set append), so without
+            // this it always lands on top; anchoring an insert before the next
+            // stable sibling preserves the source z-order.
+            string? insertBeforeShapeId = null;
+            foreach (var sib in gf.ElementsAfter())
+            {
+                if (!IsStableZOrderAnchor(sib)) continue;
+                var cnv = sib.Descendants().FirstOrDefault(e =>
+                    e.LocalName == "cNvPr"
+                    && e.NamespaceUri == "http://schemas.openxmlformats.org/presentationml/2006/main");
+                var idAttr = cnv?.GetAttributes().FirstOrDefault(a => a.LocalName == "id");
+                if (idAttr?.Value is { Length: > 0 } idVal) { insertBeforeShapeId = idVal; break; }
+            }
+
             result.Add(new SmartArtInfo(
                 GraphicFrameXml: gf.OuterXml,
                 DataRelId: dRid, LayoutRelId: lRid, ColorsRelId: cRid, QuickStyleRelId: qRid,
@@ -2841,9 +2867,49 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 DrawingXml: drawingXml, DrawingRelId: drawingRelId,
                 DataImages: dataImages, DrawingImages: drawingImages,
                 DataHyperlinks: dataHlinks, DrawingHyperlinks: drawingHlinks,
-                ParentXpath: parentXpath));
+                ParentXpath: parentXpath,
+                InsertBeforeShapeId: insertBeforeShapeId));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Is <paramref name="el"/> a shape-tree element guaranteed to already exist
+    /// in the rebuilt slide when the SmartArt emit pass runs (so a SmartArt can
+    /// safely be inserted BEFORE it to preserve z-order)? True for plain shapes,
+    /// connectors, groups, and chart/table graphicFrames — all emitted in the
+    /// main child walk (or the connector flush) before the SmartArt pass. False
+    /// for elements that are themselves emitted late or exotically: media
+    /// (&lt;p:pic&gt; with video/audio), OLE (graphicFrame with &lt;p:oleObj&gt;),
+    /// another SmartArt (graphicFrame with dgm:relIds), and mc:AlternateContent
+    /// (3D model / fallbacks). Anchoring on those would target an element that
+    /// does not exist yet (raw-set would match nothing) — the caller falls back
+    /// to append for them.
+    /// </summary>
+    private static bool IsStableZOrderAnchor(DocumentFormat.OpenXml.OpenXmlElement el)
+    {
+        switch (el.LocalName)
+        {
+            case "sp":
+            case "cxnSp":
+            case "grpSp":
+                return true;
+            case "pic":
+                // Media (video/audio) is a <p:pic> emitted in a late pass.
+                var picXml = el.OuterXml;
+                return !picXml.Contains("videoFile", StringComparison.Ordinal)
+                    && !picXml.Contains("audioFile", StringComparison.Ordinal);
+            case "graphicFrame":
+                var gfXml = el.OuterXml;
+                // SmartArt (dgm:relIds) and OLE (<p:oleObj>) are emitted late;
+                // chart / table graphicFrames are main-walk (stable).
+                return !gfXml.Contains("/diagram\"", StringComparison.Ordinal)
+                    && !gfXml.Contains(":relIds", StringComparison.Ordinal)
+                    && !gfXml.Contains("oleObj", StringComparison.Ordinal);
+            default:
+                // AlternateContent (3D model / fallbacks) and anything else.
+                return false;
+        }
     }
 
     /// <summary>

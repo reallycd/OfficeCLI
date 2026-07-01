@@ -1725,17 +1725,35 @@ public static partial class PptxBatchEmitter
             string gfCanon;
             try { gfCanon = NormalizeSlideRawSlice(sa.GraphicFrameXml); }
             catch { gfCanon = sa.GraphicFrameXml; }
-            items.Add(new BatchItem
+            // Z-order: a SmartArt that sat BEHIND a later shape must not land on
+            // top. When the source has a stable following sibling, insert the
+            // graphicFrame BEFORE it (anchored by that sibling's cNvPr id, which
+            // survives round-trip); otherwise append into the parent as before.
+            if (sa.InsertBeforeShapeId is { Length: > 0 } anchorId)
             {
-                Command = "raw-set",
-                Part = slidePath,
-                // Append into the SmartArt's source parent (top-level spTree or,
-                // for a group-nested SmartArt, the enclosing <p:grpSp>) so the
-                // group's transform/scaling is preserved on replay.
-                Xpath = sa.ParentXpath,
-                Action = "append",
-                Xml = gfCanon,
-            });
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = slidePath,
+                    Xpath = $"{sa.ParentXpath}/*[descendant::p:cNvPr[@id='{anchorId}']]",
+                    Action = "insertbefore",
+                    Xml = gfCanon,
+                });
+            }
+            else
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = slidePath,
+                    // Append into the SmartArt's source parent (top-level spTree
+                    // or, for a group-nested SmartArt, the enclosing <p:grpSp>)
+                    // so the group's transform/scaling is preserved on replay.
+                    Xpath = sa.ParentXpath,
+                    Action = "append",
+                    Xml = gfCanon,
+                });
+            }
         }
     }
 
