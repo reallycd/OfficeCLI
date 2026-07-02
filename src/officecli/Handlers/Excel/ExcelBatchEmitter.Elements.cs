@@ -362,7 +362,7 @@ public static partial class ExcelBatchEmitter
             CopyString(spk, "dataRange", props, "dataRange");
             CopyString(spk, "type", props, "type");
             CopyString(spk, "color", props, "color");
-            CopyString(spk, "negativeColor", props, "negativecolor");
+            CopyString(spk, "negativeColor", props, "negativeColor");
             CopyBool(spk, "markers", props, "markers");
             CopyBool(spk, "highPoint", props, "highpoint");
             CopyBool(spk, "lowPoint", props, "lowpoint");

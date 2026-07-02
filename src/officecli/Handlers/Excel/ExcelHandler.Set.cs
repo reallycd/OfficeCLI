@@ -1442,7 +1442,24 @@ public partial class ExcelHandler
 
                     if (!string.IsNullOrEmpty(value) && !value.Equals("none", StringComparison.OrdinalIgnoreCase))
                     {
-                        var dn = new DefinedName($"{Core.ModernFunctionQualifier.QuoteSheetNameForRef(sheetName)}!{value}") { Name = "_xlnm.Print_Area" };
+                        // A user-supplied "OtherSheet!A1:C10" prefix used to be
+                        // blindly prepended with this sheet's name, producing a
+                        // double-qualified defined name ("Sheet1!Bogus!A1:C10")
+                        // that passes schema validation but makes real Excel
+                        // refuse the file (0x800A03EC). The print area always
+                        // targets the sheet being set — strip a prefix naming
+                        // this sheet, reject any other.
+                        var paRange = value;
+                        var bangIdx = paRange.LastIndexOf('!');
+                        if (bangIdx >= 0)
+                        {
+                            var paSheet = paRange[..bangIdx].Trim('\'');
+                            if (!paSheet.Equals(sheetName, StringComparison.OrdinalIgnoreCase))
+                                throw new ArgumentException(
+                                    $"printArea '{value}' names sheet '{paSheet}', but this set targets '{sheetName}'. A print area always applies to its own sheet — pass just the range (e.g. printArea=A1:C10), or run set on /{paSheet} if that sheet exists.");
+                            paRange = paRange[(bangIdx + 1)..];
+                        }
+                        var dn = new DefinedName($"{Core.ModernFunctionQualifier.QuoteSheetNameForRef(sheetName)}!{paRange}") { Name = "_xlnm.Print_Area" };
                         if (sheetIdx >= 0) dn.LocalSheetId = (uint)sheetIdx;
                         definedNames.AppendChild(dn);
                     }
