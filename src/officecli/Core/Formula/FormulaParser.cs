@@ -2995,6 +2995,7 @@ internal static class FormulaParser
         "frown" => "⌢",
         // Negated relations / set membership (precomposed Unicode where one exists)
         "nmid" => "∤",
+        "nparallel" => "∦",
         "nleq" or "nleqslant" => "≰",
         "ngeq" or "ngeqslant" => "≱",
         "nsubseteq" => "⊈",
