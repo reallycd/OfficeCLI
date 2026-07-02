@@ -159,7 +159,8 @@ public static partial class PptxBatchEmitter
                             || k.StartsWith("border", StringComparison.Ordinal)
                             || k.StartsWith("fill", StringComparison.Ordinal)
                             || k is "valign" or "anchor" or "rowSpan" or "gridSpan"
-                                 or "colSpan" or "rowspan" or "gridspan" or "vMerge" or "hMerge";
+                                 or "colSpan" or "rowspan" or "gridspan" or "colspan"
+                                 or "vMerge" or "hMerge" or "vmerge" or "hmerge";
                         if (!cellLevel) cellProps.Remove(k);
                     }
                 }
