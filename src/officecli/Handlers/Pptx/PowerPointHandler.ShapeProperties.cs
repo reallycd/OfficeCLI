@@ -1645,6 +1645,35 @@ public partial class PowerPointHandler
                     break;
                 }
 
+                case "vertoverflow":
+                {
+                    // <a:bodyPr vertOverflow="clip|ellipsis|overflow">.
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.VerticalOverflow = value.ToLowerInvariant() switch
+                    {
+                        "clip" => Drawing.TextVerticalOverflowValues.Clip,
+                        "ellipsis" => Drawing.TextVerticalOverflowValues.Ellipsis,
+                        "overflow" => Drawing.TextVerticalOverflowValues.Overflow,
+                        _ => throw new ArgumentException($"Invalid 'vertOverflow' value: '{value}'. Valid values: clip, ellipsis, overflow.")
+                    };
+                    break;
+                }
+
+                case "horzoverflow":
+                {
+                    // <a:bodyPr horzOverflow="clip|overflow">.
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.HorizontalOverflow = value.ToLowerInvariant() switch
+                    {
+                        "clip" => Drawing.TextHorizontalOverflowValues.Clip,
+                        "overflow" => Drawing.TextHorizontalOverflowValues.Overflow,
+                        _ => throw new ArgumentException($"Invalid 'horzOverflow' value: '{value}'. Valid values: clip, overflow.")
+                    };
+                    break;
+                }
+
                 case "anchorctr" or "anchorcenter":
                 {
                     // <a:bodyPr anchorCtr="0|1"> — horizontal centering of the

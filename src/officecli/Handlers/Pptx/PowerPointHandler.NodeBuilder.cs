@@ -1966,6 +1966,12 @@ public partial class PowerPointHandler
                 node.Format["anchorCtr"] = bodyPr.AnchorCenter.Value;
             if (bodyPr.UpRight?.HasValue == true)
                 node.Format["upright"] = bodyPr.UpRight.Value;
+            // Overflow clipping (clip-vertical-overflow: vertOverflow="clip"
+            // dropped → overflowing text replayed visible).
+            if (bodyPr.VerticalOverflow?.HasValue == true)
+                node.Format["vertOverflow"] = bodyPr.VerticalOverflow.InnerText;
+            if (bodyPr.HorizontalOverflow?.HasValue == true)
+                node.Format["horzOverflow"] = bodyPr.HorizontalOverflow.InnerText;
 
             // AutoFit — surface only when the source bodyPr carries an
             // explicit child. An empty <a:bodyPr/> inherits from the

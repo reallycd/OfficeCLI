@@ -879,6 +879,8 @@ public partial class PowerPointHandler
                       // shrink-on-overflow scale — consumed alongside autofit=normal
                       "fontScale", "fontscale", "lnSpcReduction", "lnspcreduction",
                       "wrap", "wordwrap", "anchorCtr", "anchorctr", "upright",
+                      "columns", "numcol", "columnSpacing", "columnspacing",
+                      "vertOverflow", "vertoverflow", "horzOverflow", "horzoverflow",
                       "lineopacity", "line.opacity",
                       "linegradient", "line.gradient",
                       // previously dropped silently — route through Set
