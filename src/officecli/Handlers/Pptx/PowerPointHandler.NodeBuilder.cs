@@ -1957,6 +1957,16 @@ public partial class PowerPointHandler
             if (bodyPr.Wrap?.HasValue == true)
                 node.Format["wrap"] = bodyPr.Wrap.Value != Drawing.TextWrappingValues.None;
 
+            // anchorCtr (center the text BLOCK horizontally) and upright
+            // (keep glyphs upright inside a rotated body) — simple bodyPr
+            // attributes previously dropped on dump→replay (sample16 /
+            // sample13: anchor-centered eaVert columns drifted, rotated
+            // upright text flipped).
+            if (bodyPr.AnchorCenter?.HasValue == true)
+                node.Format["anchorCtr"] = bodyPr.AnchorCenter.Value;
+            if (bodyPr.UpRight?.HasValue == true)
+                node.Format["upright"] = bodyPr.UpRight.Value;
+
             // AutoFit — surface only when the source bodyPr carries an
             // explicit child. An empty <a:bodyPr/> inherits from the
             // layout/master cascade; emitting "none" as the default forces

@@ -878,7 +878,7 @@ public partial class PowerPointHandler
                       "textsp3draw", "textSp3dRaw",
                       // shrink-on-overflow scale — consumed alongside autofit=normal
                       "fontScale", "fontscale", "lnSpcReduction", "lnspcreduction",
-                      "wrap", "wordwrap",
+                      "wrap", "wordwrap", "anchorCtr", "anchorctr", "upright",
                       "lineopacity", "line.opacity",
                       "linegradient", "line.gradient",
                       // previously dropped silently — route through Set

@@ -1645,6 +1645,26 @@ public partial class PowerPointHandler
                     break;
                 }
 
+                case "anchorctr" or "anchorcenter":
+                {
+                    // <a:bodyPr anchorCtr="0|1"> — horizontal centering of the
+                    // whole text block (distinct from paragraph align).
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.AnchorCenter = IsTruthy(value);
+                    break;
+                }
+
+                case "upright":
+                {
+                    // <a:bodyPr upright="1"> — glyphs stay upright inside a
+                    // rotated text body.
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.UpRight = IsTruthy(value);
+                    break;
+                }
+
                 case "wrap" or "wordwrap":
                 {
                     // Shape-level <a:bodyPr @wrap = "square" | "none">.
