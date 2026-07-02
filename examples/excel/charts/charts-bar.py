@@ -9,899 +9,515 @@ gap width, overlap, data labels, axis scaling, gridlines, legend positioning,
 reference lines, secondary axis, error bars, gradients, transparency, shadows,
 manual layout, data table, 3D rotation, and conditional coloring.
 
-6 sheets, 24 charts total.
+8 sheets (Sheet1 data + 7 chart sheets), 28 charts total.
 
   1-Bar Fundamentals      4 charts — data input variants, colors, stacked, data shorthand
   2-Bar Variants          4 charts — barStacked, barPercentStacked, bar3d, cylinder
   3-Bar Styling           4 charts — title styling, shadow/outline, gradients, plot/chart fill
   4-Axis & Labels         4 charts — axis scale, log/reverse/dispUnits, label styling, per-point
-  5-Legend & Layout        4 charts — legend positions, overlay, manual layout, secondary axis
+  5-Legend & Layout       4 charts — legend positions, overlay, manual layout, secondary axis
   6-Advanced              4 charts — reference line, colorRule, glow/shadow, errBars/dataTable
+  7-Axis Controls         4 charts — crosses/crossBetween, label rotation/skip, axisposition/serlines, markercolor
+
+SDK twin of charts-bar.sh (officecli CLI). Both produce an equivalent
+charts-bar.xlsx. This one drives the **officecli Python SDK**
+(`pip install officecli-sdk`): one resident is started and every cell write and
+chart is shipped over the named pipe via `doc.batch(...)` / `doc.send(...)`.
+Each item is the same `{"command","parent"/"path","type","props"}` dict you'd
+put in an `officecli batch` list.
 
 Usage:
+  pip install officecli-sdk          # plus the `officecli` binary on PATH
   python3 charts-bar.py
 """
 
-import subprocess, sys, os, json, atexit
+import os
+import sys
 
-FILE = "charts-bar.xlsx"
+# --- locate the SDK: prefer an installed `officecli-sdk`, else the in-repo copy
+try:
+    import officecli  # pip install officecli-sdk
+except ImportError:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "..", "..", "sdk", "python"))
+    import officecli
 
-def cli(cmd):
-    """Run: officecli <cmd>"""
-    r = subprocess.run(f"officecli {cmd}", shell=True, capture_output=True, text=True)
-    out = (r.stdout or "").strip()
-    if out:
-        for line in out.split("\n"):
-            if line.strip():
-                print(f"  {line.strip()}")
-    if r.returncode != 0:
-        err = (r.stderr or "").strip()
-        if err and "UNSUPPORTED" not in err and "process cannot access" not in err:
-            print(f"  ERROR: {err}")
+FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "charts-bar.xlsx")
 
-if os.path.exists(FILE):
-    os.remove(FILE)
 
-cli(f'create "{FILE}"')
-cli(f'open "{FILE}"')
-atexit.register(lambda: cli(f'close "{FILE}"'))
+def add_sheet(name):
+    """One `add sheet` item in batch-shape."""
+    return {"command": "add", "parent": "/", "type": "sheet", "props": {"name": name}}
 
-# ==========================================================================
-# Source data — shared across all charts
-# ==========================================================================
-print("\n--- Populating source data ---")
 
-data_cmds = []
-for j, h in enumerate(["Department", "Q1", "Q2", "Q3", "Q4"]):
-    data_cmds.append({"command": "set", "path": f"/Sheet1/{'ABCDE'[j]}1", "props": {"text": h, "bold": "true"}})
+def chart(sheet, **props):
+    """One `add chart` item in batch-shape (props become --prop k=v)."""
+    return {"command": "add", "parent": f"/{sheet}", "type": "chart", "props": props}
 
-depts = ["Engineering", "Marketing", "Sales", "Support", "Finance", "HR", "Legal", "Operations"]
-q1 =    [185, 120, 210, 95, 78, 62, 55, 140]
-q2 =    [195, 135, 225, 105, 82, 68, 58, 152]
-q3 =    [210, 142, 240, 112, 88, 72, 62, 165]
-q4 =    [228, 158, 260, 118, 92, 78, 68, 178]
 
-for i in range(8):
-    r = i + 2
-    for j, val in enumerate([depts[i], q1[i], q2[i], q3[i], q4[i]]):
-        data_cmds.append({"command": "set", "path": f"/Sheet1/{'ABCDE'[j]}{r}", "props": {"text": str(val)}})
+print(f"Building {FILE} ...")
 
-cli(f'batch "{FILE}" --force --commands \'{json.dumps(data_cmds)}\'')
+with officecli.create(FILE, "--force") as doc:
 
-# ==========================================================================
-# Sheet: 1-Bar Fundamentals
-# ==========================================================================
-print("\n--- 1-Bar Fundamentals ---")
-cli(f'add "{FILE}" / --type sheet --prop name="1-Bar Fundamentals"')
+    # ======================================================================
+    # Source data — shared across all charts
+    # ======================================================================
+    print("--- Populating source data ---")
+    data_items = []
+    for j, h in enumerate(["Department", "Q1", "Q2", "Q3", "Q4"]):
+        data_items.append({"command": "set", "path": f"/Sheet1/{'ABCDE'[j]}1",
+                           "props": {"text": h, "bold": "true"}})
 
-# --------------------------------------------------------------------------
-# Chart 1: Basic bar chart with dataRange, axis titles, and gridlines
-#
-# officecli add charts-bar.xlsx "/1-Bar Fundamentals" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Department Performance — Q1" \
-#   --prop dataRange=Sheet1!A1:B9 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop catTitle=Department --prop axisTitle=Score \
-#   --prop axisfont=9:333333:Arial \
-#   --prop gridlines=D9D9D9:0.5:dot
-#
-# Features: chartType=bar, dataRange, catTitle, axisTitle, axisfont, gridlines
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/1-Bar Fundamentals" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Department Performance — Q1"'
-    f' --prop dataRange=Sheet1!A1:B9'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop catTitle=Department --prop axisTitle=Score'
-    f' --prop axisfont=9:333333:Arial'
-    f' --prop gridlines=D9D9D9:0.5:dot')
+    depts = ["Engineering", "Marketing", "Sales", "Support", "Finance", "HR", "Legal", "Operations"]
+    q1 =    [185, 120, 210, 95, 78, 62, 55, 140]
+    q2 =    [195, 135, 225, 105, 82, 68, 58, 152]
+    q3 =    [210, 142, 240, 112, 88, 72, 62, 165]
+    q4 =    [228, 158, 260, 118, 92, 78, 68, 178]
 
-# --------------------------------------------------------------------------
-# Chart 2: Inline series with custom colors, gap width, and data labels
-#
-# officecli add charts-bar.xlsx "/1-Bar Fundamentals" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Survey Results" \
-#   --prop series1="Satisfaction:85,72,91,68,78" \
-#   --prop categories=Product,Service,Delivery,Price,Overall \
-#   --prop colors=4472C4,ED7D31,70AD47,FFC000,5B9BD5 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop gapwidth=80 \
-#   --prop dataLabels=outsideEnd
-#
-# Features: inline series, colors per category, gapwidth, dataLabels=outsideEnd
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/1-Bar Fundamentals" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Survey Results"'
-    f' --prop series1=Satisfaction:85,72,91,68,78'
-    f' --prop categories=Product,Service,Delivery,Price,Overall'
-    f' --prop colors=4472C4,ED7D31,70AD47,FFC000,5B9BD5'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop gapwidth=80'
-    f' --prop dataLabels=outsideEnd')
+    for i in range(8):
+        r = i + 2
+        for j, val in enumerate([depts[i], q1[i], q2[i], q3[i], q4[i]]):
+            data_items.append({"command": "set", "path": f"/Sheet1/{'ABCDE'[j]}{r}",
+                               "props": {"text": str(val)}})
+    doc.batch(data_items)
 
-# --------------------------------------------------------------------------
-# Chart 3: Stacked bar with overlap and series outline
-#
-# officecli add charts-bar.xlsx "/1-Bar Fundamentals" --type chart \
-#   --prop chartType=barStacked \
-#   --prop title="Quarterly Headcount by Dept" \
-#   --prop series1="Q1:30,18,25,12" \
-#   --prop series2="Q2:35,20,28,14" \
-#   --prop series3="Q3:38,22,30,16" \
-#   --prop categories=Engineering,Marketing,Sales,Support \
-#   --prop colors=2E75B6,70AD47,FFC000 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop overlap=0 \
-#   --prop series.outline=FFFFFF-0.5
-#
-# Features: barStacked, overlap=0, series.outline (white separator)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/1-Bar Fundamentals" --type chart'
-    f' --prop chartType=barStacked'
-    f' --prop title="Quarterly Headcount by Dept"'
-    f' --prop series1=Q1:30,18,25,12'
-    f' --prop series2=Q2:35,20,28,14'
-    f' --prop series3=Q3:38,22,30,16'
-    f' --prop categories=Engineering,Marketing,Sales,Support'
-    f' --prop colors=2E75B6,70AD47,FFC000'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop overlap=0'
-    f' --prop series.outline=FFFFFF-0.5')
+    # ======================================================================
+    # Sheet: 1-Bar Fundamentals
+    # ======================================================================
+    print("--- 1-Bar Fundamentals ---")
+    items = [add_sheet("1-Bar Fundamentals")]
 
-# --------------------------------------------------------------------------
-# Chart 4: data= shorthand with legend=bottom
-#
-# officecli add charts-bar.xlsx "/1-Bar Fundamentals" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Training Hours by Team" \
-#   --prop 'data=Technical:45,38,52;Soft Skills:20,28,18;Compliance:12,15,10' \
-#   --prop categories=Engineering,Sales,Support \
-#   --prop colors=4472C4,ED7D31,70AD47 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop legend=bottom
-#
-# Features: data= shorthand (inline multi-series), legend=bottom
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/1-Bar Fundamentals" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Training Hours by Team"'
-    f' --prop "data=Technical:45,38,52;Soft Skills:20,28,18;Compliance:12,15,10"'
-    f' --prop categories=Engineering,Sales,Support'
-    f' --prop colors=4472C4,ED7D31,70AD47'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop legend=bottom')
+    # Chart 1: Basic bar chart with dataRange, axis titles, and gridlines
+    # Features: chartType=bar, dataRange, catTitle, axisTitle, axisfont, gridlines
+    items.append(chart("1-Bar Fundamentals",
+        chartType="bar",
+        title="Department Performance — Q1",
+        dataRange="Sheet1!A1:B9",
+        x="0", y="0", width="12", height="18",
+        catTitle="Department", axisTitle="Score",
+        axisfont="9:333333:Arial",
+        gridlines="D9D9D9:0.5:dot"))
 
-# ==========================================================================
-# Sheet: 2-Bar Variants
-# ==========================================================================
-print("\n--- 2-Bar Variants ---")
-cli(f'add "{FILE}" / --type sheet --prop name="2-Bar Variants"')
+    # Chart 2: Inline series with custom colors, gap width, and data labels
+    # Features: inline series, colors per category, gapwidth, dataLabels=outsideEnd
+    items.append(chart("1-Bar Fundamentals",
+        chartType="bar",
+        title="Survey Results",
+        series1="Satisfaction:85,72,91,68,78",
+        categories="Product,Service,Delivery,Price,Overall",
+        colors="4472C4,ED7D31,70AD47,FFC000,5B9BD5",
+        x="13", y="0", width="12", height="18",
+        gapwidth="80",
+        dataLabels="outsideEnd"))
 
-# --------------------------------------------------------------------------
-# Chart 1: barStacked with tight gap width
-#
-# officecli add charts-bar.xlsx "/2-Bar Variants" --type chart \
-#   --prop chartType=barStacked \
-#   --prop title="Budget Allocation" \
-#   --prop series1="Salaries:120,80,95,60" \
-#   --prop series2="Operations:45,35,40,25" \
-#   --prop series3="Marketing:30,50,20,15" \
-#   --prop categories=Engineering,Sales,Support,HR \
-#   --prop colors=1F4E79,2E75B6,9DC3E6 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop gapwidth=50 \
-#   --prop legend=bottom
-#
-# Features: barStacked, gapwidth=50 (tight bars)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/2-Bar Variants" --type chart'
-    f' --prop chartType=barStacked'
-    f' --prop title="Budget Allocation"'
-    f' --prop series1=Salaries:120,80,95,60'
-    f' --prop series2=Operations:45,35,40,25'
-    f' --prop series3=Marketing:30,50,20,15'
-    f' --prop categories=Engineering,Sales,Support,HR'
-    f' --prop colors=1F4E79,2E75B6,9DC3E6'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop gapwidth=50'
-    f' --prop legend=bottom')
+    # Chart 3: Stacked bar with overlap and series outline
+    # Features: barStacked, overlap=0, series.outline (white separator)
+    items.append(chart("1-Bar Fundamentals",
+        chartType="barStacked",
+        title="Quarterly Headcount by Dept",
+        series1="Q1:30,18,25,12",
+        series2="Q2:35,20,28,14",
+        series3="Q3:38,22,30,16",
+        categories="Engineering,Marketing,Sales,Support",
+        colors="2E75B6,70AD47,FFC000",
+        x="0", y="19", width="12", height="18",
+        overlap="0",
+        **{"series.outline": "FFFFFF-0.5"}))
 
-# --------------------------------------------------------------------------
-# Chart 2: barPercentStacked with axis number format and reference line
-#
-# officecli add charts-bar.xlsx "/2-Bar Variants" --type chart \
-#   --prop chartType=barPercentStacked \
-#   --prop title="Task Completion Ratio" \
-#   --prop series1="Done:75,60,90,45,80" \
-#   --prop series2="In Progress:15,25,5,30,12" \
-#   --prop series3="Blocked:10,15,5,25,8" \
-#   --prop categories=Backend,Frontend,QA,Design,DevOps \
-#   --prop colors=70AD47,FFC000,C00000 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop axisNumFmt=0% \
-#   --prop referenceLine=0.5:FF0000:Target:dash \
-#   --prop legend=bottom
-#
-# Features: barPercentStacked, axisNumFmt=0%, referenceLine with label and dash
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/2-Bar Variants" --type chart'
-    f' --prop chartType=barPercentStacked'
-    f' --prop title="Task Completion Ratio"'
-    f' --prop series1=Done:75,60,90,45,80'
-    f' --prop series2="In Progress:15,25,5,30,12"'
-    f' --prop series3=Blocked:10,15,5,25,8'
-    f' --prop categories=Backend,Frontend,QA,Design,DevOps'
-    f' --prop colors=70AD47,FFC000,C00000'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop axisNumFmt=0%'
-    f' --prop referenceLine=0.5:FF0000:Target:dash'
-    f' --prop legend=bottom')
+    # Chart 4: data= shorthand with legend=bottom
+    # Features: data= shorthand (inline multi-series), legend=bottom
+    items.append(chart("1-Bar Fundamentals",
+        chartType="bar",
+        title="Training Hours by Team",
+        data="Technical:45,38,52;Soft Skills:20,28,18;Compliance:12,15,10",
+        categories="Engineering,Sales,Support",
+        colors="4472C4,ED7D31,70AD47",
+        x="13", y="19", width="12", height="18",
+        legend="bottom"))
+    doc.batch(items)
 
-# --------------------------------------------------------------------------
-# Chart 3: bar3d with perspective and style
-#
-# officecli add charts-bar.xlsx "/2-Bar Variants" --type chart \
-#   --prop chartType=bar3d \
-#   --prop title="3D Revenue by Region" \
-#   --prop series1="Revenue:340,280,310,195" \
-#   --prop categories=North,South,East,West \
-#   --prop colors=4472C4,ED7D31,70AD47,FFC000 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop view3d=10,30,20 \
-#   --prop style=3 \
-#   --prop legend=right
-#
-# Features: bar3d, view3d (rotX,rotY,perspective), style=3
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/2-Bar Variants" --type chart'
-    f' --prop chartType=bar3d'
-    f' --prop title="3D Revenue by Region"'
-    f' --prop series1=Revenue:340,280,310,195'
-    f' --prop categories=North,South,East,West'
-    f' --prop colors=4472C4,ED7D31,70AD47,FFC000'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop view3d=10,30,20'
-    f' --prop style=3'
-    f' --prop legend=right')
+    # ======================================================================
+    # Sheet: 2-Bar Variants
+    # ======================================================================
+    print("--- 2-Bar Variants ---")
+    items = [add_sheet("2-Bar Variants")]
 
-# --------------------------------------------------------------------------
-# Chart 4: bar3d with cylinder shape
-#
-# officecli add charts-bar.xlsx "/2-Bar Variants" --type chart \
-#   --prop chartType=bar3d \
-#   --prop title="Cylinder — Project Milestones" \
-#   --prop series1="Completed:8,12,6,10,15" \
-#   --prop series2="Remaining:4,3,6,5,2" \
-#   --prop categories=Alpha,Beta,Gamma,Delta,Epsilon \
-#   --prop colors=2E75B6,BDD7EE \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop shape=cylinder \
-#   --prop gapwidth=60 \
-#   --prop legend=bottom
-#
-# Features: bar3d shape=cylinder, multi-series 3D bars
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/2-Bar Variants" --type chart'
-    f' --prop chartType=bar3d'
-    f' --prop title="Cylinder — Project Milestones"'
-    f' --prop series1=Completed:8,12,6,10,15'
-    f' --prop series2=Remaining:4,3,6,5,2'
-    f' --prop categories=Alpha,Beta,Gamma,Delta,Epsilon'
-    f' --prop colors=2E75B6,BDD7EE'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop shape=cylinder'
-    f' --prop gapwidth=60'
-    f' --prop legend=bottom')
+    # Chart 1: barStacked with tight gap width
+    # Features: barStacked, gapwidth=50 (tight bars)
+    items.append(chart("2-Bar Variants",
+        chartType="barStacked",
+        title="Budget Allocation",
+        series1="Salaries:120,80,95,60",
+        series2="Operations:45,35,40,25",
+        series3="Marketing:30,50,20,15",
+        categories="Engineering,Sales,Support,HR",
+        colors="1F4E79,2E75B6,9DC3E6",
+        x="0", y="0", width="12", height="18",
+        gapwidth="50",
+        legend="bottom"))
 
-# ==========================================================================
-# Sheet: 3-Bar Styling
-# ==========================================================================
-print("\n--- 3-Bar Styling ---")
-cli(f'add "{FILE}" / --type sheet --prop name="3-Bar Styling"')
+    # Chart 2: barPercentStacked with axis number format and reference line
+    # Features: barPercentStacked, axisNumFmt=0%, referenceLine with label and dash
+    items.append(chart("2-Bar Variants",
+        chartType="barPercentStacked",
+        title="Task Completion Ratio",
+        series1="Done:75,60,90,45,80",
+        series2="In Progress:15,25,5,30,12",
+        series3="Blocked:10,15,5,25,8",
+        categories="Backend,Frontend,QA,Design,DevOps",
+        colors="70AD47,FFC000,C00000",
+        x="13", y="0", width="12", height="18",
+        axisNumFmt="0%",
+        referenceLine="0.5:FF0000:Target:dash",
+        legend="bottom"))
 
-# --------------------------------------------------------------------------
-# Chart 1: Title styling (font, size, color, bold)
-#
-# officecli add charts-bar.xlsx "/3-Bar Styling" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Styled Title Demo" \
-#   --prop series1="Score:88,76,92,65,84" \
-#   --prop categories=Dept A,Dept B,Dept C,Dept D,Dept E \
-#   --prop colors=4472C4 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop title.font=Georgia --prop title.size=16 \
-#   --prop title.color=1F4E79 --prop title.bold=true \
-#   --prop gapwidth=100
-#
-# Features: title.font, title.size, title.color, title.bold
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/3-Bar Styling" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Styled Title Demo"'
-    f' --prop series1=Score:88,76,92,65,84'
-    f' --prop categories=Dept A,Dept B,Dept C,Dept D,Dept E'
-    f' --prop colors=4472C4'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop title.font=Georgia --prop title.size=16'
-    f' --prop title.color=1F4E79 --prop title.bold=true'
-    f' --prop gapwidth=100')
+    # Chart 3: bar3d with perspective and style
+    # Features: bar3d, view3d (rotX,rotY,perspective), style=3
+    items.append(chart("2-Bar Variants",
+        chartType="bar3d",
+        title="3D Revenue by Region",
+        series1="Revenue:340,280,310,195",
+        categories="North,South,East,West",
+        colors="4472C4,ED7D31,70AD47,FFC000",
+        x="0", y="19", width="12", height="18",
+        view3d="10,30,20",
+        style="3",
+        legend="right"))
 
-# --------------------------------------------------------------------------
-# Chart 2: Series shadow and outline effects
-#
-# officecli add charts-bar.xlsx "/3-Bar Styling" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Shadow & Outline" \
-#   --prop series1="2024:165,142,180,128" \
-#   --prop series2="2025:185,158,195,140" \
-#   --prop categories=Engineering,Marketing,Sales,Support \
-#   --prop colors=2E75B6,ED7D31 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop series.shadow=000000-4-315-2-30 \
-#   --prop series.outline=1F4E79-1 \
-#   --prop legend=bottom
-#
-# Features: series.shadow (color-blur-angle-dist-opacity), series.outline
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/3-Bar Styling" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Shadow & Outline"'
-    f' --prop series1=2024:165,142,180,128'
-    f' --prop series2=2025:185,158,195,140'
-    f' --prop categories=Engineering,Marketing,Sales,Support'
-    f' --prop colors=2E75B6,ED7D31'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop series.shadow=000000-4-315-2-30'
-    f' --prop series.outline=1F4E79-1'
-    f' --prop legend=bottom')
+    # Chart 4: bar3d with cylinder shape
+    # Features: bar3d shape=cylinder, multi-series 3D bars
+    items.append(chart("2-Bar Variants",
+        chartType="bar3d",
+        title="Cylinder — Project Milestones",
+        series1="Completed:8,12,6,10,15",
+        series2="Remaining:4,3,6,5,2",
+        categories="Alpha,Beta,Gamma,Delta,Epsilon",
+        colors="2E75B6,BDD7EE",
+        x="13", y="19", width="12", height="18",
+        shape="cylinder",
+        gapwidth="60",
+        legend="bottom"))
+    doc.batch(items)
 
-# --------------------------------------------------------------------------
-# Chart 3: Per-series gradients
-#
-# officecli add charts-bar.xlsx "/3-Bar Styling" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Gradient Bars" \
-#   --prop series1="Revenue:320,275,410,190,245" \
-#   --prop categories=North,South,East,West,Central \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop 'gradients=1F4E79-5B9BD5:0;C55A11-F4B183:0;548235-A9D18E:0;7F6000-FFD966:0;843C0B-DDA15E:0' \
-#   --prop dataLabels=outsideEnd \
-#   --prop labelFont=9:333333:true
-#
-# Features: gradients (per-bar gradient fills, angle=0 for horizontal),
-#   labelFont (size:color:bold)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/3-Bar Styling" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Gradient Bars"'
-    f' --prop series1=Revenue:320,275,410,190,245'
-    f' --prop categories=North,South,East,West,Central'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop "gradients=1F4E79-5B9BD5:0;C55A11-F4B183:0;548235-A9D18E:0;7F6000-FFD966:0;843C0B-DDA15E:0"'
-    f' --prop dataLabels=outsideEnd'
-    f' --prop labelFont=9:333333:true')
+    # ======================================================================
+    # Sheet: 3-Bar Styling
+    # ======================================================================
+    print("--- 3-Bar Styling ---")
+    items = [add_sheet("3-Bar Styling")]
 
-# --------------------------------------------------------------------------
-# Chart 4: Plot fill gradient, chart fill, transparency, rounded corners
-#
-# officecli add charts-bar.xlsx "/3-Bar Styling" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Styled Background" \
-#   --prop dataRange=Sheet1!A1:C9 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop colors=5B9BD5,ED7D31 \
-#   --prop plotFill=F0F4F8-D6E4F0:90 \
-#   --prop chartFill=FFFFFF \
-#   --prop transparency=20 \
-#   --prop roundedCorners=true \
-#   --prop legend=right
-#
-# Features: plotFill gradient, chartFill, transparency, roundedCorners
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/3-Bar Styling" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Styled Background"'
-    f' --prop dataRange=Sheet1!A1:C9'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop colors=5B9BD5,ED7D31'
-    f' --prop plotFill=F0F4F8-D6E4F0:90'
-    f' --prop chartFill=FFFFFF'
-    f' --prop transparency=20'
-    f' --prop roundedCorners=true'
-    f' --prop legend=right')
+    # Chart 1: Title styling (font, size, color, bold)
+    # Features: title.font, title.size, title.color, title.bold
+    items.append(chart("3-Bar Styling",
+        chartType="bar",
+        title="Styled Title Demo",
+        series1="Score:88,76,92,65,84",
+        categories="Dept A,Dept B,Dept C,Dept D,Dept E",
+        colors="4472C4",
+        x="0", y="0", width="12", height="18",
+        gapwidth="100",
+        **{"title.font": "Georgia", "title.size": "16",
+           "title.color": "1F4E79", "title.bold": "true"}))
 
-# ==========================================================================
-# Sheet: 4-Axis & Labels
-# ==========================================================================
-print("\n--- 4-Axis & Labels ---")
-cli(f'add "{FILE}" / --type sheet --prop name="4-Axis & Labels"')
+    # Chart 2: Series shadow and outline effects
+    # Features: series.shadow (color-blur-angle-dist-opacity), series.outline
+    items.append(chart("3-Bar Styling",
+        chartType="bar",
+        title="Shadow & Outline",
+        series1="2024:165,142,180,128",
+        series2="2025:185,158,195,140",
+        categories="Engineering,Marketing,Sales,Support",
+        colors="2E75B6,ED7D31",
+        x="13", y="0", width="12", height="18",
+        legend="bottom",
+        **{"series.shadow": "000000-4-315-2-30",
+           "series.outline": "1F4E79-1"}))
 
-# --------------------------------------------------------------------------
-# Chart 1: Custom axis min/max, majorUnit, and gridlines styling
-#
-# officecli add charts-bar.xlsx "/4-Axis & Labels" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Axis Scale (50–250)" \
-#   --prop dataRange=Sheet1!A1:B9 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop axisMin=50 --prop axisMax=250 --prop majorUnit=50 \
-#   --prop gridlines=D0D0D0:0.5:solid \
-#   --prop minorGridlines=EEEEEE:0.3:dot \
-#   --prop axisLine=C00000:1.5:solid \
-#   --prop catAxisLine=2E75B6:1.5:solid
-#
-# Features: axisMin, axisMax, majorUnit, gridlines styling,
-#   minorGridlines, axisLine, catAxisLine
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/4-Axis & Labels" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Axis Scale (50–250)"'
-    f' --prop dataRange=Sheet1!A1:B9'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop axisMin=50 --prop axisMax=250 --prop majorUnit=50'
-    f' --prop gridlines=D0D0D0:0.5:solid'
-    f' --prop minorGridlines=EEEEEE:0.3:dot'
-    f' --prop axisLine=C00000:1.5:solid'
-    f' --prop catAxisLine=2E75B6:1.5:solid')
+    # Chart 3: Per-series gradients
+    # Features: gradients (per-bar gradient fills, angle=0 for horizontal), labelFont (size:color:bold)
+    items.append(chart("3-Bar Styling",
+        chartType="bar",
+        title="Gradient Bars",
+        series1="Revenue:320,275,410,190,245",
+        categories="North,South,East,West,Central",
+        x="0", y="19", width="12", height="18",
+        gradients="1F4E79-5B9BD5:0;C55A11-F4B183:0;548235-A9D18E:0;7F6000-FFD966:0;843C0B-DDA15E:0",
+        dataLabels="outsideEnd",
+        labelFont="9:333333:true"))
 
-# --------------------------------------------------------------------------
-# Chart 2: Log scale, axis reverse, and display units
-#
-# officecli add charts-bar.xlsx "/4-Axis & Labels" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Log Scale & Reverse" \
-#   --prop series1="Users:10,100,1000,5000,25000,100000" \
-#   --prop categories=Tier 1,Tier 2,Tier 3,Tier 4,Tier 5,Tier 6 \
-#   --prop colors=2E75B6 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop logBase=10 \
-#   --prop axisReverse=true \
-#   --prop dispUnits=thousands \
-#   --prop gridlines=E0E0E0:0.5:dash
-#
-# Features: logBase=10, axisReverse=true, dispUnits=thousands
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/4-Axis & Labels" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Log Scale & Reverse"'
-    f' --prop "series1=Users:10,100,1000,5000,25000,100000"'
-    f' --prop "categories=Tier 1,Tier 2,Tier 3,Tier 4,Tier 5,Tier 6"'
-    f' --prop colors=2E75B6'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop logBase=10'
-    f' --prop axisReverse=true'
-    f' --prop dispUnits=thousands'
-    f' --prop gridlines=E0E0E0:0.5:dash')
+    # Chart 4: Plot fill gradient, chart fill, transparency, rounded corners
+    # Features: plotFill gradient, chartFill, transparency, roundedCorners
+    items.append(chart("3-Bar Styling",
+        chartType="bar",
+        title="Styled Background",
+        dataRange="Sheet1!A1:C9",
+        x="13", y="19", width="12", height="18",
+        colors="5B9BD5,ED7D31",
+        plotFill="F0F4F8-D6E4F0:90",
+        chartFill="FFFFFF",
+        transparency="20",
+        roundedCorners="true",
+        legend="right"))
+    doc.batch(items)
 
-# --------------------------------------------------------------------------
-# Chart 3: Data labels with labelFont, numFmt, separator
-#
-# officecli add charts-bar.xlsx "/4-Axis & Labels" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Labeled Metrics" \
-#   --prop series1="FY2025:148,92,215,178,125" \
-#   --prop categories=Revenue,Costs,Gross,EBITDA,Net Income \
-#   --prop colors=4472C4 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop dataLabels=true --prop labelPos=outsideEnd \
-#   --prop labelFont=10:1F4E79:true \
-#   --prop dataLabels.numFmt=#,##0 \
-#   --prop "dataLabels.separator=: "
-#
-# Features: dataLabels, labelFont, dataLabels.numFmt, dataLabels.separator
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/4-Axis & Labels" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Labeled Metrics"'
-    f' --prop series1=FY2025:148,92,215,178,125'
-    f' --prop categories=Revenue,Costs,Gross,EBITDA,Net Income'
-    f' --prop colors=4472C4'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop dataLabels=outsideEnd'
-    f' --prop labelFont=10:1F4E79:true'
-    f' --prop dataLabels.numFmt=#,##0'
-    f' --prop "dataLabels.separator=: "')
+    # ======================================================================
+    # Sheet: 4-Axis & Labels
+    # ======================================================================
+    print("--- 4-Axis & Labels ---")
+    items = [add_sheet("4-Axis & Labels")]
 
-# --------------------------------------------------------------------------
-# Chart 4: Per-point label delete/text and per-point color
-#
-# officecli add charts-bar.xlsx "/4-Axis & Labels" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Highlight Winner" \
-#   --prop series1="Score:72,85,68,95,78" \
-#   --prop categories=Team A,Team B,Team C,Team D,Team E \
-#   --prop colors=9DC3E6 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop dataLabels=true --prop labelPos=outsideEnd \
-#   --prop dataLabel1.delete=true --prop dataLabel3.delete=true \
-#   --prop dataLabel5.delete=true \
-#   --prop dataLabel4.text="Winner!" \
-#   --prop point4.color=C00000 \
-#   --prop point2.color=2E75B6 \
-#   --prop gapwidth=70
-#
-# Features: dataLabel{N}.delete, dataLabel{N}.text, point{N}.color
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/4-Axis & Labels" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Highlight Winner"'
-    f' --prop series1=Score:72,85,68,95,78'
-    f' --prop categories=Team A,Team B,Team C,Team D,Team E'
-    f' --prop colors=9DC3E6'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop dataLabels=true --prop labelPos=outsideEnd'
-    f' --prop dataLabel1.delete=true --prop dataLabel3.delete=true'
-    f' --prop dataLabel5.delete=true'
-    f' --prop dataLabel4.text="Winner!"'
-    f' --prop point4.color=C00000'
-    f' --prop point2.color=2E75B6'
-    f' --prop gapwidth=70')
+    # Chart 1: Custom axis min/max, majorUnit, and gridlines styling
+    # Features: axisMin, axisMax, majorUnit, gridlines styling, minorGridlines, axisLine, catAxisLine
+    items.append(chart("4-Axis & Labels",
+        chartType="bar",
+        title="Axis Scale (50–250)",
+        dataRange="Sheet1!A1:B9",
+        x="0", y="0", width="12", height="18",
+        axisMin="50", axisMax="250", majorUnit="50",
+        gridlines="D0D0D0:0.5:solid",
+        minorGridlines="EEEEEE:0.3:dot",
+        axisLine="C00000:1.5:solid",
+        catAxisLine="2E75B6:1.5:solid"))
 
-# ==========================================================================
-# Sheet: 5-Legend & Layout
-# ==========================================================================
-print("\n--- 5-Legend & Layout ---")
-cli(f'add "{FILE}" / --type sheet --prop name="5-Legend & Layout"')
+    # Chart 2: Log scale, axis reverse, and display units
+    # Features: logBase=10, axisReverse=true, dispUnits=thousands
+    items.append(chart("4-Axis & Labels",
+        chartType="bar",
+        title="Log Scale & Reverse",
+        series1="Users:10,100,1000,5000,25000,100000",
+        categories="Tier 1,Tier 2,Tier 3,Tier 4,Tier 5,Tier 6",
+        colors="2E75B6",
+        x="13", y="0", width="12", height="18",
+        logBase="10",
+        axisReverse="true",
+        dispUnits="thousands",
+        gridlines="E0E0E0:0.5:dash"))
 
-# --------------------------------------------------------------------------
-# Chart 1: Legend positions (right and bottom)
-#
-# officecli add charts-bar.xlsx "/5-Legend & Layout" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Legend: Right" \
-#   --prop dataRange=Sheet1!A1:E9 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop colors=4472C4,ED7D31,70AD47,FFC000 \
-#   --prop legend=right
-#
-# Features: legend=right (4-series bar with legend on right)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/5-Legend & Layout" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Legend: Right"'
-    f' --prop dataRange=Sheet1!A1:E9'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop colors=4472C4,ED7D31,70AD47,FFC000'
-    f' --prop legend=right')
+    # Chart 3: Data labels with labelFont, numFmt, separator
+    # Features: dataLabels, labelFont, dataLabels.numFmt, dataLabels.separator
+    items.append(chart("4-Axis & Labels",
+        chartType="bar",
+        title="Labeled Metrics",
+        series1="FY2025:148,92,215,178,125",
+        categories="Revenue,Costs,Gross,EBITDA,Net Income",
+        colors="4472C4",
+        x="0", y="19", width="12", height="18",
+        dataLabels="outsideEnd",
+        labelFont="10:1F4E79:true",
+        **{"dataLabels.numFmt": "#,##0",
+           "dataLabels.separator": ": "}))
 
-# --------------------------------------------------------------------------
-# Chart 2: Legend font styling and overlay
-#
-# officecli add charts-bar.xlsx "/5-Legend & Layout" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Legend: Font & Overlay" \
-#   --prop dataRange=Sheet1!A1:E9 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop colors=1F4E79,2E75B6,5B9BD5,9DC3E6 \
-#   --prop legend=top \
-#   --prop legend.overlay=true \
-#   --prop legendfont=10:1F4E79:Calibri
-#
-# Features: legendfont (size:color:fontname), legend.overlay=true
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/5-Legend & Layout" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Legend: Font & Overlay"'
-    f' --prop dataRange=Sheet1!A1:E9'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop colors=1F4E79,2E75B6,5B9BD5,9DC3E6'
-    f' --prop legend=top'
-    f' --prop legend.overlay=true'
-    f' --prop legendfont=10:1F4E79:Calibri')
+    # Chart 4: Per-point label delete/text and per-point color
+    # Features: dataLabel{N}.delete, dataLabel{N}.text, point{N}.color
+    items.append(chart("4-Axis & Labels",
+        chartType="bar",
+        title="Highlight Winner",
+        series1="Score:72,85,68,95,78",
+        categories="Team A,Team B,Team C,Team D,Team E",
+        colors="9DC3E6",
+        x="13", y="19", width="12", height="18",
+        dataLabels="true", labelPos="outsideEnd",
+        gapwidth="70",
+        **{"dataLabel1.delete": "true", "dataLabel3.delete": "true",
+           "dataLabel5.delete": "true",
+           "dataLabel4.text": "Winner!",
+           "point4.color": "C00000",
+           "point2.color": "2E75B6"}))
+    doc.batch(items)
 
-# --------------------------------------------------------------------------
-# Chart 3: Manual layout — plotArea.x/y/w/h, title.x/y
-#
-# officecli add charts-bar.xlsx "/5-Legend & Layout" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Manual Layout" \
-#   --prop dataRange=Sheet1!A1:C9 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop colors=2E75B6,70AD47 \
-#   --prop plotArea.x=0.25 --prop plotArea.y=0.15 \
-#   --prop plotArea.w=0.70 --prop plotArea.h=0.60 \
-#   --prop title.x=0.20 --prop title.y=0.02 \
-#   --prop legend.x=0.25 --prop legend.y=0.82 \
-#   --prop legend.w=0.50 --prop legend.h=0.10 \
-#   --prop title.font=Arial --prop title.size=13 \
-#   --prop title.bold=true
-#
-# Features: plotArea.x/y/w/h, title.x/y, legend.x/y/w/h (manual layout)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/5-Legend & Layout" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Manual Layout"'
-    f' --prop dataRange=Sheet1!A1:C9'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop colors=2E75B6,70AD47'
-    f' --prop plotArea.x=0.25 --prop plotArea.y=0.15'
-    f' --prop plotArea.w=0.70 --prop plotArea.h=0.60'
-    f' --prop title.x=0.20 --prop title.y=0.02'
-    f' --prop legend.x=0.25 --prop legend.y=0.82'
-    f' --prop legend.w=0.50 --prop legend.h=0.10'
-    f' --prop title.font=Arial --prop title.size=13'
-    f' --prop title.bold=true')
+    # ======================================================================
+    # Sheet: 5-Legend & Layout
+    # ======================================================================
+    print("--- 5-Legend & Layout ---")
+    items = [add_sheet("5-Legend & Layout")]
 
-# --------------------------------------------------------------------------
-# Chart 4: Secondary axis with chart/plot area borders
-#
-# officecli add charts-bar.xlsx "/5-Legend & Layout" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Dual Axis: Revenue vs Margin" \
-#   --prop series1="Revenue:340,280,410,195,310" \
-#   --prop series2="Margin %:22,18,28,15,25" \
-#   --prop categories=North,South,East,West,Central \
-#   --prop colors=2E75B6,C00000 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop secondaryAxis=2 \
-#   --prop chartArea.border=D0D0D0:1:solid \
-#   --prop plotArea.border=E0E0E0:0.5:dot \
-#   --prop legend=bottom
-#
-# Features: secondaryAxis=2, chartArea.border, plotArea.border
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/5-Legend & Layout" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Dual Axis: Revenue vs Margin"'
-    f' --prop "series1=Revenue:340,280,410,195,310"'
-    f' --prop "series2=Margin %:22,18,28,15,25"'
-    f' --prop categories=North,South,East,West,Central'
-    f' --prop colors=2E75B6,C00000'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop secondaryAxis=2'
-    f' --prop chartArea.border=D0D0D0:1:solid'
-    f' --prop plotArea.border=E0E0E0:0.5:dot'
-    f' --prop legend=bottom')
+    # Chart 1: Legend positions (right)
+    # Features: legend=right (4-series bar with legend on right)
+    items.append(chart("5-Legend & Layout",
+        chartType="bar",
+        title="Legend: Right",
+        dataRange="Sheet1!A1:E9",
+        x="0", y="0", width="12", height="18",
+        colors="4472C4,ED7D31,70AD47,FFC000",
+        legend="right"))
 
-# ==========================================================================
-# Sheet: 6-Advanced
-# ==========================================================================
-print("\n--- 6-Advanced ---")
-cli(f'add "{FILE}" / --type sheet --prop name="6-Advanced"')
+    # Chart 2: Legend font styling and overlay
+    # Features: legendfont (size:color:fontname), legend.overlay=true
+    # legend.overlay precedes legendfont (as in the CLI twin) so c:overlay is
+    # emitted before c:txPr — the schema order CT_Legend requires.
+    items.append(chart("5-Legend & Layout", **{
+        "chartType": "bar",
+        "title": "Legend: Font & Overlay",
+        "dataRange": "Sheet1!A1:E9",
+        "x": "13", "y": "0", "width": "12", "height": "18",
+        "colors": "1F4E79,2E75B6,5B9BD5,9DC3E6",
+        "legend": "top",
+        "legend.overlay": "true",
+        "legendfont": "10:1F4E79:Calibri"}))
 
-# --------------------------------------------------------------------------
-# Chart 1: Reference line with label
-#
-# officecli add charts-bar.xlsx "/6-Advanced" --type chart \
-#   --prop chartType=bar \
-#   --prop title="vs Company Average" \
-#   --prop series1="Score:82,74,91,68,87,72" \
-#   --prop categories=Engineering,Marketing,Sales,Support,Finance,HR \
-#   --prop colors=4472C4 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop referenceLine=79:FF0000:Average:dash \
-#   --prop gapwidth=80 \
-#   --prop gridlines=E0E0E0:0.5:solid
-#
-# Features: referenceLine (value:color:label:dash style)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/6-Advanced" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="vs Company Average"'
-    f' --prop series1=Score:82,74,91,68,87,72'
-    f' --prop categories=Engineering,Marketing,Sales,Support,Finance,HR'
-    f' --prop colors=4472C4'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop referenceLine=79:FF0000:Average:dash'
-    f' --prop gapwidth=80'
-    f' --prop gridlines=E0E0E0:0.5:solid')
+    # Chart 3: Manual layout — plotArea.x/y/w/h, title.x/y, legend.x/y/w/h
+    # Features: plotArea.x/y/w/h, title.x/y, legend.x/y/w/h (manual layout)
+    items.append(chart("5-Legend & Layout",
+        chartType="bar",
+        title="Manual Layout",
+        dataRange="Sheet1!A1:C9",
+        x="0", y="19", width="12", height="18",
+        colors="2E75B6,70AD47",
+        **{"plotArea.x": "0.25", "plotArea.y": "0.15",
+           "plotArea.w": "0.70", "plotArea.h": "0.60",
+           "title.x": "0.20", "title.y": "0.02",
+           "legend.x": "0.25", "legend.y": "0.82",
+           "legend.w": "0.50", "legend.h": "0.10",
+           "title.font": "Arial", "title.size": "13",
+           "title.bold": "true"}))
 
-# --------------------------------------------------------------------------
-# Chart 2: Conditional coloring (colorRule)
-#
-# officecli add charts-bar.xlsx "/6-Advanced" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Profit/Loss by Division" \
-#   --prop series1="P&L:120,85,-45,160,-80,95,-20,140" \
-#   --prop categories=Div A,Div B,Div C,Div D,Div E,Div F,Div G,Div H \
-#   --prop colors=2E75B6 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop colorRule=0:C00000:70AD47 \
-#   --prop referenceLine=0:888888:1:solid \
-#   --prop dataLabels=outsideEnd \
-#   --prop labelFont=9:333333:false
-#
-# Features: colorRule (threshold:belowColor:aboveColor),
-#   referenceLine=0 (zero baseline)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/6-Advanced" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Profit/Loss by Division"'
-    f' --prop "series1=P&L:120,85,-45,160,-80,95,-20,140"'
-    f' --prop categories=Div A,Div B,Div C,Div D,Div E,Div F,Div G,Div H'
-    f' --prop colors=2E75B6'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop colorRule=0:C00000:70AD47'
-    f' --prop referenceLine=0:888888:1:solid'
-    f' --prop dataLabels=outsideEnd'
-    f' --prop labelFont=9:333333:false')
+    # Chart 4: Secondary axis with chart/plot area borders
+    # Features: secondaryAxis=2, chartArea.border, plotArea.border
+    items.append(chart("5-Legend & Layout",
+        chartType="bar",
+        title="Dual Axis: Revenue vs Margin",
+        series1="Revenue:340,280,410,195,310",
+        series2="Margin %:22,18,28,15,25",
+        categories="North,South,East,West,Central",
+        colors="2E75B6,C00000",
+        x="13", y="19", width="12", height="18",
+        secondaryAxis="2",
+        legend="bottom",
+        **{"chartArea.border": "D0D0D0:1:solid",
+           "plotArea.border": "E0E0E0:0.5:dot"}))
+    doc.batch(items)
 
-# --------------------------------------------------------------------------
-# Chart 3: Title glow, title shadow, series shadow
-#
-# officecli add charts-bar.xlsx "/6-Advanced" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Glow & Shadow Effects" \
-#   --prop series1="East:185,195,210,228" \
-#   --prop series2="West:140,152,165,178" \
-#   --prop categories=Q1,Q2,Q3,Q4 \
-#   --prop colors=4472C4,ED7D31 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop title.glow=4472C4-8-60 \
-#   --prop title.shadow=000000-3-315-2-40 \
-#   --prop title.font=Calibri --prop title.size=16 \
-#   --prop title.bold=true --prop title.color=1F4E79 \
-#   --prop series.shadow=000000-3-315-1-30 \
-#   --prop plotFill=F0F4F8 --prop chartFill=FFFFFF \
-#   --prop legend=bottom
-#
-# Features: title.glow (color-radius-opacity), title.shadow,
-#   series.shadow on bar charts
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/6-Advanced" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Glow & Shadow Effects"'
-    f' --prop series1=East:185,195,210,228'
-    f' --prop series2=West:140,152,165,178'
-    f' --prop categories=Q1,Q2,Q3,Q4'
-    f' --prop colors=4472C4,ED7D31'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop title.glow=4472C4-8-60'
-    f' --prop title.shadow=000000-3-315-2-40'
-    f' --prop title.font=Calibri --prop title.size=16'
-    f' --prop title.bold=true --prop title.color=1F4E79'
-    f' --prop series.shadow=000000-3-315-1-30'
-    f' --prop plotFill=F0F4F8 --prop chartFill=FFFFFF'
-    f' --prop legend=bottom')
+    # ======================================================================
+    # Sheet: 6-Advanced
+    # ======================================================================
+    print("--- 6-Advanced ---")
+    items = [add_sheet("6-Advanced")]
 
-# --------------------------------------------------------------------------
-# Chart 4: Error bars and data table
-#
-# officecli add charts-bar.xlsx "/6-Advanced" --type chart \
-#   --prop chartType=bar \
-#   --prop title="With Error Bars & Data Table" \
-#   --prop dataRange=Sheet1!A1:E9 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop colors=2E75B6,ED7D31,70AD47,FFC000 \
-#   --prop errBars=percent:10 \
-#   --prop dataTable=true \
-#   --prop legend=none \
-#   --prop plotFill=FAFAFA
-#
-# Features: errBars=percent:10, dataTable=true, legend=none
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/6-Advanced" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="With Error Bars & Data Table"'
-    f' --prop dataRange=Sheet1!A1:E9'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop colors=2E75B6,ED7D31,70AD47,FFC000'
-    f' --prop errBars=percent:10'
-    f' --prop dataTable=true'
-    f' --prop legend=none'
-    f' --prop plotFill=FAFAFA')
+    # Chart 1: Reference line with label
+    # Features: referenceLine (value:color:label:dash style)
+    items.append(chart("6-Advanced",
+        chartType="bar",
+        title="vs Company Average",
+        series1="Score:82,74,91,68,87,72",
+        categories="Engineering,Marketing,Sales,Support,Finance,HR",
+        colors="4472C4",
+        x="0", y="0", width="12", height="18",
+        referenceLine="79:FF0000:Average:dash",
+        gapwidth="80",
+        gridlines="E0E0E0:0.5:solid"))
 
-# ==========================================================================
-# Sheet: 7-Axis Controls
-# ==========================================================================
-print("\n--- 7-Axis Controls ---")
-cli(f'add "{FILE}" / --type sheet --prop name="7-Axis Controls"')
+    # Chart 2: Conditional coloring (colorRule)
+    # Features: colorRule (threshold:belowColor:aboveColor), referenceLine=0 (zero baseline)
+    items.append(chart("6-Advanced",
+        chartType="bar",
+        title="Profit/Loss by Division",
+        series1="P&L:120,85,-45,160,-80,95,-20,140",
+        categories="Div A,Div B,Div C,Div D,Div E,Div F,Div G,Div H",
+        colors="2E75B6",
+        x="13", y="0", width="12", height="18",
+        colorRule="0:C00000:70AD47",
+        referenceLine="0:888888:1:solid",
+        dataLabels="outsideEnd",
+        labelFont="9:333333:false"))
 
-# --------------------------------------------------------------------------
-# Chart 1: crosses, crossBetween, valAxisVisible
-#
-# officecli add charts-bar.xlsx "/7-Axis Controls" --type chart \
-#   --prop chartType=bar \
-#   --prop title="Axis Cross Controls" \
-#   --prop series1="Sales:120,80,-30,150" \
-#   --prop categories=Q1,Q2,Q3,Q4 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop crosses=autoZero \
-#   --prop crossBetween=between \
-#   --prop valAxisVisible=true
-#
-# Features: crosses=autoZero (value axis crosses cat axis at zero, the default),
-#   crossBetween=between (bars centred between tick marks vs midCat at the mark),
-#   valAxisVisible=true/false (show or hide the value axis entirely)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/7-Axis Controls" --type chart'
-    f' --prop chartType=bar'
-    f' --prop title="Axis Cross Controls"'
-    f' --prop series1=Sales:120,80,-30,150'
-    f' --prop categories=Q1,Q2,Q3,Q4'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop crosses=autoZero'
-    f' --prop crossBetween=between'
-    f' --prop valAxisVisible=true')
+    # Chart 3: Title glow, title shadow, series shadow
+    # Features: title.glow (color-radius-opacity), title.shadow, series.shadow on bar charts
+    items.append(chart("6-Advanced",
+        chartType="bar",
+        title="Glow & Shadow Effects",
+        series1="East:185,195,210,228",
+        series2="West:140,152,165,178",
+        categories="Q1,Q2,Q3,Q4",
+        colors="4472C4,ED7D31",
+        x="0", y="19", width="12", height="18",
+        plotFill="F0F4F8", chartFill="FFFFFF",
+        legend="bottom",
+        **{"title.glow": "4472C4-8-60",
+           "title.shadow": "000000-3-315-2-40",
+           "title.font": "Calibri", "title.size": "16",
+           "title.bold": "true", "title.color": "1F4E79",
+           "series.shadow": "000000-3-315-1-30"}))
 
-# --------------------------------------------------------------------------
-# Chart 2: labelrotation, labeloffset, ticklabelskip
-#
-# officecli add charts-bar.xlsx "/7-Axis Controls" --type chart \
-#   --prop chartType=column \
-#   --prop title="Tick-label Rotation, Offset & Skip" \
-#   --prop series1="Units:45,30,20,55,40,25,60" \
-#   --prop categories=January,February,March,April,May,June,July \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop labelrotation=45 \
-#   --prop labeloffset=100 \
-#   --prop ticklabelskip=2
-#
-# Features: labelrotation=45 (rotate category tick labels, -90..90 degrees),
-#   labeloffset=100 (category-axis label offset as % of default; 100=default),
-#   ticklabelskip=2 (draw tick labels every 2nd category — reduces crowding)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/7-Axis Controls" --type chart'
-    f' --prop chartType=column'
-    f' --prop title="Tick-label Rotation, Offset & Skip"'
-    f' --prop series1=Units:45,30,20,55,40,25,60'
-    f' --prop categories=January,February,March,April,May,June,July'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop labelrotation=45'
-    f' --prop labeloffset=100'
-    f' --prop ticklabelskip=2')
+    # Chart 4: Error bars and data table
+    # Features: errBars=percent:10, dataTable=true, legend=none
+    items.append(chart("6-Advanced",
+        chartType="bar",
+        title="With Error Bars & Data Table",
+        dataRange="Sheet1!A1:E9",
+        x="13", y="19", width="12", height="18",
+        colors="2E75B6,ED7D31,70AD47,FFC000",
+        errBars="percent:10",
+        dataTable="true",
+        legend="none",
+        plotFill="FAFAFA"))
+    doc.batch(items)
 
-# --------------------------------------------------------------------------
-# Chart 3: axisposition, serlines (stacked bar)
-#
-# officecli add charts-bar.xlsx "/7-Axis Controls" --type chart \
-#   --prop chartType=barStacked \
-#   --prop title="Stacked — axisposition + serlines" \
-#   --prop series1="Online:55,48,60,70" \
-#   --prop series2="Retail:30,40,35,25" \
-#   --prop categories=Q1,Q2,Q3,Q4 \
-#   --prop colors=4472C4,ED7D31 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop axisposition=nextTo \
-#   --prop serlines=true
-#
-# Features: axisposition=nextTo (tick labels next to the axis — alias for
-#   tickLabelPos; also accepts: high, low),
-#   serlines=true (series connector lines on stacked bar charts)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/7-Axis Controls" --type chart'
-    f' --prop chartType=barStacked'
-    f' --prop title="Stacked — axisposition + serlines"'
-    f' --prop series1=Online:55,48,60,70'
-    f' --prop series2=Retail:30,40,35,25'
-    f' --prop categories=Q1,Q2,Q3,Q4'
-    f' --prop colors=4472C4,ED7D31'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop axisposition=nextTo'
-    f' --prop serlines=true')
+    # ======================================================================
+    # Sheet: 7-Axis Controls
+    # ======================================================================
+    print("--- 7-Axis Controls ---")
+    items = [add_sheet("7-Axis Controls")]
 
-# --------------------------------------------------------------------------
-# Chart 4: markercolor on line/scatter (chart-level fanout)
-#
-# officecli add charts-bar.xlsx "/7-Axis Controls" --type chart \
-#   --prop chartType=line \
-#   --prop title="Line — markercolor" \
-#   --prop series1="Sales:120,145,132,160" \
-#   --prop series2="Costs:80,95,88,110" \
-#   --prop categories=Q1,Q2,Q3,Q4 \
-#   --prop colors=4472C4,ED7D31 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop marker=circle --prop markerSize=8 \
-#   --prop markercolor=FF0000 \
-#   --prop lineWidth=2
-#
-# Features: markercolor=FF0000 (chart-level fan-out — applies the fill color
-#   to every series marker; per-series override via series[N] path)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/7-Axis Controls" --type chart'
-    f' --prop chartType=line'
-    f' --prop title="Line — markercolor"'
-    f' --prop series1=Sales:120,145,132,160'
-    f' --prop series2=Costs:80,95,88,110'
-    f' --prop categories=Q1,Q2,Q3,Q4'
-    f' --prop colors=4472C4,ED7D31'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop marker=circle --prop markerSize=8'
-    f' --prop markercolor=FF0000'
-    f' --prop lineWidth=2')
+    # Chart 1: crosses, crossBetween, valAxisVisible
+    # Features: crosses=autoZero (value axis crosses cat axis at zero, the default),
+    #   crossBetween=between (bars centred between tick marks vs midCat at the mark),
+    #   valAxisVisible=true/false (show or hide the value axis entirely)
+    items.append(chart("7-Axis Controls",
+        chartType="bar",
+        title="Axis Cross Controls",
+        series1="Sales:120,80,-30,150",
+        categories="Q1,Q2,Q3,Q4",
+        x="0", y="0", width="12", height="18",
+        crosses="autoZero",
+        crossBetween="between",
+        valAxisVisible="true"))
 
-print(f"\nDone! Generated: {FILE}")
+    # Chart 2: labelrotation, labeloffset, ticklabelskip
+    # Features: labelrotation=45 (rotate category tick labels, -90..90 degrees),
+    #   labeloffset=100 (category-axis label offset as % of default; 100=default),
+    #   ticklabelskip=2 (draw tick labels every 2nd category — reduces crowding)
+    items.append(chart("7-Axis Controls",
+        chartType="column",
+        title="Tick-label Rotation, Offset & Skip",
+        series1="Units:45,30,20,55,40,25,60",
+        categories="January,February,March,April,May,June,July",
+        x="13", y="0", width="12", height="18",
+        labelrotation="45",
+        labeloffset="100",
+        ticklabelskip="2"))
+
+    # Chart 3: axisposition, serlines (stacked bar)
+    # Features: axisposition=nextTo (tick labels next to the axis — alias for
+    #   tickLabelPos; also accepts: high, low),
+    #   serlines=true (series connector lines on stacked bar charts)
+    items.append(chart("7-Axis Controls",
+        chartType="barStacked",
+        title="Stacked — axisposition + serlines",
+        series1="Online:55,48,60,70",
+        series2="Retail:30,40,35,25",
+        categories="Q1,Q2,Q3,Q4",
+        colors="4472C4,ED7D31",
+        x="0", y="19", width="12", height="18",
+        axisposition="nextTo",
+        serlines="true"))
+
+    # Chart 4: markercolor on line/scatter (chart-level fanout)
+    # Features: markercolor=FF0000 (chart-level fan-out — applies the fill color
+    #   to every series marker; per-series override via series[N] path)
+    items.append(chart("7-Axis Controls",
+        chartType="line",
+        title="Line — markercolor",
+        series1="Sales:120,145,132,160",
+        series2="Costs:80,95,88,110",
+        categories="Q1,Q2,Q3,Q4",
+        colors="4472C4,ED7D31",
+        x="13", y="19", width="12", height="18",
+        marker="circle", markerSize="8",
+        markercolor="FF0000",
+        lineWidth="2"))
+    doc.batch(items)
+
+    doc.send({"command": "save"})
+# context exit closes the resident, flushing the workbook to disk.
+
+print(f"Generated: {FILE}")
 print("  8 sheets (Sheet1 data + 7 chart sheets, 28 charts total)")

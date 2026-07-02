@@ -215,6 +215,31 @@ public static partial class PptxBatchEmitter
         }
         catch { /* best-effort — master raw replace still runs */ }
 
+        // External hyperlink relationships on the master — the raw-set XML below
+        // carries <a:hlinkClick r:id="rIdN"> to a URL, but that relationship is
+        // external (not an embedded part) so the ImagePart carrier above never
+        // re-creates it. Without this the rebuilt master's .rels drops rIdN and
+        // PowerPoint refuses the whole deck (0x80070570). Pin each id BEFORE the
+        // raw-set replace. Mirrors EmitLayoutRawOne's hyperlink carrier.
+        try
+        {
+            foreach (var (relId, target) in ppt.GetMasterExternalHyperlinks(idx))
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "add-part",
+                    Parent = $"/slideMaster[{idx}]",
+                    Type = "hyperlink",
+                    Props = new Dictionary<string, string>
+                    {
+                        ["rid"] = relId,
+                        ["target"] = target,
+                    },
+                });
+            }
+        }
+        catch { /* best-effort */ }
+
         // Emit THIS master's own theme part for masters 2..N (distinct content).
         // master1's theme is the shared /ppt/theme/theme1.xml that the scaffold
         // already wires to BOTH the presentation and master1 — EmitThemeRaw
@@ -222,7 +247,15 @@ public static partial class PptxBatchEmitter
         // the presentation<->master1 sharing. Masters 2..N have no scaffold theme,
         // so without this they collapse onto theme1, losing their own theme
         // content and producing a deck PowerPoint refuses.
-        if (idx >= 2)
+        //
+        // EXCEPTION for idx==1: sldMasterIdLst order decides enumeration, so the
+        // first-enumerated master is not necessarily the one sharing the
+        // presentation's theme (sample04: master order [m2, m1], m2 owns its own
+        // theme2 while the presentation shares m1's theme1). When master[1]'s
+        // ThemePart is DISTINCT from the presentation's, the shared-scaffold
+        // assumption is wrong — emit its own theme too; the add-part handler
+        // detaches the scaffold share first, restoring the source topology.
+        if (idx >= 2 || ppt.MasterThemeIsDistinct(idx))
         {
             try
             {
@@ -546,22 +579,22 @@ public static partial class PptxBatchEmitter
         // a deck-level default text style (gov_bja_template, …).
 
         // custShowLst — `<p:custShowLst><p:custShow><p:sldLst><p:sld r:id="…"/>`.
+        // MUST NOT be carried verbatim: each <p:sld r:id> points at a slide by
+        // relationship id, but replay's `add slide` mints FRESH rIds, so the
+        // carried rIds are stale — they resolve to the wrong slide or to no
+        // relationship at all, and PowerPoint then refuses the whole deck
+        // (0x80070570; sample03, sample08). There is no reliable way to remap
+        // the ids at emit time (the replay rIds don't exist yet). Dropping the
+        // custom-show list keeps the deck openable (the shows are lost, a minor
+        // feature) — strictly better than a corrupt package. Warn so the user
+        // knows the shows were not round-tripped.
         var custShow = doc.Root.Element(pNs + "custShowLst");
         if (custShow != null)
         {
-            var xml = CanonicalizeRawXml(custShow.ToString(System.Xml.Linq.SaveOptions.DisableFormatting));
-            items.Add(new BatchItem
-            {
-                Command = "raw-set",
-                Part = "/presentation",
-                Xpath = "/p:presentation",
-                Action = "append",
-                Xml = xml,
-            });
             ctx.Unsupported.Add(new UnsupportedWarning(
                 Element: "presentation.custShowLst",
                 SlidePath: "/presentation",
-                Reason: "Custom slide shows reference slides by relationship id; replay's `add slide` mints fresh rIds, so the custShow targets may point at stale relationships. Verify in PowerPoint before relying on the round-tripped show."));
+                Reason: "Custom slide shows reference slides by relationship id; replay mints fresh rIds so the references cannot be preserved. Dropped to keep the deck openable (carrying the stale ids makes PowerPoint reject the file). Recreate custom shows manually if needed."));
         }
 
         // photoAlbum — flags marking the deck as a photo album

@@ -22,7 +22,7 @@ static partial class CommandBuilder
         var colsOpt = new Option<string?>("--cols") { Description = "Column filter, comma-separated (Excel only, e.g. A,B,C)" };
         var pageOpt = new Option<string?>("--page") { Description = "Page filter (e.g. 1, 2-5, 1,3,5). html mode: default=all. screenshot mode: default=1 (use --page 1-N to capture more, or --grid N for a whole-doc thumbnail contact sheet)." };
         var browserOpt = new Option<bool>("--browser") { Description = "Open output in browser (html / svg modes)" };
-        var outOpt = new Option<string?>("--out", "-o") { Description = "Output file path (screenshot mode; defaults to a temp file)" };
+        var outOpt = new Option<string?>("--out", "-o") { Description = "Output file path (html, screenshot, pdf modes; defaults to stdout for html, a temp file for screenshot)" };
         var screenshotWidthOpt = new Option<int>("--screenshot-width") { Description = "Screenshot viewport width (default 1600)", DefaultValueFactory = _ => 1600 };
         var screenshotHeightOpt = new Option<int>("--screenshot-height") { Description = "Screenshot viewport height (default 1200)", DefaultValueFactory = _ => 1200 };
         var gridOpt = new Option<string?>("--grid")
@@ -159,23 +159,30 @@ static partial class CommandBuilder
 
                 if (html != null)
                 {
-                    if (browser)
+                    if (outArg != null || browser)
                     {
-                        // --browser: write to temp file and open in browser
-                        // SECURITY: include a random token so the preview path is not predictable.
-                        // A predictable path (HHmmss only) lets a local attacker pre-place a symlink
-                        // at the expected location, causing File.WriteAllText to follow it and
-                        // overwrite an arbitrary victim file with preview HTML. It also caused
-                        // collisions between concurrent `view html` invocations of the same file.
-                        var htmlPath = Path.Combine(Path.GetTempPath(), $"officecli_preview_{Path.GetFileNameWithoutExtension(file.Name)}_{DateTime.Now:HHmmss}_{Guid.NewGuid():N}.html");
+                        // --out: write to the requested path. --browser without --out:
+                        // write to a temp file and open it. With both, write to --out
+                        // and open that.
+                        // SECURITY: when falling back to a temp file, include a random
+                        // token so the preview path is not predictable. A predictable
+                        // path (HHmmss only) lets a local attacker pre-place a symlink at
+                        // the expected location, causing File.WriteAllText to follow it
+                        // and overwrite an arbitrary victim file with preview HTML. It
+                        // also caused collisions between concurrent `view html`
+                        // invocations of the same file.
+                        var htmlPath = outArg ?? Path.Combine(Path.GetTempPath(), $"officecli_preview_{Path.GetFileNameWithoutExtension(file.Name)}_{DateTime.Now:HHmmss}_{Guid.NewGuid():N}.html");
                         File.WriteAllText(htmlPath, html);
-                        Console.WriteLine(htmlPath);
-                        try
+                        Console.WriteLine(Path.GetFullPath(htmlPath));
+                        if (browser)
                         {
-                            var psi = new System.Diagnostics.ProcessStartInfo(htmlPath) { UseShellExecute = true };
-                            System.Diagnostics.Process.Start(psi);
+                            try
+                            {
+                                var psi = new System.Diagnostics.ProcessStartInfo(htmlPath) { UseShellExecute = true };
+                                System.Diagnostics.Process.Start(psi);
+                            }
+                            catch { /* silently ignore if browser can't be opened */ }
                         }
-                        catch { /* silently ignore if browser can't be opened */ }
                     }
                     else
                     {

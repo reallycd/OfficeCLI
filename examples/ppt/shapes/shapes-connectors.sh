@@ -3,8 +3,9 @@
 # Demonstrates: --type connector with from=/to= shape references, straight/elbow/curve
 # presets, arrowheads, --type group with comma-separated shape indices.
 
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 DIR="$(dirname "$0")"
 PPTX="$DIR/shapes-connectors.pptx"
 

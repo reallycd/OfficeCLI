@@ -303,23 +303,48 @@ internal static partial class ChartHelper
                 }
 
                 case "legend":
-                    chart.RemoveAllChildren<C.Legend>();
-                    if (!value.Equals("false", StringComparison.OrdinalIgnoreCase) &&
-                        !value.Equals("none", StringComparison.OrdinalIgnoreCase))
+                    if (value.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+                        value.Equals("none", StringComparison.OrdinalIgnoreCase))
                     {
-                        // CONSISTENCY(strict-enums / R34-1): unknown legend
-                        // positions used to silently fall through to "bottom",
-                        // producing a contradictory "Updated: legend=hidden"
-                        // success message while the file actually carried
-                        // legend=bottom. Reject up front with the valid set
-                        // so users see typos at Set time.
-                        var pos = ParseLegendPosition(value);
-                        var plotVisOnly = chart.GetFirstChild<C.PlotVisibleOnly>();
-                        var insertBefore = plotVisOnly as OpenXmlElement ?? chart.LastChild;
-                        chart.InsertBefore(new C.Legend(
-                            new C.LegendPosition { Val = pos },
-                            new C.Overlay { Val = false }
-                        ), insertBefore);
+                        // Turn the legend off entirely.
+                        chart.RemoveAllChildren<C.Legend>();
+                    }
+                    else
+                    {
+                        // CONSISTENCY(strict-enums / R34-1): validate the position
+                        // BEFORE mutating, so an unknown value (typo) is rejected
+                        // without disturbing the existing legend.
+                        // BUGFIX (EnumExhaustivenessScanTests): the schema lists
+                        // `true` as a valid legend value (mirror of `false`=hide), so
+                        // `legend=true` must show the legend at the default position
+                        // (right) rather than erroring as an invalid position.
+                        var pos = value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                            ? C.LegendPositionValues.Right
+                            : ParseLegendPosition(value);
+                        var legend = chart.GetFirstChild<C.Legend>();
+                        if (legend == null)
+                        {
+                            var plotVisOnly = chart.GetFirstChild<C.PlotVisibleOnly>();
+                            var insertBefore = plotVisOnly as OpenXmlElement ?? chart.LastChild;
+                            chart.InsertBefore(new C.Legend(
+                                new C.LegendPosition { Val = pos },
+                                new C.Overlay { Val = false }
+                            ), insertBefore);
+                        }
+                        else
+                        {
+                            // BUGFIX (CompanionInterferenceScanTests): the legend
+                            // already exists — only change its POSITION, preserving
+                            // txPr (legend font), overlay, legendEntry, layout, spPr,
+                            // etc. The previous RemoveAllChildren<Legend> + rebuild
+                            // wiped legendFont whenever the user only changed the
+                            // legend position. CT_Legend order: legendPos is first.
+                            var posEl = legend.GetFirstChild<C.LegendPosition>();
+                            if (posEl != null)
+                                posEl.Val = pos;
+                            else
+                                legend.InsertAt(new C.LegendPosition { Val = pos }, 0);
+                        }
                     }
                     break;
 
@@ -357,6 +382,15 @@ internal static partial class ChartHelper
                     foreach (var chartTypeEl in plotArea2.ChildElements
                         .Where(e => e.LocalName.Contains("Chart") || e.LocalName.Contains("chart")))
                     {
+                        // BUGFIX (CompanionInterferenceScanTests): capture an
+                        // existing dLblPos before the rebuild. `dataLabels=value`
+                        // (content only, no position token) used to wipe a
+                        // previously-set `labelPos` because RemoveAllChildren +
+                        // rebuild produced a fresh dLbls with no position. If the
+                        // new value carries no position token, carry the old one
+                        // over (it was already valid for this chart type).
+                        var preservedDLblPos = chartTypeEl.GetFirstChild<C.DataLabels>()
+                            ?.GetFirstChild<C.DataLabelPosition>()?.Val;
                         chartTypeEl.RemoveAllChildren<C.DataLabels>();
                         if (!value.Equals("none", StringComparison.OrdinalIgnoreCase))
                         {
@@ -380,11 +414,11 @@ internal static partial class ChartHelper
                             // positionValues is declared above the validation block.
                             var isPositionValue = parts.Any(p => positionValues.Contains(p));
                             var showVal = parts.Contains("value") || parts.Contains("true") || parts.Contains("all") || isPositionValue;
-                            dl.AppendChild(new C.ShowLegendKey { Val = false });
-                            dl.AppendChild(new C.ShowValue { Val = showVal });
-                            dl.AppendChild(new C.ShowCategoryName { Val = parts.Contains("category") || parts.Contains("all") });
-                            dl.AppendChild(new C.ShowSeriesName { Val = parts.Contains("series") || parts.Contains("all") });
-                            dl.AppendChild(new C.ShowPercent { Val = parts.Contains("percent") || parts.Contains("all") });
+                            // Per CT_DLbls (EG_DLblShared) schema order, dLblPos
+                            // MUST precede showLegendKey/showVal/... Build the
+                            // position element first and append it before the
+                            // show* group; otherwise the validator reports
+                            // "unexpected child element 'c:dLblPos'".
                             // If a position value was given, apply it as dLblPos —
                             // but ONLY when the chartType's CT_DLbls accepts the
                             // requested value per ST_DLblPos*. Otherwise the
@@ -438,6 +472,19 @@ internal static partial class ChartHelper
                                     dl.AppendChild(new C.DataLabelPosition { Val = dLblPos });
                                 }
                             }
+                            else if (preservedDLblPos != null)
+                            {
+                                // No position token in the new value — preserve the
+                                // pre-existing dLblPos so content-only updates don't
+                                // drop the label position.
+                                dl.AppendChild(new C.DataLabelPosition { Val = preservedDLblPos });
+                            }
+                            // show* group follows dLblPos per schema order.
+                            dl.AppendChild(new C.ShowLegendKey { Val = false });
+                            dl.AppendChild(new C.ShowValue { Val = showVal });
+                            dl.AppendChild(new C.ShowCategoryName { Val = parts.Contains("category") || parts.Contains("all") });
+                            dl.AppendChild(new C.ShowSeriesName { Val = parts.Contains("series") || parts.Contains("all") });
+                            dl.AppendChild(new C.ShowPercent { Val = parts.Contains("percent") || parts.Contains("all") });
                             // Insert dLbls before dropLines/hiLowLines/upDownBars/gapWidth/overlap/
                             // showMarker/holeSize/firstSliceAngle/axId per schema order. CT_StockChart
                             // and CT_LineChart both place dLbls before dropLines/hiLowLines/upDownBars;
@@ -668,22 +715,25 @@ internal static partial class ChartHelper
                         ? new C.DateAxis()
                         : new C.CategoryAxis();
                     // CONSISTENCY(catax-dateax-stripcatonly): CT_CatAx defines
-                    // <auto>, <lblAlgn>, <lblOffset>, <noMultiLvlLbl> that
-                    // CT_DateAxis does NOT accept. BuildCategoryAxis emits
-                    // <lblAlgn> + <lblOffset> by default, so a fresh cat→date
-                    // conversion would always carry them across and produce a
-                    // schema-invalid <c:dateAx>. Strip them on the cat→date
-                    // path; date→cat preserves everything (no incompatible
-                    // elements in the reverse direction).
+                    // <lblAlgn> and <noMultiLvlLbl> that CT_DateAx does NOT
+                    // accept (per ECMA-376 CT_DateAx keeps <auto> and
+                    // <lblOffset> — real date axes carry both). Strip only
+                    // the truly cat-only pair on the cat→date path; date→cat
+                    // preserves everything (no incompatible elements in the
+                    // reverse direction).
                     var catOnlyLocalNames = new System.Collections.Generic.HashSet<string>(
                         System.StringComparer.Ordinal)
-                    { "auto", "lblAlgn", "lblOffset", "noMultiLvlLbl" };
+                    { "lblAlgn", "noMultiLvlLbl" };
                     foreach (var child in existing.ChildElements.ToList())
                     {
                         child.Remove();
                         if (wantDate && catOnlyLocalNames.Contains(child.LocalName)) continue;
                         replacement.AppendChild(child);
                     }
+                    // baseTimeUnit is NOT hardcoded here: PowerPoint auto-
+                    // selects one when absent, and the axis-level Set surface
+                    // (`set axis[@role=category] baseTimeUnit=…`) carries the
+                    // source's explicit value on dump→replay.
                     plotArea2.InsertBefore(replacement, existing);
                     existing.Remove();
                     break;
@@ -1173,6 +1223,11 @@ internal static partial class ChartHelper
                     var plotArea2 = chart.GetFirstChild<C.PlotArea>();
                     if (plotArea2 == null) { unsupported.Add(key); break; }
                     var alphaPercent = ParseHelpers.SafeParseDouble(value, key);
+                    // BUGFIX (NumericBoundaryScanTests): transparency/opacity/alpha
+                    // are 0-100 percent. Out-of-range input drove the computed
+                    // <a:alpha val> outside [0,100000] → schema-invalid file.
+                    if (double.IsNaN(alphaPercent) || double.IsInfinity(alphaPercent) || alphaPercent < 0 || alphaPercent > 100)
+                        throw new ArgumentException($"Invalid {key}: '{value}'. Expected a percentage 0-100.");
                     // If key is "transparency", convert to opacity (e.g. 30% transparency = 70% opacity)
                     if (key.Equals("transparency", StringComparison.OrdinalIgnoreCase))
                         alphaPercent = 100.0 - alphaPercent;
@@ -1328,6 +1383,33 @@ internal static partial class ChartHelper
                     break;
                 }
 
+                case "floorraw" or "sidewallraw" or "backwallraw":
+                {
+                    // Verbatim 3D wall/floor elements (<c:floor>/<c:sideWall>/
+                    // <c:backWall>) — sources hide the wall grid with
+                    // <a:ln><a:noFill/> spPr; without them the rebuilt 3D
+                    // chart shows PowerPoint's default wall outlines.
+                    if (string.IsNullOrWhiteSpace(value)) break;
+                    OpenXmlCompositeElement wallEl = key.ToLowerInvariant() switch
+                    {
+                        "floorraw" => new C.Floor(),
+                        "sidewallraw" => new C.SideWall(),
+                        _ => new C.BackWall(),
+                    };
+                    wallEl.InnerXml = value;
+                    switch (wallEl)
+                    {
+                        case C.Floor: chart.RemoveAllChildren<C.Floor>(); break;
+                        case C.SideWall: chart.RemoveAllChildren<C.SideWall>(); break;
+                        default: chart.RemoveAllChildren<C.BackWall>(); break;
+                    }
+                    // Schema: view3D?, floor?, sideWall?, backWall?, plotArea.
+                    var wallPlotArea = chart.GetFirstChild<C.PlotArea>();
+                    if (wallPlotArea != null) chart.InsertBefore(wallEl, wallPlotArea);
+                    else chart.AppendChild(wallEl);
+                    break;
+                }
+
                 case "areafill" or "area.fill":
                 {
                     // Apply gradient fill to area chart series. Format: "color1-color2[:angle]"
@@ -1407,6 +1489,11 @@ internal static partial class ChartHelper
                     var plotArea2 = chart.GetFirstChild<C.PlotArea>();
                     if (plotArea2 == null) { unsupported.Add(key); break; }
                     if (!int.TryParse(value, out var gw)) throw new ArgumentException($"Invalid gapWidth: '{value}'. Expected integer (0-500).");
+                    // BUGFIX (NumericBoundaryScanTests): enforce the stated 0-500
+                    // range. CT_GapAmount is ST_GapAmountUShort (0-500); out-of-range
+                    // (incl. negatives wrapping via (ushort) cast) produced a
+                    // schema-invalid c:gapWidth PowerPoint refuses to open.
+                    if (gw < 0 || gw > 500) throw new ArgumentException($"Invalid gapWidth: '{value}'. Expected integer 0-500.");
                     bool gapUpdated = false;
                     foreach (var gapEl in plotArea2.Descendants<C.GapWidth>())
                     {
@@ -1784,7 +1871,13 @@ internal static partial class ChartHelper
                     scaling.RemoveAllChildren<C.Orientation>();
                     var orient = (ParseHelpers.IsValidBooleanString(value) && ParseHelpers.IsTruthy(value)) || value.Equals("maxmin", StringComparison.OrdinalIgnoreCase)
                         ? C.OrientationValues.MaxMin : C.OrientationValues.MinMax;
-                    scaling.PrependChild(new C.Orientation { Val = orient });
+                    // CT_Scaling order is logBase, orientation, max, min — orientation
+                    // must follow logBase, so insert after it when a log scale exists
+                    // (a bare PrependChild would push orientation ahead of logBase).
+                    var orientEl = new C.Orientation { Val = orient };
+                    var existingLogBase = scaling.GetFirstChild<C.LogBase>();
+                    if (existingLogBase != null) scaling.InsertAfter(orientEl, existingLogBase);
+                    else scaling.PrependChild(orientEl);
                     break;
                 }
 
@@ -2043,7 +2136,12 @@ internal static partial class ChartHelper
                 case "roundedcorners":
                 {
                     chartSpace!.RemoveAllChildren<C.RoundedCorners>();
-                    chartSpace.PrependChild(new C.RoundedCorners { Val = ParseHelpers.IsTruthy(value) });
+                    var rcEl = new C.RoundedCorners { Val = ParseHelpers.IsTruthy(value) };
+                    // CT_ChartSpace order: date1904, lang, roundedCorners, …
+                    var rcAfter = (OpenXmlElement?)chartSpace.GetFirstChild<C.EditingLanguage>()
+                        ?? chartSpace.GetFirstChild<C.Date1904>();
+                    if (rcAfter != null) rcAfter.InsertAfterSelf(rcEl);
+                    else chartSpace.PrependChild(rcEl);
                     break;
                 }
 
@@ -2935,7 +3033,20 @@ internal static partial class ChartHelper
                     var legendEl = chart.GetFirstChild<C.Legend>();
                     if (legendEl == null) { unsupported.Add(key); break; }
                     legendEl.RemoveAllChildren<C.Overlay>();
-                    legendEl.AppendChild(new C.Overlay { Val = ParseHelpers.IsTruthy(value) });
+                    // CT_Legend order: legendPos, legendEntry*, layout,
+                    // overlay, spPr, txPr, extLst. Insert overlay BEFORE the
+                    // first spPr/txPr/extLst so the validator doesn't report
+                    // "unexpected child element 'c:overlay'".
+                    var newLegendOverlay = new C.Overlay { Val = ParseHelpers.IsTruthy(value) };
+                    OpenXmlElement? legendInsertBefore =
+                        (OpenXmlElement?)legendEl.GetFirstChild<C.ShapeProperties>()
+                        ?? legendEl.GetFirstChild<C.ChartShapeProperties>()
+                        ?? (OpenXmlElement?)legendEl.GetFirstChild<C.TextProperties>()
+                        ?? (OpenXmlElement?)legendEl.GetFirstChild<C.ExtensionList>();
+                    if (legendInsertBefore != null)
+                        legendEl.InsertBefore(newLegendOverlay, legendInsertBefore);
+                    else
+                        legendEl.AppendChild(newLegendOverlay);
                     break;
                 }
 

@@ -23,6 +23,15 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
     public int LastSelectorSetCount { get; internal set; }
 
     /// <summary>
+    /// LaTeX commands/environments the most recent Add()/Set() equation parse
+    /// did not recognize and silently rendered as literal text. Surfaced to the
+    /// CLI layer as <c>unrecognized_latex_command</c> warnings (exit code 2),
+    /// mirroring the <c>unsupported_property</c> UX — lenient accept is kept
+    /// (the equation is still written). Reset at the start of each Add/Set.
+    /// </summary>
+    public List<string> LastUnrecognizedLatex { get; internal set; } = new();
+
+    /// <summary>
     /// Set true by Add/Set/Remove/RawSet, consumed by Save/Dispose to decide
     /// whether to stamp <c>docProps/custom.xml</c> with an OfficeCLI audit
     /// trail. Pure Get/Query sessions leave this false.
@@ -180,7 +189,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         if (masterMatch.Success)
         {
             var idx = int.Parse(masterMatch.Groups[1].Value);
-            var masters = presentationPart.SlideMasterParts.ToList();
+            var masters = PowerPointHandler.MastersInOrder(presentationPart);
             if (idx < 1 || idx > masters.Count)
                 throw new ArgumentException($"slideMaster[{idx}] not found (total: {masters.Count})");
             return masters[idx - 1].SlideMaster?.OuterXml
@@ -191,8 +200,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         if (layoutMatch.Success)
         {
             var idx = int.Parse(layoutMatch.Groups[1].Value);
-            var layouts = presentationPart.SlideMasterParts
-                .SelectMany(m => m.SlideLayoutParts).ToList();
+            var layouts = PowerPointHandler.LayoutsInOrder(presentationPart);
             if (idx < 1 || idx > layouts.Count)
                 throw new ArgumentException($"slideLayout[{idx}] not found (total: {layouts.Count})");
             return layouts[idx - 1].SlideLayout?.OuterXml
@@ -267,7 +275,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         else if (Regex.Match(partPath, @"^/slideMaster\[(\d+)\]$") is { Success: true } masterMatch)
         {
             var idx = int.Parse(masterMatch.Groups[1].Value);
-            var masters = presentationPart.SlideMasterParts.ToList();
+            var masters = PowerPointHandler.MastersInOrder(presentationPart);
             if (idx < 1)
                 throw new ArgumentException($"SlideMaster {idx} not found (total: {masters.Count})");
             if (idx > masters.Count)
@@ -282,7 +290,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 // sldLayoutIdLst, which GrowSlideLayoutParts consults when the
                 // subsequent /slideLayout[K] raw-sets land.
                 GrowSlideMasterParts(idx);
-                masters = presentationPart.SlideMasterParts.ToList();
+                masters = PowerPointHandler.MastersInOrder(presentationPart);
                 if (idx > masters.Count)
                     throw new ArgumentException($"SlideMaster {idx} not found (total: {masters.Count})");
             }
@@ -292,8 +300,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         else if (Regex.Match(partPath, @"^/slideLayout\[(\d+)\]$") is { Success: true } layoutMatch)
         {
             var idx = int.Parse(layoutMatch.Groups[1].Value);
-            var layouts = presentationPart.SlideMasterParts
-                .SelectMany(m => m.SlideLayoutParts).ToList();
+            var layouts = PowerPointHandler.LayoutsInOrder(presentationPart);
             if (idx < 1)
                 throw new ArgumentException($"SlideLayout {idx} not found (total: {layouts.Count})");
             if (idx > layouts.Count)
@@ -306,8 +313,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 // missing layout parts under the appropriate master based on the
                 // post-master-replace sldLayoutIdLst, then re-resolve.
                 GrowSlideLayoutParts(idx);
-                layouts = presentationPart.SlideMasterParts
-                    .SelectMany(m => m.SlideLayoutParts).ToList();
+                layouts = PowerPointHandler.LayoutsInOrder(presentationPart);
                 if (idx > layouts.Count)
                     throw new ArgumentException($"SlideLayout {idx} not found (total: {layouts.Count})");
             }
@@ -449,7 +455,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
     {
         var presentationPart = _doc.PresentationPart
             ?? throw new InvalidOperationException("No presentation part");
-        var masters = presentationPart.SlideMasterParts.ToList();
+        var masters = PowerPointHandler.MastersInOrder(presentationPart);
         int seen = 0;
         foreach (var mp in masters)
         {
@@ -500,8 +506,58 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
             }
             seen += declaredCount;
         }
-        // targetGlobalIdx is beyond every master's declared range; caller will
-        // raise the canonical "not found" error after we return.
+        // targetGlobalIdx is beyond every master's declared range. Real decks
+        // can carry MORE layout parts than the master's sldLayoutIdLst declares
+        // (rel-linked but undeclared "orphan" layouts — e.g. sample02 declares
+        // 1 layout yet ships 11). The emitter enumerates SlideLayoutParts (rels,
+        // 11) so raw-set targets /slideLayout[2..11]; grow the shortfall as
+        // stub parts under the last master. Unlike the source's orphan form,
+        // DECLARE each grown part in sldLayoutIdLst: a replayed slide may bind
+        // any of these layouts (the source slide could only ever bind a
+        // declared one), and PowerPoint refuses a deck whose slide references
+        // a layout missing from its master's sldLayoutIdLst (0x80070570).
+        var lastMaster = masters.LastOrDefault();
+        if (lastMaster == null) return;
+        var idList = lastMaster.SlideMaster?.SlideLayoutIdList;
+        if (idList == null && lastMaster.SlideMaster != null)
+        {
+            idList = new SlideLayoutIdList();
+            lastMaster.SlideMaster.SlideLayoutIdList = idList;
+        }
+        uint nextLayoutId = 2147483649; // min valid sldLayoutId id
+        var usedIds = presentationPart.SlideMasterParts
+            .Select(m => m.SlideMaster?.SlideLayoutIdList)
+            .Where(l => l != null)
+            .SelectMany(l => l!.Elements<SlideLayoutId>())
+            .Select(e => e.Id?.Value ?? 0)
+            .ToHashSet();
+        int totalExisting = masters.Sum(m => m.SlideLayoutParts.Count());
+        for (int i = totalExisting; i < targetGlobalIdx; i++)
+        {
+            var extraPart = lastMaster.AddNewPart<SlideLayoutPart>();
+            extraPart.SlideLayout = new SlideLayout(
+                new CommonSlideData(
+                    new ShapeTree(
+                        new NonVisualGroupShapeProperties(
+                            new NonVisualDrawingProperties { Id = 1, Name = "" },
+                            new NonVisualGroupShapeDrawingProperties(),
+                            new ApplicationNonVisualDrawingProperties()),
+                        new GroupShapeProperties()))
+            ) { Type = SlideLayoutValues.Blank };
+            extraPart.SlideLayout.Save();
+            extraPart.AddPart(lastMaster);
+            if (idList != null)
+            {
+                while (usedIds.Contains(nextLayoutId)) nextLayoutId++;
+                idList.AppendChild(new SlideLayoutId
+                {
+                    Id = nextLayoutId,
+                    RelationshipId = lastMaster.GetIdOfPart(extraPart),
+                });
+                usedIds.Add(nextLayoutId);
+            }
+        }
+        if (lastMaster.SlideMaster != null) lastMaster.SlideMaster.Save();
     }
 
     // CONSISTENCY(grow-on-rawset): mirror of GrowSlideLayoutParts for the
@@ -713,37 +769,41 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 string? drawingXml  = properties != null && properties.TryGetValue("drawingXml", out var drxv) ? drxv : null;
                 string? drawingRelId = properties != null && properties.TryGetValue("drawingRelId", out var drrv) ? drrv : null;
 
-                DiagramDataPart   dataPart   = !string.IsNullOrEmpty(dataRid)
-                    ? saSlidePart.AddNewPart<DiagramDataPart>(dataRid)
-                    : saSlidePart.AddNewPart<DiagramDataPart>();
-                DiagramLayoutDefinitionPart layoutPart = !string.IsNullOrEmpty(layoutRid)
-                    ? saSlidePart.AddNewPart<DiagramLayoutDefinitionPart>(layoutRid)
-                    : saSlidePart.AddNewPart<DiagramLayoutDefinitionPart>();
-                DiagramColorsPart colorsPart = !string.IsNullOrEmpty(colorsRid)
-                    ? saSlidePart.AddNewPart<DiagramColorsPart>(colorsRid)
-                    : saSlidePart.AddNewPart<DiagramColorsPart>();
-                DiagramStylePart  stylePart  = !string.IsNullOrEmpty(qsRid)
-                    ? saSlidePart.AddNewPart<DiagramStylePart>(qsRid)
-                    : saSlidePart.AddNewPart<DiagramStylePart>();
+                // Reuse-aware creation: a second SmartArt on the same slide may
+                // share the layout/colors/quickStyle parts (see GetOrAddPinnedPart).
+                // Data parts are per-diagram unique, but the helper handles all
+                // four uniformly and skips rewriting a reused part's content.
+                DiagramDataPart   dataPart   = GetOrAddPinnedPart<DiagramDataPart>(saSlidePart, dataRid, out var dataCreated);
+                DiagramLayoutDefinitionPart layoutPart = GetOrAddPinnedPart<DiagramLayoutDefinitionPart>(saSlidePart, layoutRid, out var layoutCreated);
+                DiagramColorsPart colorsPart = GetOrAddPinnedPart<DiagramColorsPart>(saSlidePart, colorsRid, out var colorsCreated);
+                DiagramStylePart  stylePart  = GetOrAddPinnedPart<DiagramStylePart>(saSlidePart, qsRid, out var styleCreated);
 
                 // Write the real content when supplied; else seed a minimal
                 // typed root (keeps direct CLI `add-part smartart` usable).
-                WriteDiagramPartXml(dataPart, dataXml, () =>
-                    new DocumentFormat.OpenXml.Drawing.Diagrams.DataModelRoot(
-                        new DocumentFormat.OpenXml.Drawing.Diagrams.PointList(),
-                        new DocumentFormat.OpenXml.Drawing.Diagrams.ConnectionList()));
-                // Pictures embedded in the diagram are referenced from the data
-                // part's own .rels; re-attach them with pinned rIds.
-                AttachDiagramImages(dataPart, properties, "dataImage");
-                // External hyperlinks on diagram nodes (<a:hlinkClick r:id>) live
-                // on the data part's own .rels; re-add with pinned rIds.
-                AttachDiagramHyperlinks(dataPart, properties, "dataHlink");
-                WriteDiagramPartXml(layoutPart, layoutXml,
-                    () => new DocumentFormat.OpenXml.Drawing.Diagrams.LayoutDefinition());
-                WriteDiagramPartXml(colorsPart, colorsXml,
-                    () => new DocumentFormat.OpenXml.Drawing.Diagrams.ColorsDefinition());
-                WriteDiagramPartXml(stylePart, qsXml,
-                    () => new DocumentFormat.OpenXml.Drawing.Diagrams.StyleDefinition());
+                // Skip parts reused from a prior SmartArt — their content is
+                // already written and the second op may not carry it.
+                if (dataCreated)
+                {
+                    WriteDiagramPartXml(dataPart, dataXml, () =>
+                        new DocumentFormat.OpenXml.Drawing.Diagrams.DataModelRoot(
+                            new DocumentFormat.OpenXml.Drawing.Diagrams.PointList(),
+                            new DocumentFormat.OpenXml.Drawing.Diagrams.ConnectionList()));
+                    // Pictures embedded in the diagram are referenced from the data
+                    // part's own .rels; re-attach them with pinned rIds.
+                    AttachDiagramImages(dataPart, properties, "dataImage");
+                    // External hyperlinks on diagram nodes (<a:hlinkClick r:id>) live
+                    // on the data part's own .rels; re-add with pinned rIds.
+                    AttachDiagramHyperlinks(dataPart, properties, "dataHlink");
+                }
+                if (layoutCreated)
+                    WriteDiagramPartXml(layoutPart, layoutXml,
+                        () => new DocumentFormat.OpenXml.Drawing.Diagrams.LayoutDefinition());
+                if (colorsCreated)
+                    WriteDiagramPartXml(colorsPart, colorsXml,
+                        () => new DocumentFormat.OpenXml.Drawing.Diagrams.ColorsDefinition());
+                if (styleCreated)
+                    WriteDiagramPartXml(stylePart, qsXml,
+                        () => new DocumentFormat.OpenXml.Drawing.Diagrams.StyleDefinition());
 
                 // The DSP cached-drawing part is referenced from the data XML
                 // via <dsp:dataModelExt relId="...">. That relId resolves
@@ -755,17 +815,22 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 // refuses the file (0x80070570).
                 if (!string.IsNullOrEmpty(drawingXml) && !string.IsNullOrEmpty(drawingRelId))
                 {
-                    var drawingPart = saSlidePart.AddNewPart<DiagramPersistLayoutPart>(
-                        "application/vnd.ms-office.drawingml.diagramDrawing+xml", drawingRelId);
-                    // drawingXml is always present on this branch; the seed
-                    // fallback is unreachable here but supplied for the typed
-                    // signature.
-                    WriteDiagramPartXml(drawingPart, drawingXml,
-                        () => new DocumentFormat.OpenXml.Drawing.Diagrams.DataModelRoot());
-                    // The DSP cached drawing re-references the same pictures for
-                    // rendering via its own .rels; re-attach with pinned rIds.
-                    AttachDiagramImages(drawingPart, properties, "drawingImage");
-                    AttachDiagramHyperlinks(drawingPart, properties, "drawingHlink");
+                    var existingDrawing = saSlidePart.Parts
+                        .FirstOrDefault(p => p.RelationshipId == drawingRelId).OpenXmlPart;
+                    if (existingDrawing is not DiagramPersistLayoutPart)
+                    {
+                        var drawingPart = saSlidePart.AddNewPart<DiagramPersistLayoutPart>(
+                            "application/vnd.ms-office.drawingml.diagramDrawing+xml", drawingRelId);
+                        // drawingXml is always present on this branch; the seed
+                        // fallback is unreachable here but supplied for the typed
+                        // signature.
+                        WriteDiagramPartXml(drawingPart, drawingXml,
+                            () => new DocumentFormat.OpenXml.Drawing.Diagrams.DataModelRoot());
+                        // The DSP cached drawing re-references the same pictures for
+                        // rendering via its own .rels; re-attach with pinned rIds.
+                        AttachDiagramImages(drawingPart, properties, "drawingImage");
+                        AttachDiagramHyperlinks(drawingPart, properties, "drawingHlink");
+                    }
                 }
 
                 // Encode all four rIds in the RelId field — callers (batch
@@ -903,6 +968,22 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
 
                 string? pinnedVideoRid = properties.TryGetValue("video-rid", out var vr) ? vr : null;
                 string? pinnedAudioRid = properties.TryGetValue("audio-rid", out var ar) ? ar : null;
+
+                // rel-only: a timing-tree / transition SOUND (<p:sndTgt r:embed>,
+                // <p:snd r:embed>) needs ONLY a bare `.../audio` relationship to a
+                // MediaDataPart with the source rId — NOT the <p:pic> media
+                // machinery (MediaReference + thumbnail). Without this the audio
+                // rId in the raw-passed-through timing tree dangled and PowerPoint
+                // refused the deck (0x80070570). Create the audio rel with the
+                // pinned rId and return; the timing slice already references it.
+                if (partType == "audio"
+                    && properties.TryGetValue("rel-only", out var relOnly) && IsTruthy(relOnly))
+                {
+                    var soundRid = !string.IsNullOrEmpty(pinnedAudioRid)
+                        ? mediaSlidePart.AddAudioReferenceRelationship(mediaDataPart, pinnedAudioRid).Id
+                        : mediaSlidePart.AddAudioReferenceRelationship(mediaDataPart).Id;
+                    return ($"audio={soundRid}", parentPartPath);
+                }
                 string? pinnedMediaRid = properties.TryGetValue("media-rid", out var mr) ? mr : null;
                 string? pinnedThumbRid = properties.TryGetValue("thumbnail-rid", out var tr) ? tr : null;
 
@@ -1273,7 +1354,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                     if (smMatch.Success)
                     {
                         var smIdx = int.Parse(smMatch.Groups[1].Value);
-                        var smParts = presentationPart.SlideMasterParts.ToList();
+                        var smParts = PowerPointHandler.MastersInOrder(presentationPart);
                         if (smIdx < 1) throw new ArgumentException($"slideMaster index {smIdx} out of range");
                         if (smIdx > smParts.Count)
                         {
@@ -1283,7 +1364,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                             // doesn't exist yet — grow to idx so the ImagePart can
                             // attach to the right host.
                             GrowSlideMasterParts(smIdx);
-                            smParts = presentationPart.SlideMasterParts.ToList();
+                            smParts = PowerPointHandler.MastersInOrder(presentationPart);
                             if (smIdx > smParts.Count)
                                 throw new ArgumentException($"slideMaster index {smIdx} out of range (total {smParts.Count})");
                         }
@@ -1292,12 +1373,12 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                     else if (slMatch != null && slMatch.Success)
                     {
                         var slIdx = int.Parse(slMatch.Groups[1].Value);
-                        var slParts = presentationPart.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
+                        var slParts = PowerPointHandler.LayoutsInOrder(presentationPart);
                         if (slIdx < 1) throw new ArgumentException($"slideLayout index {slIdx} out of range");
                         if (slIdx > slParts.Count)
                         {
                             GrowSlideLayoutParts(slIdx);
-                            slParts = presentationPart.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
+                            slParts = PowerPointHandler.LayoutsInOrder(presentationPart);
                             if (slIdx > slParts.Count)
                                 throw new ArgumentException($"slideLayout index {slIdx} out of range (total {slParts.Count})");
                         }
@@ -1436,16 +1517,16 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 if (hlSmMatch.Success)
                 {
                     var i = int.Parse(hlSmMatch.Groups[1].Value);
-                    var parts = presentationPart.SlideMasterParts.ToList();
-                    if (i > parts.Count) { GrowSlideMasterParts(i); parts = presentationPart.SlideMasterParts.ToList(); }
+                    var parts = PowerPointHandler.MastersInOrder(presentationPart);
+                    if (i > parts.Count) { GrowSlideMasterParts(i); parts = PowerPointHandler.MastersInOrder(presentationPart); }
                     if (i < 1 || i > parts.Count) throw new ArgumentException($"slideMaster index {i} out of range");
                     hlHost = parts[i - 1];
                 }
                 else if (hlSlMatch != null && hlSlMatch.Success)
                 {
                     var i = int.Parse(hlSlMatch.Groups[1].Value);
-                    var parts = presentationPart.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
-                    if (i > parts.Count) { GrowSlideLayoutParts(i); parts = presentationPart.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList(); }
+                    var parts = PowerPointHandler.LayoutsInOrder(presentationPart);
+                    if (i > parts.Count) { GrowSlideLayoutParts(i); parts = PowerPointHandler.LayoutsInOrder(presentationPart); }
                     if (i < 1 || i > parts.Count) throw new ArgumentException($"slideLayout index {i} out of range");
                     hlHost = parts[i - 1];
                 }
@@ -1509,16 +1590,16 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 if (tgSmMatch.Success)
                 {
                     var i = int.Parse(tgSmMatch.Groups[1].Value);
-                    var parts = presentationPart.SlideMasterParts.ToList();
-                    if (i > parts.Count) { GrowSlideMasterParts(i); parts = presentationPart.SlideMasterParts.ToList(); }
+                    var parts = PowerPointHandler.MastersInOrder(presentationPart);
+                    if (i > parts.Count) { GrowSlideMasterParts(i); parts = PowerPointHandler.MastersInOrder(presentationPart); }
                     if (i < 1 || i > parts.Count) throw new ArgumentException($"slideMaster index {i} out of range");
                     tagHost = parts[i - 1];
                 }
                 else if (tgSlMatch != null && tgSlMatch.Success)
                 {
                     var i = int.Parse(tgSlMatch.Groups[1].Value);
-                    var parts = presentationPart.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
-                    if (i > parts.Count) { GrowSlideLayoutParts(i); parts = presentationPart.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList(); }
+                    var parts = PowerPointHandler.LayoutsInOrder(presentationPart);
+                    if (i > parts.Count) { GrowSlideLayoutParts(i); parts = PowerPointHandler.LayoutsInOrder(presentationPart); }
                     if (i < 1 || i > parts.Count) throw new ArgumentException($"slideLayout index {i} out of range");
                     tagHost = parts[i - 1];
                 }
@@ -1593,6 +1674,29 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 return (srRid, parentPartPath);
             }
 
+            case "tablestyles":
+            {
+                // Re-create the presentation's custom table-style catalogue
+                // (ppt/tableStyles.xml). MUST use the TYPED TableStylesPart, not
+                // AddExtendedPart: tableStyles is a known OOXML part type, and a
+                // generic extended part with that content-type is pruned by the
+                // SDK on save (the part vanished and each table's custom
+                // <a:tableStyleId> GUID fell back to a built-in style —
+                // sample09). Props: xml (base64 of tableStyles.xml).
+                var tsPres = _doc.PresentationPart
+                    ?? throw new InvalidOperationException("presentation part missing");
+                if (properties == null
+                    || !properties.TryGetValue("xml", out var tsXmlB64) || string.IsNullOrEmpty(tsXmlB64))
+                    throw new ArgumentException("add-part tablestyles requires property 'xml' (base64)");
+                byte[] tsBytes;
+                try { tsBytes = Convert.FromBase64String(tsXmlB64); }
+                catch (FormatException) { throw new ArgumentException("add-part tablestyles: 'xml' is not valid base64"); }
+                var tsPart = tsPres.TableStylesPart ?? tsPres.AddNewPart<TableStylesPart>();
+                using (var tsStream = tsPart.GetStream(FileMode.Create, FileAccess.Write))
+                    tsStream.Write(tsBytes, 0, tsBytes.Length);
+                return ("tablestyles", parentPartPath);
+            }
+
             case "extpart":
             {
                 // Re-create an arbitrary binary part with a CUSTOM relationship
@@ -1644,16 +1748,16 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 if (epSmMatch.Success)
                 {
                     var i = int.Parse(epSmMatch.Groups[1].Value);
-                    var ps = presentationPart.SlideMasterParts.ToList();
-                    if (i > ps.Count) { GrowSlideMasterParts(i); ps = presentationPart.SlideMasterParts.ToList(); }
+                    var ps = PowerPointHandler.MastersInOrder(presentationPart);
+                    if (i > ps.Count) { GrowSlideMasterParts(i); ps = PowerPointHandler.MastersInOrder(presentationPart); }
                     if (i < 1 || i > ps.Count) throw new ArgumentException($"slideMaster index {i} out of range");
                     epHost = ps[i - 1];
                 }
                 else if (epSlMatch != null && epSlMatch.Success)
                 {
                     var i = int.Parse(epSlMatch.Groups[1].Value);
-                    var ps = presentationPart.SlideMasterParts.SelectMany(mm => mm.SlideLayoutParts).ToList();
-                    if (i > ps.Count) { GrowSlideLayoutParts(i); ps = presentationPart.SlideMasterParts.SelectMany(mm => mm.SlideLayoutParts).ToList(); }
+                    var ps = PowerPointHandler.LayoutsInOrder(presentationPart);
+                    if (i > ps.Count) { GrowSlideLayoutParts(i); ps = PowerPointHandler.LayoutsInOrder(presentationPart); }
                     if (i < 1 || i > ps.Count) throw new ArgumentException($"slideLayout index {i} out of range");
                     epHost = ps[i - 1];
                 }
@@ -1683,6 +1787,203 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 return (epRid, parentPartPath);
             }
 
+            case "activex":
+            {
+                // Carry an ActiveX control part for round-trip: activeX{N}.xml
+                // (rel type .../control on the slide, pinned rId matching the
+                // <p:control r:id>) + its child activeX{N}.bin (the control's own
+                // .rels, activeXControlBinary rel, pinned rId matching the
+                // activeX xml's internal r:id). Without the parts the rIds in the
+                // round-tripped <p:controls> block dangle → 0x80070570.
+                var axm = System.Text.RegularExpressions.Regex.Match(parentPartPath, @"^/slide\[(\d+)\]$");
+                if (!axm.Success)
+                    throw new ArgumentException("add-part activex: parent must be /slide[N]");
+                var axIdx = int.Parse(axm.Groups[1].Value);
+                var axParts = GetSlideParts().ToList();
+                if (axIdx < 1 || axIdx > axParts.Count)
+                    throw new ArgumentException($"slide index {axIdx} out of range");
+                var axSlide = axParts[axIdx - 1];
+
+                if (properties == null
+                    || !properties.TryGetValue("rid", out var axRid) || string.IsNullOrEmpty(axRid))
+                    throw new ArgumentException("add-part activex requires property 'rid'");
+                if (!properties.TryGetValue("xml", out var axXmlB64) || string.IsNullOrEmpty(axXmlB64))
+                    throw new ArgumentException("add-part activex requires property 'xml' (base64)");
+                byte[] axXmlBytes;
+                try { axXmlBytes = Convert.FromBase64String(axXmlB64); }
+                catch (FormatException) { throw new ArgumentException("add-part activex: 'xml' is not valid base64"); }
+
+                const string ControlRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/control";
+                const string ActiveXCT = "application/vnd.ms-office.activeX+xml";
+                const string BinRelType = "http://schemas.microsoft.com/office/2006/relationships/activeXControlBinary";
+                const string BinCT = "application/vnd.ms-office.activeX";
+
+                if (axSlide.ExternalRelationships.Any(r => r.Id == axRid)
+                    || axSlide.HyperlinkRelationships.Any(r => r.Id == axRid))
+                    return (axRid, parentPartPath);
+                ReHomeCollidingRel(axSlide, axRid);
+                var axPart = axSlide.AddExtendedPart(ControlRelType, ActiveXCT, ".xml", axRid);
+                using (var axStream = new MemoryStream(axXmlBytes))
+                    axPart.FeedData(axStream);
+
+                if (properties.TryGetValue("bin", out var axBinB64) && !string.IsNullOrEmpty(axBinB64)
+                    && properties.TryGetValue("bin-rid", out var axBinRid) && !string.IsNullOrEmpty(axBinRid))
+                {
+                    byte[] axBinBytes;
+                    try { axBinBytes = Convert.FromBase64String(axBinB64); }
+                    catch (FormatException) { axBinBytes = Array.Empty<byte>(); }
+                    if (axBinBytes.Length > 0)
+                    {
+                        var binPart = axPart.AddExtendedPart(BinRelType, BinCT, ".bin", axBinRid);
+                        using var binStream = new MemoryStream(axBinBytes);
+                        binPart.FeedData(binStream);
+                    }
+                }
+                return (axRid, parentPartPath);
+            }
+
+            case "chartex":
+            {
+                // Carry a chartEx part (cx: extension charts — funnel, sunburst,
+                // treemap, …) for round-trip: chartEx{N}.xml with a pinned rId
+                // matching the AlternateContent slice's <cx:chart r:id>, plus its
+                // typed children (colors / style sidecars and the embedded xlsx
+                // workbook) with pinned rIds matching the chartEx XML's internal
+                // references. Without the parts the slice's rIds dangle and
+                // PowerPoint refuses the deck (0x80070570, funnel-pp1). Typed
+                // ExtendedChartPart is REQUIRED — a generic AddExtendedPart of a
+                // known part type gets pruned on save (tableStyles lesson).
+                var cxm = System.Text.RegularExpressions.Regex.Match(parentPartPath, @"^/slide\[(\d+)\]$");
+                if (!cxm.Success)
+                    throw new ArgumentException("add-part chartex: parent must be /slide[N]");
+                var cxIdx = int.Parse(cxm.Groups[1].Value);
+                var cxParts = GetSlideParts().ToList();
+                if (cxIdx < 1 || cxIdx > cxParts.Count)
+                    throw new ArgumentException($"slide index {cxIdx} out of range");
+                var cxSlide = cxParts[cxIdx - 1];
+
+                if (properties == null
+                    || !properties.TryGetValue("rid", out var cxRid) || string.IsNullOrEmpty(cxRid))
+                    throw new ArgumentException("add-part chartex requires property 'rid'");
+                if (!properties.TryGetValue("xml", out var cxXmlB64) || string.IsNullOrEmpty(cxXmlB64))
+                    throw new ArgumentException("add-part chartex requires property 'xml' (base64)");
+                byte[] cxXmlBytes;
+                try { cxXmlBytes = Convert.FromBase64String(cxXmlB64); }
+                catch (FormatException) { throw new ArgumentException("add-part chartex: 'xml' is not valid base64"); }
+
+                if (cxSlide.Parts.Any(p => p.RelationshipId == cxRid))
+                    return (cxRid, parentPartPath);
+                ReHomeCollidingRel(cxSlide, cxRid);
+                var cxPart = cxSlide.AddNewPart<ExtendedChartPart>(cxRid);
+                using (var cxs = new MemoryStream(cxXmlBytes)) cxPart.FeedData(cxs);
+
+                void FeedChild<T>(string ridKey, string dataKey) where T : OpenXmlPart, IFixedContentTypePart
+                {
+                    if (!properties.TryGetValue(ridKey, out var crid) || string.IsNullOrEmpty(crid)) return;
+                    if (!properties.TryGetValue(dataKey, out var cb64) || string.IsNullOrEmpty(cb64)) return;
+                    byte[] cb;
+                    try { cb = Convert.FromBase64String(cb64); } catch (FormatException) { return; }
+                    var child = cxPart.AddNewPart<T>(crid);
+                    using var cs = new MemoryStream(cb);
+                    child.FeedData(cs);
+                }
+                FeedChild<ChartColorStylePart>("colors-rid", "colors");
+                FeedChild<ChartStylePart>("style-rid", "style");
+                if (properties.TryGetValue("package-rid", out var pkgRid) && !string.IsNullOrEmpty(pkgRid)
+                    && properties.TryGetValue("package", out var pkgB64) && !string.IsNullOrEmpty(pkgB64))
+                {
+                    byte[] pkgBytes;
+                    try { pkgBytes = Convert.FromBase64String(pkgB64); } catch (FormatException) { pkgBytes = Array.Empty<byte>(); }
+                    if (pkgBytes.Length > 0)
+                    {
+                        var pkgCT = properties.GetValueOrDefault("package-content-type",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                        var pkgPart = cxPart.AddNewPart<EmbeddedPackagePart>(pkgCT, pkgRid);
+                        using var ps = new MemoryStream(pkgBytes);
+                        pkgPart.FeedData(ps);
+                    }
+                }
+                return (cxRid, parentPartPath);
+            }
+
+            case "chartimage":
+            {
+                // Attach an ImagePart to a slide's Nth ChartPart with a pinned
+                // rId — re-creates the image a chart-internal <a:blipFill
+                // r:embed> references (chart/plot-area picture or texture
+                // fill). Without it the verbatim spPr fill dangles and the
+                // emitter had to degrade it to noFill (chart-picture-bg).
+                var cim = System.Text.RegularExpressions.Regex.Match(parentPartPath, @"^/slide\[(\d+)\]$");
+                if (!cim.Success)
+                    throw new ArgumentException("add-part chartimage: parent must be /slide[N]");
+                if (properties == null
+                    || !properties.TryGetValue("rid", out var ciRid) || string.IsNullOrEmpty(ciRid))
+                    throw new ArgumentException("add-part chartimage requires property 'rid'");
+                if (!properties.TryGetValue("chart", out var ciOrdRaw) || !int.TryParse(ciOrdRaw, out var ciOrd))
+                    throw new ArgumentException("add-part chartimage requires property 'chart' (1-based chart ordinal)");
+                if (!properties.TryGetValue("data", out var ciB64) || string.IsNullOrEmpty(ciB64))
+                    throw new ArgumentException("add-part chartimage requires property 'data' (base64)");
+                var ciCT = properties.GetValueOrDefault("content-type", "image/png");
+                var ciIdx = int.Parse(cim.Groups[1].Value);
+                var ciSlides = GetSlideParts().ToList();
+                if (ciIdx < 1 || ciIdx > ciSlides.Count)
+                    throw new ArgumentException($"slide index {ciIdx} out of range");
+                var ciCharts = ciSlides[ciIdx - 1].ChartParts.ToList();
+                if (ciOrd < 1 || ciOrd > ciCharts.Count)
+                    throw new ArgumentException($"chart ordinal {ciOrd} out of range (total: {ciCharts.Count})");
+                var ciChart = ciCharts[ciOrd - 1];
+                if (ciChart.Parts.Any(pp2 => pp2.RelationshipId == ciRid))
+                    return (ciRid, parentPartPath);
+                var ciPart = ciChart.AddImagePart(ciCT, ciRid);
+                byte[] ciBytes;
+                try { ciBytes = Convert.FromBase64String(ciB64); }
+                catch (FormatException) { throw new ArgumentException("add-part chartimage: 'data' is not valid base64"); }
+                using (var cis = new MemoryStream(ciBytes)) ciPart.FeedData(cis);
+                return (ciRid, parentPartPath);
+            }
+
+            case "chartstyle":
+            {
+                // Attach a ChartStylePart / ChartColorStylePart to a slide's
+                // Nth ChartPart with a pinned rId (counterpart of
+                // GetChartStyleParts). Props: chart, kind=style|colors,
+                // rid, data (base64 XML).
+                var csm = System.Text.RegularExpressions.Regex.Match(parentPartPath, @"^/slide\[(\d+)\]$");
+                if (!csm.Success)
+                    throw new ArgumentException("add-part chartstyle: parent must be /slide[N]");
+                if (properties == null
+                    || !properties.TryGetValue("rid", out var csRid) || string.IsNullOrEmpty(csRid))
+                    throw new ArgumentException("add-part chartstyle requires property 'rid'");
+                if (!properties.TryGetValue("chart", out var csOrdRaw) || !int.TryParse(csOrdRaw, out var csOrd))
+                    throw new ArgumentException("add-part chartstyle requires property 'chart' (1-based chart ordinal)");
+                if (!properties.TryGetValue("kind", out var csKind)
+                    || csKind is not ("style" or "colors" or "themeoverride"))
+                    throw new ArgumentException("add-part chartstyle requires property 'kind' (style|colors|themeoverride)");
+                if (!properties.TryGetValue("data", out var csB64) || string.IsNullOrEmpty(csB64))
+                    throw new ArgumentException("add-part chartstyle requires property 'data' (base64)");
+                var csIdx = int.Parse(csm.Groups[1].Value);
+                var csSlides = GetSlideParts().ToList();
+                if (csIdx < 1 || csIdx > csSlides.Count)
+                    throw new ArgumentException($"slide index {csIdx} out of range");
+                var csCharts = csSlides[csIdx - 1].ChartParts.ToList();
+                if (csOrd < 1 || csOrd > csCharts.Count)
+                    throw new ArgumentException($"chart ordinal {csOrd} out of range (total: {csCharts.Count})");
+                var csChart = csCharts[csOrd - 1];
+                if (csChart.Parts.Any(pp3 => pp3.RelationshipId == csRid))
+                    return (csRid, parentPartPath);
+                byte[] csBytes;
+                try { csBytes = Convert.FromBase64String(csB64); }
+                catch (FormatException) { throw new ArgumentException("add-part chartstyle: 'data' is not valid base64"); }
+                OpenXmlPart csPart = csKind switch
+                {
+                    "style" => csChart.AddNewPart<ChartStylePart>(csRid),
+                    "colors" => csChart.AddNewPart<ChartColorStylePart>(csRid),
+                    _ => csChart.AddNewPart<ThemeOverridePart>(csRid),
+                };
+                using (var css = new MemoryStream(csBytes)) csPart.FeedData(css);
+                return (csRid, parentPartPath);
+            }
+
             case "extrel":
             {
                 // Re-create an EXTERNAL relationship (TargetMode=External) with a
@@ -1700,24 +2001,32 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 OpenXmlPartContainer erHost;
                 var erSm = Regex.Match(parentPartPath, @"^/slideMaster\[(\d+)\]$");
                 var erSl = erSm.Success ? null : Regex.Match(parentPartPath, @"^/slideLayout\[(\d+)\]$");
+                var erSld = (erSm.Success || (erSl?.Success ?? false)) ? null : Regex.Match(parentPartPath, @"^/slide\[(\d+)\]$");
                 if (erSm.Success)
                 {
                     var i = int.Parse(erSm.Groups[1].Value);
-                    var ps = presentationPart.SlideMasterParts.ToList();
-                    if (i > ps.Count) { GrowSlideMasterParts(i); ps = presentationPart.SlideMasterParts.ToList(); }
+                    var ps = PowerPointHandler.MastersInOrder(presentationPart);
+                    if (i > ps.Count) { GrowSlideMasterParts(i); ps = PowerPointHandler.MastersInOrder(presentationPart); }
                     if (i < 1 || i > ps.Count) throw new ArgumentException($"slideMaster index {i} out of range");
                     erHost = ps[i - 1];
                 }
                 else if (erSl != null && erSl.Success)
                 {
                     var i = int.Parse(erSl.Groups[1].Value);
-                    var ps = presentationPart.SlideMasterParts.SelectMany(mm => mm.SlideLayoutParts).ToList();
-                    if (i > ps.Count) { GrowSlideLayoutParts(i); ps = presentationPart.SlideMasterParts.SelectMany(mm => mm.SlideLayoutParts).ToList(); }
+                    var ps = PowerPointHandler.LayoutsInOrder(presentationPart);
+                    if (i > ps.Count) { GrowSlideLayoutParts(i); ps = PowerPointHandler.LayoutsInOrder(presentationPart); }
                     if (i < 1 || i > ps.Count) throw new ArgumentException($"slideLayout index {i} out of range");
                     erHost = ps[i - 1];
                 }
+                else if (erSld != null && erSld.Success)
+                {
+                    var i = int.Parse(erSld.Groups[1].Value);
+                    var ps = GetSlideParts().ToList();
+                    if (i < 1 || i > ps.Count) throw new ArgumentException($"slide index {i} out of range");
+                    erHost = ps[i - 1];
+                }
                 else
-                    throw new ArgumentException("add-part extrel: parent must be /slideMaster[N] or /slideLayout[N]");
+                    throw new ArgumentException("add-part extrel: parent must be /slide[N], /slideMaster[N] or /slideLayout[N]");
                 // Idempotent.
                 if (erHost.ExternalRelationships.Any(r => r.Id == erRid)
                     || erHost.Parts.Any(p => p.RelationshipId == erRid))
@@ -1751,8 +2060,8 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 if (tmMatch.Success)
                 {
                     var i = int.Parse(tmMatch.Groups[1].Value);
-                    var parts = presentationPart.SlideMasterParts.ToList();
-                    if (i > parts.Count) { GrowSlideMasterParts(i); parts = presentationPart.SlideMasterParts.ToList(); }
+                    var parts = PowerPointHandler.MastersInOrder(presentationPart);
+                    if (i > parts.Count) { GrowSlideMasterParts(i); parts = PowerPointHandler.MastersInOrder(presentationPart); }
                     if (i < 1 || i > parts.Count) throw new ArgumentException($"slideMaster index {i} out of range");
                     themeHost = parts[i - 1];
                 }
@@ -1840,6 +2149,36 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Create a slide sub-part with a pinned relationship id, OR reuse the
+    /// existing part when that rId is already present. Two SmartArt
+    /// graphicFrames on one slide may SHARE a diagram layout/colors/quickStyle
+    /// part (distinct data models, common styling — e.g. data1 + data2 both
+    /// referencing a single layout1/colors1/quickStyle1 set).
+    /// The dump emitter emits the shared rId on BOTH add-part ops, so the second
+    /// call must reuse the first call's part instead of re-pinning the same rId,
+    /// which otherwise throws "Id conflicts with the Id of an existing
+    /// relationship" and leaves the package unopenable (0x80070570).
+    /// <paramref name="created"/> is false when an existing part was reused, so
+    /// the caller can skip rewriting content already written by the first call.
+    /// </summary>
+    private static T GetOrAddPinnedPart<T>(SlidePart slidePart, string? pinnedRid, out bool created)
+        where T : OpenXmlPart, DocumentFormat.OpenXml.Packaging.IFixedContentTypePart
+    {
+        if (!string.IsNullOrEmpty(pinnedRid))
+        {
+            var existing = slidePart.Parts.FirstOrDefault(p => p.RelationshipId == pinnedRid).OpenXmlPart;
+            if (existing is T typed) { created = false; return typed; }
+            // rId taken by a different part type (malformed dump): let the SDK
+            // allocate a fresh rId rather than collide.
+            if (existing != null) { created = true; return slidePart.AddNewPart<T>(); }
+            created = true;
+            return slidePart.AddNewPart<T>(pinnedRid);
+        }
+        created = true;
+        return slidePart.AddNewPart<T>();
     }
 
     private static void WriteDiagramPartXml(
@@ -1944,13 +2283,74 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         _backingStream = null;
     }
 
+    // Canonical, RELOAD-STABLE ordering for masters and layouts.
+    //
+    // The SDK's SlideMasterParts / SlideLayoutParts enumerate the part
+    // dictionary, whose order can differ between the moment parts are created
+    // (dump replay: prune scaffold + grow from source) and a later reload —
+    // sample05 bound `add slide layout=1` to a DIFFERENT part than the one
+    // raw-set /slideLayout[1] had just written, chaining the slide to the
+    // blank layout instead of the title layout. Order by the presentation's
+    // sldMasterIdLst and each master's sldLayoutIdLst (XML document order,
+    // stable across save/reload); rel-linked-but-undeclared layouts follow
+    // their master's declared ones, ordered by part URI as a stable tiebreak.
+    internal static List<SlideMasterPart> MastersInOrder(PresentationPart pp)
+    {
+        var all = pp.SlideMasterParts.ToList();
+        var ordered = new List<SlideMasterPart>();
+        var seen = new HashSet<SlideMasterPart>();
+        var idList = pp.Presentation?.SlideMasterIdList;
+        if (idList != null)
+        {
+            foreach (var id in idList.Elements<SlideMasterId>())
+            {
+                var rid = id.RelationshipId?.Value;
+                if (string.IsNullOrEmpty(rid)) continue;
+                try
+                {
+                    if (pp.GetPartById(rid) is SlideMasterPart smp && seen.Add(smp))
+                        ordered.Add(smp);
+                }
+                catch { }
+            }
+        }
+        foreach (var m in all.OrderBy(m => m.Uri.OriginalString, StringComparer.Ordinal))
+            if (seen.Add(m)) ordered.Add(m);
+        return ordered;
+    }
+
+    internal static List<SlideLayoutPart> LayoutsInOrder(PresentationPart pp)
+    {
+        var result = new List<SlideLayoutPart>();
+        foreach (var mp in MastersInOrder(pp))
+        {
+            var seen = new HashSet<SlideLayoutPart>();
+            var declared = mp.SlideMaster?.SlideLayoutIdList?.Elements<SlideLayoutId>()
+                ?? Enumerable.Empty<SlideLayoutId>();
+            foreach (var id in declared)
+            {
+                var rid = id.RelationshipId?.Value;
+                if (string.IsNullOrEmpty(rid)) continue;
+                try
+                {
+                    if (mp.GetPartById(rid) is SlideLayoutPart lp && seen.Add(lp))
+                        result.Add(lp);
+                }
+                catch { }
+            }
+            foreach (var lp in mp.SlideLayoutParts.OrderBy(l => l.Uri.OriginalString, StringComparer.Ordinal))
+                if (seen.Add(lp)) result.Add(lp);
+        }
+        return result;
+    }
+
     // Internal accessors used by PptxBatchEmitter (resource enumeration).
     // Keep the PresentationPart itself private; expose only the counts and
     // a binary getter that the emitter needs.
     internal int SlideMasterCount =>
         _doc.PresentationPart?.SlideMasterParts.Count() ?? 0;
     internal int SlideLayoutCount =>
-        _doc.PresentationPart?.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).Count() ?? 0;
+        _doc.PresentationPart is { } ppLc ? LayoutsInOrder(ppLc).Count : 0;
 
     /// <summary>
     /// Enumerate ImageParts attached to a slideMaster — one entry per
@@ -1967,7 +2367,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         var result = new List<MasterImageInfo>();
         var pp = _doc.PresentationPart;
         if (pp == null) return result;
-        var masters = pp.SlideMasterParts.ToList();
+        var masters = MastersInOrder(pp);
         if (masterIdx < 1 || masterIdx > masters.Count) return result;
         var master = masters[masterIdx - 1];
         foreach (var img in master.ImageParts)
@@ -1993,12 +2393,30 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
     {
         var pp = _doc.PresentationPart;
         if (pp == null) return null;
-        var masters = pp.SlideMasterParts.ToList();
+        var masters = MastersInOrder(pp);
         if (masterIdx < 1 || masterIdx > masters.Count) return null;
         var master = masters[masterIdx - 1];
         var themePart = master.ThemePart;
         if (themePart?.Theme == null) return null;
         return (master.GetIdOfPart(themePart), themePart.Theme.OuterXml);
+    }
+
+    /// <summary>
+    /// True when the master's ThemePart is a DIFFERENT part from the
+    /// presentation's primary ThemePart. sldMasterIdLst order decides master
+    /// enumeration, so master[1] is not necessarily the master that shares the
+    /// presentation's theme — a deck whose first-enumerated master carries its
+    /// own theme must get an add-part theme on replay or it collapses onto the
+    /// scaffold's shared theme (wrong colours for every styleRef on its slides).
+    /// </summary>
+    internal bool MasterThemeIsDistinct(int masterIdx)
+    {
+        var pp = _doc.PresentationPart;
+        if (pp == null) return false;
+        var masters = MastersInOrder(pp);
+        if (masterIdx < 1 || masterIdx > masters.Count) return false;
+        var mt = masters[masterIdx - 1].ThemePart;
+        return mt != null && !ReferenceEquals(mt, pp.ThemePart);
     }
 
     /// <summary>The notes master's own ThemePart (rel id + XML), or null.</summary>
@@ -2024,7 +2442,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
     {
         var pp = _doc.PresentationPart;
         if (pp == null) return Array.Empty<MasterImageInfo>();
-        var masters = pp.SlideMasterParts.ToList();
+        var masters = MastersInOrder(pp);
         if (masterIdx < 1 || masterIdx > masters.Count) return Array.Empty<MasterImageInfo>();
         var themePart = masters[masterIdx - 1].ThemePart;
         return themePart == null ? Array.Empty<MasterImageInfo>() : ReadImagePartInfos(themePart);
@@ -2075,7 +2493,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         if (slideNum < 1 || slideNum > slideParts.Count) return null;
         var layoutPart = slideParts[slideNum - 1].SlideLayoutPart;
         if (layoutPart == null) return null;
-        var allLayouts = pp.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
+        var allLayouts = PowerPointHandler.LayoutsInOrder(pp);
         var idx = allLayouts.IndexOf(layoutPart);
         return idx >= 0 ? idx + 1 : null;
     }
@@ -2110,7 +2528,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         var result = new List<MasterImageInfo>();
         var pp = _doc.PresentationPart;
         if (pp == null) return result;
-        var layouts = pp.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
+        var layouts = PowerPointHandler.LayoutsInOrder(pp);
         if (layoutIdx < 1 || layoutIdx > layouts.Count) return result;
         var layout = layouts[layoutIdx - 1];
         foreach (var img in layout.ImageParts)
@@ -2138,7 +2556,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
     {
         var pp = _doc.PresentationPart;
         if (pp == null) return Array.Empty<BlipCompanionInfo>();
-        var masters = pp.SlideMasterParts.ToList();
+        var masters = MastersInOrder(pp);
         if (masterIdx < 1 || masterIdx > masters.Count) return Array.Empty<BlipCompanionInfo>();
         return ReadExtendedPartInfos(masters[masterIdx - 1]);
     }
@@ -2166,7 +2584,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
     {
         var pp = _doc.PresentationPart;
         if (pp == null) return Array.Empty<BlipCompanionInfo>();
-        var layouts = pp.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
+        var layouts = PowerPointHandler.LayoutsInOrder(pp);
         if (layoutIdx < 1 || layoutIdx > layouts.Count) return Array.Empty<BlipCompanionInfo>();
         return ReadExtendedPartInfos(layouts[layoutIdx - 1]);
     }
@@ -2186,7 +2604,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
     {
         var pp = _doc.PresentationPart;
         if (pp == null) return Array.Empty<(string, string, string)>();
-        var masters = pp.SlideMasterParts.ToList();
+        var masters = MastersInOrder(pp);
         if (masterIdx < 1 || masterIdx > masters.Count) return Array.Empty<(string, string, string)>();
         return ReadExternalImageLinks(masters[masterIdx - 1]);
     }
@@ -2196,7 +2614,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
     {
         var pp = _doc.PresentationPart;
         if (pp == null) return Array.Empty<(string, string, string)>();
-        var layouts = pp.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
+        var layouts = PowerPointHandler.LayoutsInOrder(pp);
         if (layoutIdx < 1 || layoutIdx > layouts.Count) return Array.Empty<(string, string, string)>();
         return ReadExternalImageLinks(layouts[layoutIdx - 1]);
     }
@@ -2261,10 +2679,33 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         var result = new List<(string, string)>();
         var pp = _doc.PresentationPart;
         if (pp == null) return result;
-        var layouts = pp.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
+        var layouts = PowerPointHandler.LayoutsInOrder(pp);
         if (layoutIdx < 1 || layoutIdx > layouts.Count) return result;
         var layout = layouts[layoutIdx - 1];
         foreach (var rel in layout.HyperlinkRelationships)
+        {
+            if (rel.IsExternal)
+                result.Add((rel.Id, rel.Uri.OriginalString));
+        }
+        return result;
+    }
+
+    /// <summary>Same as <see cref="GetLayoutExternalHyperlinks"/> for a slideMaster.
+    /// A master shape (e.g. a footer / "designed by" credit) can carry
+    /// <c>&lt;a:hlinkClick r:id="rIdN"/&gt;</c> to an external URL. The master is
+    /// replayed via raw-set which keeps the reference, but the ImagePart carrier
+    /// never re-creates an external hyperlink rel, so the rebuilt master's .rels
+    /// lost rIdN and PowerPoint refused the whole deck (0x80070570 OPC corrupt).
+    /// Surfaced as (rId, target) so the emitter pins each id via an
+    /// <c>add-part hyperlink</c> row before the master raw-set replace.</summary>
+    internal IReadOnlyList<(string RelId, string Target)> GetMasterExternalHyperlinks(int masterIdx)
+    {
+        var result = new List<(string, string)>();
+        var pp = _doc.PresentationPart;
+        if (pp == null) return result;
+        var masters = MastersInOrder(pp);
+        if (masterIdx < 1 || masterIdx > masters.Count) return result;
+        foreach (var rel in masters[masterIdx - 1].HyperlinkRelationships)
         {
             if (rel.IsExternal)
                 result.Add((rel.Id, rel.Uri.OriginalString));
@@ -2288,7 +2729,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
     {
         var pp = _doc.PresentationPart;
         if (pp == null) return Array.Empty<(string, string)>();
-        var layouts = pp.SlideMasterParts.SelectMany(m => m.SlideLayoutParts).ToList();
+        var layouts = PowerPointHandler.LayoutsInOrder(pp);
         if (layoutIdx < 1 || layoutIdx > layouts.Count) return Array.Empty<(string, string)>();
         return ReadTagParts(layouts[layoutIdx - 1]);
     }
@@ -2298,7 +2739,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
     {
         var pp = _doc.PresentationPart;
         if (pp == null) return Array.Empty<(string, string)>();
-        var masters = pp.SlideMasterParts.ToList();
+        var masters = MastersInOrder(pp);
         if (masterIdx < 1 || masterIdx > masters.Count) return Array.Empty<(string, string)>();
         return ReadTagParts(masters[masterIdx - 1]);
     }
@@ -2595,7 +3036,28 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         // r:id dangles and PowerPoint refuses the deck (0x80070570). Empty when
         // the SmartArt carries no hyperlinks.
         IReadOnlyList<(string RelId, string Target)> DataHyperlinks,
-        IReadOnlyList<(string RelId, string Target)> DrawingHyperlinks);
+        IReadOnlyList<(string RelId, string Target)> DrawingHyperlinks,
+        // spTree-rooted xpath of the graphicFrame's PARENT container. Top-level
+        // SmartArt -> "/p:sld/p:cSld/p:spTree"; a group-nested SmartArt ->
+        // ".../p:grpSp[K]..." so the emitter re-appends it INSIDE the group,
+        // preserving the group's transform/scaling. Without this a group-nested
+        // SmartArt was relocated to the slide top level and rendered at the
+        // wrong (unscaled) size — overflowing the slide.
+        string ParentXpath,
+        // cNvPr id of the first following sibling in the SOURCE parent that is a
+        // "stable" main-walk element (plain shape / connector / group /
+        // chart|table graphicFrame — one guaranteed present in the rebuilt slide
+        // by the time the SmartArt pass runs). The emitter inserts the SmartArt's
+        // graphicFrame BEFORE that element so z-order is preserved. null when the
+        // SmartArt is the last child (or is only followed by deferred/exotic
+        // elements) → the emitter appends, as before. Without this a SmartArt
+        // that sat BEHIND a later shape was appended last and rendered ON TOP,
+        // occluding that shape (bnc880763).
+        string? InsertBeforeShapeId,
+        // Positional sibling xpath segment (e.g. "/p:sp[1]") for group-nested
+        // SmartArt — group-descendant cNvPr ids are reassigned on replay, so
+        // the @id anchor form cannot match there.
+        string? InsertBeforeSegment = null);
 
     // External (TargetMode="External") hyperlink relationships on a part's own
     // .rels, surfaced as (rId, target-uri). Mirrors GetLayoutExternalHyperlinks
@@ -2623,6 +3085,163 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
             result.Add(new MasterImageInfo(idp.RelationshipId, img.ContentType, Convert.ToBase64String(ms.ToArray())));
         }
         return result;
+    }
+
+    // A sound relationship referenced from a slide's <p:timing> tree
+    // (<p:sndTgt r:embed>) or its <p:transition> (<p:snd r:embed>). The timing /
+    // transition XML is round-tripped verbatim via raw-set, so its literal rId
+    // must resolve on replay — but those rels are NOT part of the <p:pic> media
+    // pass, so without re-creating them the r:embed dangles and PowerPoint
+    // refuses the deck (0x80070570). Carry the bytes + content type + pinned rId.
+    internal readonly record struct TimingAudioRel(
+        string RelId, string ContentType, string Extension, byte[] Data);
+
+    internal IReadOnlyList<TimingAudioRel> GetTimingAudioRels(int slideIdx)
+    {
+        var result = new List<TimingAudioRel>();
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return result;
+        var slidePart = parts[slideIdx - 1];
+
+        string slideXml;
+        try
+        {
+            using var s = slidePart.GetStream(FileMode.Open, FileAccess.Read);
+            using var r = new StreamReader(s);
+            slideXml = r.ReadToEnd();
+        }
+        catch { return result; }
+
+        // Collect rIds referenced by sound elements (timing sndTgt + transition snd).
+        var rids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+            slideXml, @"<p:snd(?:Tgt)?\b[^>]*\br:embed=""([^""]+)"""))
+        {
+            rids.Add(m.Groups[1].Value);
+        }
+        if (rids.Count == 0) return result;
+
+        // Sound rels are DATA-PART reference relationships (media), not regular
+        // part relationships — GetPartById throws on them. Resolve the DataPart
+        // via the slide's DataPartReferenceRelationships keyed by rId.
+        var byId = new Dictionary<string, DocumentFormat.OpenXml.Packaging.DataPart>(StringComparer.Ordinal);
+        foreach (var dpr in slidePart.DataPartReferenceRelationships)
+            if (dpr.Id is { } id && !byId.ContainsKey(id)) byId[id] = dpr.DataPart;
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rid in rids)
+        {
+            if (!seen.Add(rid)) continue;
+            if (!byId.TryGetValue(rid, out var dataPart) || dataPart == null) continue;
+            try
+            {
+                byte[] bytes;
+                using (var ps = dataPart.GetStream(FileMode.Open, FileAccess.Read))
+                using (var ms = new MemoryStream())
+                {
+                    ps.CopyTo(ms);
+                    bytes = ms.ToArray();
+                }
+                if (bytes.Length == 0) continue;
+                var ct = string.IsNullOrEmpty(dataPart.ContentType) ? "audio/wav" : dataPart.ContentType;
+                var ext = Path.GetExtension(dataPart.Uri?.OriginalString ?? "").ToLowerInvariant();
+                if (string.IsNullOrEmpty(ext)) ext = ".wav";
+                result.Add(new TimingAudioRel(rid, ct, ext, bytes));
+            }
+            catch { /* dangling in source too — skip */ }
+        }
+        return result;
+    }
+
+    // ActiveX controls on a slide. Producers put a <p:controls>
+    // block in <p:cSld> (sibling of the shape tree) holding one
+    // <mc:AlternateContent> per control (Choice = <p:control> VML fallback,
+    // Fallback = <p:control><p:pic> the rendered image). The control references
+    // an activeX{N}.xml part (rel type .../control), which in turn references a
+    // .bin blob via its OWN .rels. The fallback pic references a WMF image.
+    // NodeBuilder does not surface any of this, so the whole block + its parts
+    // were dropped on dump → the slide replayed blank. Carry the controls XML
+    // verbatim plus every referenced part (activeX xml + its bin child + WMF
+    // images) with pinned rIds.
+    internal readonly record struct ActiveXControlPart(string ControlRid, byte[] Xml, string? BinRid, byte[]? Bin);
+    internal readonly record struct ActiveXImage(string Rid, string ContentType, string Ext, byte[] Bytes);
+
+    internal (string? ControlsXml,
+              IReadOnlyList<ActiveXControlPart> Controls,
+              IReadOnlyList<ActiveXImage> Images) GetActiveXOnSlide(int slideIdx)
+    {
+        var noControls = ((string?)null,
+            (IReadOnlyList<ActiveXControlPart>)Array.Empty<ActiveXControlPart>(),
+            (IReadOnlyList<ActiveXImage>)Array.Empty<ActiveXImage>());
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return noControls;
+        var slidePart = parts[slideIdx - 1];
+
+        string slideXml;
+        try
+        {
+            using var s = slidePart.GetStream(FileMode.Open, FileAccess.Read);
+            using var r = new StreamReader(s);
+            slideXml = r.ReadToEnd();
+        }
+        catch { return noControls; }
+
+        var cm = System.Text.RegularExpressions.Regex.Match(slideXml,
+            @"<p:controls>.*?</p:controls>", System.Text.RegularExpressions.RegexOptions.Singleline);
+        if (!cm.Success) return noControls;
+        var controlsXml = cm.Value;
+
+        const string ControlRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/control";
+        const string ImageRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+
+        // rIds referenced inside <p:controls> (control r:id + pic blip r:embed).
+        var refIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+            controlsXml, @"r:(?:id|embed)=""(rId\d+)"""))
+            refIds.Add(m.Groups[1].Value);
+
+        var controls = new List<ActiveXControlPart>();
+        var images = new List<ActiveXImage>();
+        var seenImg = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var rel in slidePart.Parts)
+        {
+            if (!refIds.Contains(rel.RelationshipId)) continue;
+            try
+            {
+                if (rel.OpenXmlPart.RelationshipType == ControlRelType)
+                {
+                    byte[] axXml;
+                    using (var ps = rel.OpenXmlPart.GetStream(FileMode.Open, FileAccess.Read))
+                    using (var ms = new MemoryStream()) { ps.CopyTo(ms); axXml = ms.ToArray(); }
+                    // The control's .bin child (activeXControlBinary), if any.
+                    string? binRid = null; byte[]? bin = null;
+                    var binPair = rel.OpenXmlPart.Parts.FirstOrDefault();
+                    if (binPair.OpenXmlPart != null)
+                    {
+                        binRid = binPair.RelationshipId;
+                        using var bs = binPair.OpenXmlPart.GetStream(FileMode.Open, FileAccess.Read);
+                        using var bms = new MemoryStream(); bs.CopyTo(bms); bin = bms.ToArray();
+                    }
+                    controls.Add(new ActiveXControlPart(rel.RelationshipId, axXml, binRid, bin));
+                }
+                else if (rel.OpenXmlPart.RelationshipType == ImageRelType)
+                {
+                    if (!seenImg.Add(rel.RelationshipId)) continue;
+                    byte[] bytes;
+                    using (var ps = rel.OpenXmlPart.GetStream(FileMode.Open, FileAccess.Read))
+                    using (var ms = new MemoryStream()) { ps.CopyTo(ms); bytes = ms.ToArray(); }
+                    var ct = string.IsNullOrEmpty(rel.OpenXmlPart.ContentType) ? "image/x-wmf" : rel.OpenXmlPart.ContentType;
+                    var ext = Path.GetExtension(rel.OpenXmlPart.Uri?.OriginalString ?? "");
+                    if (string.IsNullOrEmpty(ext)) ext = ".wmf";
+                    images.Add(new ActiveXImage(rel.RelationshipId, ct, ext, bytes));
+                }
+            }
+            catch { /* skip malformed */ }
+        }
+
+        if (controls.Count == 0) return noControls;
+        return (controlsXml, controls, images);
     }
 
     internal IReadOnlyList<SmartArtInfo> GetSmartArtsOnSlide(int slideIdx)
@@ -2737,15 +3356,110 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
             catch { drawingXml = null; drawingRelId = null; }
             if (drawingXml == null || drawingRelId == null) { drawingXml = null; drawingRelId = null; }
 
+            // Parent-container xpath: walk group ancestors so a group-nested
+            // SmartArt round-trips inside its group (keeps the group scaling)
+            // rather than being relocated to the slide top level.
+            var grpChain = new List<string>();
+            for (var cur = gf.Parent; cur != null && cur != spTree; cur = cur.Parent)
+            {
+                if (cur is DocumentFormat.OpenXml.Presentation.GroupShape gs)
+                {
+                    int gIdx = 1;
+                    foreach (var sib in gs.Parent!.Elements<DocumentFormat.OpenXml.Presentation.GroupShape>())
+                    {
+                        if (ReferenceEquals(sib, gs)) break;
+                        gIdx++;
+                    }
+                    grpChain.Insert(0, $"/p:grpSp[{gIdx}]");
+                }
+            }
+            var parentXpath = "/p:sld/p:cSld/p:spTree" + string.Concat(grpChain);
+
+            // Z-order anchor: the first following sibling in the SAME parent that
+            // is a "stable" element already present when the SmartArt pass runs.
+            // A SmartArt is emitted last (add-part + raw-set append), so without
+            // this it always lands on top; anchoring an insert before the next
+            // stable sibling preserves the source z-order.
+            string? insertBeforeShapeId = null;
+            string? insertBeforeSegment = null;
+            foreach (var sib in gf.ElementsAfter())
+            {
+                if (!IsStableZOrderAnchor(sib)) continue;
+                if (grpChain.Count > 0)
+                {
+                    // Group-nested: replay REASSIGNS group-descendant cNvPr ids
+                    // (CONSISTENCY(group-id-autoassign)), so an @id anchor
+                    // matches nothing and the SmartArt silently never lands
+                    // (smartart-groupshape). Use the sibling's positional form
+                    // instead — same-tag ordinal within the group, stable
+                    // because the group's children replay in source order.
+                    int ord = 1;
+                    foreach (var prev in sib.Parent!.ChildElements)
+                    {
+                        if (ReferenceEquals(prev, sib)) break;
+                        if (prev.LocalName == sib.LocalName) ord++;
+                    }
+                    insertBeforeSegment = $"/p:{sib.LocalName}[{ord}]";
+                    break;
+                }
+                var cnv = sib.Descendants().FirstOrDefault(e =>
+                    e.LocalName == "cNvPr"
+                    && e.NamespaceUri == "http://schemas.openxmlformats.org/presentationml/2006/main");
+                var idAttr = cnv?.GetAttributes().FirstOrDefault(a => a.LocalName == "id");
+                if (idAttr?.Value is { Length: > 0 } idVal) { insertBeforeShapeId = idVal; break; }
+            }
+
             result.Add(new SmartArtInfo(
                 GraphicFrameXml: gf.OuterXml,
                 DataRelId: dRid, LayoutRelId: lRid, ColorsRelId: cRid, QuickStyleRelId: qRid,
                 DataXml: dXml, LayoutXml: lXml, ColorsXml: cXml, QuickStyleXml: qXml,
                 DrawingXml: drawingXml, DrawingRelId: drawingRelId,
                 DataImages: dataImages, DrawingImages: drawingImages,
-                DataHyperlinks: dataHlinks, DrawingHyperlinks: drawingHlinks));
+                DataHyperlinks: dataHlinks, DrawingHyperlinks: drawingHlinks,
+                ParentXpath: parentXpath,
+                InsertBeforeShapeId: insertBeforeShapeId,
+                InsertBeforeSegment: insertBeforeSegment));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Is <paramref name="el"/> a shape-tree element guaranteed to already exist
+    /// in the rebuilt slide when the SmartArt emit pass runs (so a SmartArt can
+    /// safely be inserted BEFORE it to preserve z-order)? True for plain shapes,
+    /// connectors, groups, and chart/table graphicFrames — all emitted in the
+    /// main child walk (or the connector flush) before the SmartArt pass. False
+    /// for elements that are themselves emitted late or exotically: media
+    /// (&lt;p:pic&gt; with video/audio), OLE (graphicFrame with &lt;p:oleObj&gt;),
+    /// another SmartArt (graphicFrame with dgm:relIds), and mc:AlternateContent
+    /// (3D model / fallbacks). Anchoring on those would target an element that
+    /// does not exist yet (raw-set would match nothing) — the caller falls back
+    /// to append for them.
+    /// </summary>
+    private static bool IsStableZOrderAnchor(DocumentFormat.OpenXml.OpenXmlElement el)
+    {
+        switch (el.LocalName)
+        {
+            case "sp":
+            case "cxnSp":
+            case "grpSp":
+                return true;
+            case "pic":
+                // Media (video/audio) is a <p:pic> emitted in a late pass.
+                var picXml = el.OuterXml;
+                return !picXml.Contains("videoFile", StringComparison.Ordinal)
+                    && !picXml.Contains("audioFile", StringComparison.Ordinal);
+            case "graphicFrame":
+                var gfXml = el.OuterXml;
+                // SmartArt (dgm:relIds) and OLE (<p:oleObj>) are emitted late;
+                // chart / table graphicFrames are main-walk (stable).
+                return !gfXml.Contains("/diagram\"", StringComparison.Ordinal)
+                    && !gfXml.Contains(":relIds", StringComparison.Ordinal)
+                    && !gfXml.Contains("oleObj", StringComparison.Ordinal);
+            default:
+                // AlternateContent (3D model / fallbacks) and anything else.
+                return false;
+        }
     }
 
     /// <summary>
@@ -2888,6 +3602,141 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 MediaExtension: mediaExt,
                 ThumbnailBytes: thumbBytes,
                 ThumbnailContentType: thumbCT));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// A <c>&lt;p:pic&gt;</c> that hosts a <c>&lt;a:videoFile&gt;</c> /
+    /// <c>&lt;a:audioFile&gt;</c> but is NOT a modern embedded-media shape
+    /// (no <c>p14:media</c> extension resolving to a local MediaDataPart) —
+    /// typically a legacy PowerPoint 2007 external linked movie
+    /// (<c>videoFile r:link</c> pointing at a <c>TargetMode="External"</c>
+    /// file:// URI, with a local poster image in the blipFill). GetMediaOnSlide
+    /// rejects these (it requires an embedded MediaDataPart), and the typed
+    /// walk skips <c>video</c>/<c>audio</c> nodes, so without this pass the
+    /// entire picture is silently dropped on dump∘replay. We round-trip the
+    /// shape verbatim plus its external link relationship(s) and poster
+    /// image(s), so the poster still renders and the videoFile r:link no
+    /// longer dangles.
+    /// </summary>
+    internal readonly record struct ExternalMediaPicInfo(
+        string PicXml,
+        IReadOnlyList<(string Rid, string RelType, string Target)> ExternalRels,
+        IReadOnlyList<string> ImageRids);
+
+    internal IReadOnlyList<ExternalMediaPicInfo> GetExternalMediaPicsOnSlide(int slideIdx)
+    {
+        var result = new List<ExternalMediaPicInfo>();
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return result;
+        var slidePart = parts[slideIdx - 1];
+        var slide = GetSlide(slidePart);
+        var spTree = slide.CommonSlideData?.ShapeTree;
+        if (spTree == null) return result;
+
+        foreach (var pic in spTree.Descendants<Picture>())
+        {
+            var nvPr = pic.NonVisualPictureProperties?.ApplicationNonVisualDrawingProperties;
+            if (nvPr == null) continue;
+
+            var videoFile = nvPr.GetFirstChild<DocumentFormat.OpenXml.Drawing.VideoFromFile>();
+            var audioFile = nvPr.GetFirstChild<DocumentFormat.OpenXml.Drawing.AudioFromFile>();
+            if (videoFile == null && audioFile == null) continue;
+
+            // If a p14:media extension resolves to a local MediaDataPart, this
+            // is a modern embedded-media shape owned by EmitMediaForSlide; skip
+            // it here to avoid double-emit.
+            var p14Media = nvPr.Descendants<DocumentFormat.OpenXml.Office2010.PowerPoint.Media>().FirstOrDefault();
+            var mediaEmbedRid = p14Media?.Embed?.Value;
+            bool hasLocalMedia = false;
+            if (!string.IsNullOrEmpty(mediaEmbedRid))
+            {
+                foreach (var rel in slidePart.DataPartReferenceRelationships)
+                    if (rel.Id == mediaEmbedRid && rel.DataPart is MediaDataPart) { hasLocalMedia = true; break; }
+            }
+            if (hasLocalMedia) continue;
+
+            // Collect every relationship id the pic references (r:embed / r:link /
+            // r:id on any descendant attribute), then classify each as an
+            // external relationship (carry via add-part extrel) or a local
+            // ImagePart (carry via add-part image).
+            var refRids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Match m in Regex.Matches(pic.OuterXml, @"r:(?:embed|link|id)=""(rId\d+)"""))
+                refRids.Add(m.Groups[1].Value);
+
+            var extRels = new List<(string, string, string)>();
+            var imageRids = new List<string>();
+            foreach (var rid in refRids)
+            {
+                var ext = slidePart.ExternalRelationships.FirstOrDefault(r => r.Id == rid);
+                if (ext != null)
+                {
+                    extRels.Add((rid, ext.RelationshipType, ext.Uri.OriginalString));
+                    continue;
+                }
+                try
+                {
+                    if (slidePart.GetPartById(rid) is ImagePart) imageRids.Add(rid);
+                }
+                catch { /* media/other data-part rel — not an ImagePart, ignore */ }
+            }
+
+            result.Add(new ExternalMediaPicInfo(pic.OuterXml, extRels, imageRids));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// chartEx (cx: extension chart) parts referenced from a slide by rId —
+    /// payload for the emitter's `add-part chartex` carrier. Each entry is the
+    /// chartEx XML plus its typed children (colors / style sidecars, embedded
+    /// xlsx workbook) with their rIds, all base64.
+    /// </summary>
+    internal readonly record struct ChartExInfo(
+        string RelId,
+        string XmlBase64,
+        string? ColorsRelId, string? ColorsBase64,
+        string? StyleRelId, string? StyleBase64,
+        string? PackageRelId, string? PackageBase64, string? PackageContentType);
+
+    internal IReadOnlyList<ChartExInfo> GetChartExPartsByRelId(int slideIdx, IEnumerable<string> rids)
+    {
+        var result = new List<ChartExInfo>();
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return result;
+        var slidePart = parts[slideIdx - 1];
+
+        static string ReadB64(OpenXmlPart p)
+        {
+            using var s = p.GetStream();
+            using var ms = new MemoryStream();
+            s.CopyTo(ms);
+            return Convert.ToBase64String(ms.ToArray());
+        }
+
+        foreach (var rid in rids)
+        {
+            OpenXmlPart? part = null;
+            try { part = slidePart.GetPartById(rid); } catch { }
+            if (part is not ExtendedChartPart cxPart) continue;
+
+            string? colorsRid = null, colorsB64 = null, styleRid = null, styleB64 = null;
+            string? pkgRid = null, pkgB64 = null, pkgCT = null;
+            foreach (var pair in cxPart.Parts)
+            {
+                switch (pair.OpenXmlPart)
+                {
+                    case ChartColorStylePart ccs:
+                        colorsRid = pair.RelationshipId; colorsB64 = ReadB64(ccs); break;
+                    case ChartStylePart cst:
+                        styleRid = pair.RelationshipId; styleB64 = ReadB64(cst); break;
+                    case EmbeddedPackagePart epp:
+                        pkgRid = pair.RelationshipId; pkgB64 = ReadB64(epp); pkgCT = epp.ContentType; break;
+                }
+            }
+            result.Add(new ChartExInfo(rid, ReadB64(cxPart),
+                colorsRid, colorsB64, styleRid, styleB64, pkgRid, pkgB64, pkgCT));
         }
         return result;
     }
@@ -3075,7 +3924,11 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         string OleContentType,
         string OleExtension,
         byte[] ThumbnailBytes,
-        string ThumbnailContentType);
+        string ThumbnailContentType,
+        // Linked (TargetMode=External) OLE: no embedded payload; the emitter
+        // recreates the external rel instead of an add-part ole payload.
+        string? LinkedTarget = null,
+        string? LinkedRelType = null);
 
     internal IReadOnlyList<OleInfo> GetOlesOnSlide(int slideIdx)
     {
@@ -3109,15 +3962,32 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
             var uri = gd?.Attribute("uri")?.Value;
             if (uri == null || !uri.Equals(oleUri, StringComparison.Ordinal)) continue;
 
-            var oleObj = gd!.Element(pNs + "oleObj");
+            // The oleObj may sit directly under graphicData OR wrapped in
+            // <mc:AlternateContent><mc:Choice Requires="v">…</mc:Choice>
+            // <mc:Fallback>…</mc:Fallback> (legacy VML-annotated OLE,
+            // graphic-stroke). Choice and Fallback share the same r:id, so
+            // any descendant works for rel resolution; the slice carries the
+            // whole wrapper verbatim either way.
+            // Prefer the oleObj that carries the thumbnail <p:pic> (the
+            // mc:Fallback one) — the mc:Choice twin holds only <p:link/> and
+            // would trip the no-thumbnail legacy skip below.
+            var oleObj = gd!.Element(pNs + "oleObj")
+                ?? gd.Descendants(pNs + "oleObj")
+                     .OrderByDescending(o => o.Descendants(aNs + "blip").Any())
+                     .FirstOrDefault();
             if (oleObj == null) continue;
             var oleRidAttr = oleObj.Attribute(rNs + "id");
             if (oleRidAttr == null) continue;
             var oleRid = oleRidAttr.Value;
 
             // Thumbnail icon: <p:pic>/<p:blipFill>/<a:blip r:embed="…"/>
-            // inside the <p:oleObj>. PowerPoint always emits one (even when
-            // showAsIcon="0", the fallback render still needs an icon).
+            // inside the <p:oleObj>. Modern DrawingML OLE embeds carry one.
+            // A legacy OLE (<p:oleObj spid="_x0000_s…"><p:embed/></p:oleObj>
+            // whose cached visual is a VML shape referenced by spid) has NO
+            // inner pic blip. Skip it: round-tripping just the graphicFrame +
+            // payload (without the VML drawing part that backs the spid) yields
+            // a deck real PowerPoint refuses to open — worse than dropping the
+            // object. Full legacy-VML-OLE round-trip is a deferred feature.
             var thumbRid = oleObj.Descendants(aNs + "blip")
                 .Select(b => b.Attribute(rNs + "embed")?.Value)
                 .FirstOrDefault(v => !string.IsNullOrEmpty(v));
@@ -3149,7 +4019,47 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 }
             }
             catch { }
-            if (oleBytes == null || string.IsNullOrEmpty(oleCT)) continue;
+            if (oleBytes == null || string.IsNullOrEmpty(oleCT))
+            {
+                // LINKED OLE: the r:id is a TargetMode="External" relationship
+                // (file:// link with <p:link/> inside p:oleObj) — there is no
+                // embedded payload part to carry. Round-trip the graphicFrame
+                // verbatim plus the external rel and the thumbnail image, or
+                // the whole object silently vanishes (graphic-stroke).
+                var extRel = slidePart.ExternalRelationships.FirstOrDefault(r => r.Id == oleRid);
+                if (extRel != null)
+                {
+                    byte[]? linkThumbBytes = null;
+                    string? linkThumbCT = null;
+                    try
+                    {
+                        if (slidePart.GetPartById(thumbRid!) is ImagePart lip)
+                        {
+                            using var ls = lip.GetStream();
+                            using var lms = new MemoryStream();
+                            ls.CopyTo(lms);
+                            linkThumbBytes = lms.ToArray();
+                            linkThumbCT = lip.ContentType;
+                        }
+                    }
+                    catch { }
+                    if (linkThumbBytes != null && linkThumbCT != null)
+                    {
+                        result.Add(new OleInfo(
+                            GraphicFrameXml: slice,
+                            OleRelId: oleRid,
+                            ThumbnailRelId: thumbRid!,
+                            OleBytes: Array.Empty<byte>(),
+                            OleContentType: "",
+                            OleExtension: "",
+                            ThumbnailBytes: linkThumbBytes,
+                            ThumbnailContentType: linkThumbCT,
+                            LinkedTarget: extRel.Uri.OriginalString,
+                            LinkedRelType: extRel.RelationshipType));
+                    }
+                }
+                continue;
+            }
 
             // Resolve the thumbnail icon ImagePart bytes.
             byte[]? thumbBytes = null;
@@ -3216,7 +4126,7 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
             if (idOrIdx >= 1 && idOrIdx <= pictures.Count) pic = pictures[idOrIdx - 1];
         }
         if (pic == null) return null;
-        var blip = pic.BlipFill?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Blip>();
+        var blip = ResolvePictureBlip(pic);
         var embedId = blip?.Embed?.Value;
         if (string.IsNullOrEmpty(embedId)) return null;
         try
@@ -3228,6 +4138,42 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
             return (ms.ToArray(), part.ContentType);
         }
         catch { return null; }
+    }
+
+    // Resolve a picture's effective fill <a:blip>, transparently unwrapping an
+    // <mc:AlternateContent> wrapper. Mac PowerPoint emits the blipFill inside
+    // AlternateContent — a Requires="ma" <mc:Choice> holding a Mac-only source
+    // (often an image PDF) plus an <mc:Fallback> holding the standards-
+    // compliant raster (PNG/JPEG) that every other renderer uses. When the
+    // blipFill is NOT a direct child of <p:pic>, `pic.BlipFill` is null and the
+    // picture would otherwise read as image-less and be DROPPED on dump→replay
+    // (silent element loss). Prefer the Fallback blip (what Windows/real Office
+    // renders); fall back to the Choice, then any descendant blip.
+    private static DocumentFormat.OpenXml.Drawing.Blip? ResolvePictureBlip(Picture pic)
+    {
+        var blip = pic.BlipFill?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Blip>();
+        if (blip != null) return blip;
+
+        var altContent = pic.GetFirstChild<DocumentFormat.OpenXml.AlternateContent>();
+        if (altContent != null)
+        {
+            var fallback = altContent
+                .GetFirstChild<DocumentFormat.OpenXml.AlternateContentFallback>();
+            blip = fallback?.Descendants<DocumentFormat.OpenXml.Drawing.Blip>()
+                .FirstOrDefault();
+            if (blip != null) return blip;
+
+            var choice = altContent
+                .GetFirstChild<DocumentFormat.OpenXml.AlternateContentChoice>();
+            blip = choice?.Descendants<DocumentFormat.OpenXml.Drawing.Blip>()
+                .FirstOrDefault();
+            if (blip != null) return blip;
+        }
+
+        // Last resort: any nested blip (covers other MC nestings). Within a
+        // <p:pic> the only blips are fill blips, so first-in-document-order is
+        // the effective source.
+        return pic.Descendants<DocumentFormat.OpenXml.Drawing.Blip>().FirstOrDefault();
     }
 
     // Return the verbatim <a:clrChange> outer XML on a picture's <a:blip>,
@@ -3259,6 +4205,50 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         var blip = pic.BlipFill?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Blip>();
         var clrChange = blip?.GetFirstChild<DocumentFormat.OpenXml.Drawing.ColorChange>();
         return clrChange?.OuterXml;
+    }
+
+    // Picture-in-placeholder round-trip. A picture that fills a layout
+    // placeholder carries `<p:nvPr><p:ph type="pic" idx="N"/></p:nvPr>` and an
+    // empty (xfrm-less) `<p:spPr/>`, inheriting its position+size from the
+    // layout placeholder. EmitPicture rebuilds it as a free-floating picture:
+    // the `<p:ph>` is dropped and AddPicture stamps a default xfrm, so it
+    // renders at the wrong size/offset. Capture the `<p:ph>` element and — only
+    // when the source has no explicit `<a:xfrm>` — the source `<p:spPr>`, so
+    // EmitPicture can re-inject them via raw-set and let the layout drive the
+    // geometry again. Mirrors the path-resolution preamble in
+    // GetPictureBlipClrChangeXml verbatim.
+    public (string? PhXml, string? InheritSpPrXml) GetPicturePlaceholderRoundtripXml(string picturePath)
+    {
+        var m = Regex.Match(picturePath,
+            @"^/slide\[(\d+)\]/(?:.+/)?picture\[(?:@id=)?(\d+)\]$");
+        if (!m.Success) return (null, null);
+        var slideIdx = int.Parse(m.Groups[1].Value);
+        var idOrIdx = int.Parse(m.Groups[2].Value);
+        var byId = picturePath.Contains("@id=", StringComparison.Ordinal);
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return (null, null);
+        var slidePart = parts[slideIdx - 1];
+        var shapeTree = GetSlide(slidePart).CommonSlideData?.ShapeTree;
+        if (shapeTree == null) return (null, null);
+        var pictures = shapeTree.Descendants<Picture>().ToList();
+        Picture? pic = byId
+            ? pictures.FirstOrDefault(p =>
+                p.NonVisualPictureProperties?.NonVisualDrawingProperties?.Id?.Value
+                    == (uint)idOrIdx)
+            : (idOrIdx >= 1 && idOrIdx <= pictures.Count ? pictures[idOrIdx - 1] : null);
+        if (pic == null) return (null, null);
+
+        var ph = pic.NonVisualPictureProperties?.ApplicationNonVisualDrawingProperties?
+            .GetFirstChild<PlaceholderShape>();
+        if (ph == null) return (null, null);
+
+        var spPr = pic.ShapeProperties;
+        var hasXfrm = spPr?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Transform2D>() != null;
+        // Restore the source spPr (dropping AddPicture's default xfrm) only when
+        // the source inherited its geometry. If the source pinned an explicit
+        // xfrm, the x/y/width/height props already round-trip it.
+        string? inheritSpPr = hasXfrm ? null : (spPr?.OuterXml);
+        return (ph.OuterXml, inheritSpPr);
     }
 
     // R56 bt-6: return outer XML for every <a:blip> child the typed Add/Set
@@ -3466,10 +4456,243 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
     // dropped on dump->replay before this hook.
     // CONSISTENCY: mirrors GetShapeCNvPrHyperlinkInfo's path-resolution
     // preamble (group-chain + @id= / positional shape index).
-    internal (string Xml, int SpOrdinal)? GetShapeStyleXmlWithOrdinal(string shapePath)
+    // expectId: when the caller knows the source node's cNvPr id, verify the
+    // path-resolved shape IS that shape. A node emitted with a positional path
+    // can resolve to a DIFFERENT sp at that ordinal and steal its <p:style> —
+    // bnc889755's sldNum placeholder duplicated TextBox 10's style onto the
+    // same replayed sp, and the doubled <p:style> child made PowerPoint refuse
+    // the deck (0x80070570).
+    internal (string Xml, int SpOrdinal)? GetShapeStyleXmlWithOrdinal(string shapePath, uint? expectId = null)
     {
         var m = Regex.Match(shapePath,
-            @"^/slide\[(\d+)\]((?:/group\[\d+\])*)/(?:shape|textbox|title|equation|placeholder)\[(@id=)?(\d+)\]$");
+            @"^/slide\[(\d+)\]((?:/group\[(?:@id=)?\d+\])*)/(shape|textbox|title|equation|placeholder)\[(@id=)?(\d+)\]$");
+        if (!m.Success) return null;
+        var slideIdx = int.Parse(m.Groups[1].Value);
+        var grpChain = m.Groups[2].Value;
+        // Query emits PLACEHOLDER paths with a placeholder-scoped positional
+        // index (/slide[15]/placeholder[1] = the slide's FIRST placeholder,
+        // not its first <p:sp>). Resolving that index against all shapes
+        // picked an unrelated sp — the expectId guard then nulled the probe
+        // and the placeholder's <p:style> silently vanished (customGeo).
+        var segIsPlaceholder = m.Groups[3].Value == "placeholder";
+        var byId = m.Groups[4].Value.Length > 0;
+        var shapeIdx = int.Parse(m.Groups[5].Value);
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return null;
+        var slidePart = parts[slideIdx - 1];
+        OpenXmlCompositeElement? scope = GetSlide(slidePart).CommonSlideData?.ShapeTree;
+        if (scope == null) return null;
+        // Group ancestors arrive as either /group[K] (positional, the form the
+        // batch emitter builds) or /group[@id=N] (the form Query/Get returns);
+        // resolve both so group-nested shapes round-trip their <p:style>.
+        foreach (Match gm in Regex.Matches(grpChain, @"/group\[(@id=)?(\d+)\]"))
+        {
+            var groupsHere = scope.Elements<GroupShape>().ToList();
+            GroupShape? grp;
+            if (gm.Groups[1].Value.Length > 0)
+                grp = groupsHere.FirstOrDefault(g =>
+                    g.NonVisualGroupShapeProperties?.NonVisualDrawingProperties?.Id?.Value
+                        == (uint)int.Parse(gm.Groups[2].Value));
+            else
+            {
+                var gIdx = int.Parse(gm.Groups[2].Value);
+                grp = (gIdx >= 1 && gIdx <= groupsHere.Count) ? groupsHere[gIdx - 1] : null;
+            }
+            if (grp == null) return null;
+            scope = grp;
+        }
+        var shapes = scope.Elements<Shape>().ToList();
+        Shape? shape;
+        int ordinal;
+        if (byId)
+        {
+            shape = shapes.FirstOrDefault(
+                s => s.NonVisualShapeProperties?.NonVisualDrawingProperties?.Id?.Value == (uint)shapeIdx);
+            if (shape == null) return null;
+            ordinal = shapes.IndexOf(shape) + 1;
+        }
+        else if (segIsPlaceholder)
+        {
+            var phShapes = shapes.Where(sp2 =>
+                sp2.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
+                    ?.GetFirstChild<PlaceholderShape>() != null).ToList();
+            if (shapeIdx < 1 || shapeIdx > phShapes.Count) return null;
+            shape = phShapes[shapeIdx - 1];
+            ordinal = shapes.IndexOf(shape) + 1;
+        }
+        else
+        {
+            if (shapeIdx < 1 || shapeIdx > shapes.Count) return null;
+            shape = shapes[shapeIdx - 1];
+            ordinal = shapeIdx;
+        }
+        if (expectId.HasValue
+            && shape.NonVisualShapeProperties?.NonVisualDrawingProperties?.Id?.Value != expectId.Value)
+            return null;
+        var styleEl = shape.GetFirstChild<ShapeStyle>();
+        if (styleEl == null) return null;
+        return (styleEl.OuterXml, ordinal);
+    }
+
+    // Chart-internal image parts (chartSpace/plotArea/series <a:blipFill
+    // r:embed> targets). The semantic chart rebuild creates a FRESH ChartPart,
+    // so these must be re-attached with pinned rIds or the verbatim spPr
+    // fills dangle. Enumerate by the chart's 1-based ordinal on the slide.
+    internal IReadOnlyList<MasterImageInfo> GetChartImageParts(int slideIdx, int chartOrdinal)
+    {
+        var result = new List<MasterImageInfo>();
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return result;
+        var slidePart = parts[slideIdx - 1];
+        var chartParts = slidePart.ChartParts.ToList();
+        if (chartOrdinal < 1 || chartOrdinal > chartParts.Count) return result;
+        var cp = chartParts[chartOrdinal - 1];
+        foreach (var pair in cp.Parts)
+        {
+            if (pair.OpenXmlPart is not ImagePart ip) continue;
+            using var st = ip.GetStream();
+            using var ms = new MemoryStream();
+            st.CopyTo(ms);
+            result.Add(new MasterImageInfo(pair.RelationshipId, ip.ContentType,
+                Convert.ToBase64String(ms.ToArray())));
+        }
+        return result;
+    }
+
+    // Modern chart styling sub-parts (ChartStylePart "style1.xml" /
+    // ChartColorStylePart "colors1.xml") attached to a slide's Nth ChartPart.
+    // They drive PowerPoint-2013+ gridline tint / palette / effect defaults;
+    // the semantic chart rebuild dropped them, flattening the chart to the
+    // app default style. Kind is "style" or "colors".
+    internal IReadOnlyList<(string Kind, string RelId, string Base64Data)>
+        GetChartStyleParts(int slideIdx, int chartOrdinal)
+    {
+        var result = new List<(string, string, string)>();
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return result;
+        var chartParts = parts[slideIdx - 1].ChartParts.ToList();
+        if (chartOrdinal < 1 || chartOrdinal > chartParts.Count) return result;
+        foreach (var pair in chartParts[chartOrdinal - 1].Parts)
+        {
+            string kind;
+            if (pair.OpenXmlPart is ChartStylePart) kind = "style";
+            else if (pair.OpenXmlPart is ChartColorStylePart) kind = "colors";
+            // Theme override (themeOverride1.xml) — swaps the accent palette
+            // for THIS chart only; dropping it recolors every theme-inherited
+            // series.
+            else if (pair.OpenXmlPart is ThemeOverridePart) kind = "themeoverride";
+            else continue;
+            using var st = pair.OpenXmlPart.GetStream();
+            using var ms = new MemoryStream();
+            st.CopyTo(ms);
+            result.Add((kind, pair.RelationshipId, Convert.ToBase64String(ms.ToArray())));
+        }
+        return result;
+    }
+
+    // Whole-table effects: <a:tblPr><a:effectLst> verbatim + the hosting
+    // graphicFrame's 1-based ordinal among the slide's graphicFrames, so the
+    // emitter can raw-set PREPEND it into the replayed tblPr (schema places
+    // effectLst before tableStyleId). Null when the table has none.
+    internal (string Xml, int GfOrdinal)? GetTableEffectsXmlWithOrdinal(string tablePath)
+    {
+        var m = Regex.Match(tablePath, @"^/slide\[(\d+)\]/table\[(@id=)?(\d+)\]$");
+        if (!m.Success) return null;
+        var slideIdx = int.Parse(m.Groups[1].Value);
+        var byId = m.Groups[2].Value.Length > 0;
+        var tblIdx = int.Parse(m.Groups[3].Value);
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return null;
+        var spTree = GetSlide(parts[slideIdx - 1]).CommonSlideData?.ShapeTree;
+        if (spTree == null) return null;
+        var gfs = spTree.Elements<GraphicFrame>().ToList();
+        var tableGfs = gfs.Where(g => g.Descendants<DocumentFormat.OpenXml.Drawing.Table>().Any()).ToList();
+        GraphicFrame? gf;
+        if (byId)
+            gf = tableGfs.FirstOrDefault(g =>
+                g.NonVisualGraphicFrameProperties?.NonVisualDrawingProperties?.Id?.Value == (uint)tblIdx);
+        else
+            gf = (tblIdx >= 1 && tblIdx <= tableGfs.Count) ? tableGfs[tblIdx - 1] : null;
+        if (gf == null) return null;
+        var fx = gf.Descendants<DocumentFormat.OpenXml.Drawing.Table>().FirstOrDefault()
+            ?.GetFirstChild<DocumentFormat.OpenXml.Drawing.TableProperties>()
+            ?.GetFirstChild<DocumentFormat.OpenXml.Drawing.EffectList>();
+        if (fx == null) return null;
+        var gfOrd = gfs.IndexOf(gf) + 1;
+        return (fx.OuterXml, gfOrd);
+    }
+
+    // Connector <p:style> round-trip, mirroring GetShapeStyleXmlWithOrdinal.
+    // A <p:cxnSp>'s theme-reference block (<a:lnRef>/<a:fillRef>/<a:effectRef>/
+    // <a:fontRef>) has no typed Add/Set vocabulary and NodeBuilder doesn't
+    // surface it, so the connector's styled line colour (commonly lnRef→accent1)
+    // was silently dropped on dump∘replay — the line fell back to the theme's
+    // default near-black stroke. Return the verbatim <p:style> XML + the
+    // connector's ordinal within its parent scope so the emitter can raw-set
+    // append it onto the replayed <p:cxnSp>.
+    internal (string Xml, int CxnOrdinal)? GetConnectorStyleXmlWithOrdinal(string cxnPath)
+    {
+        var m = Regex.Match(cxnPath,
+            @"^/slide\[(\d+)\]((?:/group\[(?:@id=)?\d+\])*)/connector\[(@id=)?(\d+)\]$");
+        if (!m.Success) return null;
+        var slideIdx = int.Parse(m.Groups[1].Value);
+        var grpChain = m.Groups[2].Value;
+        var byId = m.Groups[3].Value.Length > 0;
+        var cxnIdx = int.Parse(m.Groups[4].Value);
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return null;
+        var slidePart = parts[slideIdx - 1];
+        OpenXmlCompositeElement? scope = GetSlide(slidePart).CommonSlideData?.ShapeTree;
+        if (scope == null) return null;
+        foreach (Match gm in Regex.Matches(grpChain, @"/group\[(@id=)?(\d+)\]"))
+        {
+            var groupsHere = scope.Elements<GroupShape>().ToList();
+            GroupShape? grp;
+            if (gm.Groups[1].Value.Length > 0)
+                grp = groupsHere.FirstOrDefault(g =>
+                    g.NonVisualGroupShapeProperties?.NonVisualDrawingProperties?.Id?.Value
+                        == (uint)int.Parse(gm.Groups[2].Value));
+            else
+            {
+                var gIdx = int.Parse(gm.Groups[2].Value);
+                grp = (gIdx >= 1 && gIdx <= groupsHere.Count) ? groupsHere[gIdx - 1] : null;
+            }
+            if (grp == null) return null;
+            scope = grp;
+        }
+        var cxns = scope.Elements<ConnectionShape>().ToList();
+        ConnectionShape? cxn;
+        int ordinal;
+        if (byId)
+        {
+            cxn = cxns.FirstOrDefault(
+                c => c.NonVisualConnectionShapeProperties?.NonVisualDrawingProperties?.Id?.Value == (uint)cxnIdx);
+            if (cxn == null) return null;
+            ordinal = cxns.IndexOf(cxn) + 1;
+        }
+        else
+        {
+            if (cxnIdx < 1 || cxnIdx > cxns.Count) return null;
+            cxn = cxns[cxnIdx - 1];
+            ordinal = cxnIdx;
+        }
+        var styleEl = cxn.GetFirstChild<ShapeStyle>();
+        if (styleEl == null) return null;
+        return (styleEl.OuterXml, ordinal);
+    }
+
+    // Shape/placeholder image-fill TILE round-trip. ApplyShapeImageFill always
+    // writes a stretched blipFill (<a:stretch>); a source shape whose image
+    // fill tiles (<a:tile>, e.g. a body placeholder filled with a repeating
+    // pattern) loses the tiling on replay and renders as one stretched image.
+    // Return the source <a:tile> outer XML (plus the sp ordinal within its
+    // parent scope) so EmitShape/EmitPlaceholder can raw-set replace the
+    // replayed <a:stretch> with it. Null when the fill isn't a tiled blipFill.
+    // Mirrors GetShapeStyleXmlWithOrdinal's path-resolution preamble verbatim.
+    internal (string Xml, int SpOrdinal)? GetShapeBlipTileXmlWithOrdinal(string shapePath)
+    {
+        var m = Regex.Match(shapePath,
+            @"^/slide\[(\d+)\]((?:/group\[(?:@id=)?\d+\])*)/(?:shape|textbox|title|equation|placeholder)\[(@id=)?(\d+)\]$");
         if (!m.Success) return null;
         var slideIdx = int.Parse(m.Groups[1].Value);
         var grpChain = m.Groups[2].Value;
@@ -3480,12 +4703,21 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         var slidePart = parts[slideIdx - 1];
         OpenXmlCompositeElement? scope = GetSlide(slidePart).CommonSlideData?.ShapeTree;
         if (scope == null) return null;
-        foreach (Match gm in Regex.Matches(grpChain, @"/group\[(\d+)\]"))
+        foreach (Match gm in Regex.Matches(grpChain, @"/group\[(@id=)?(\d+)\]"))
         {
-            var gIdx = int.Parse(gm.Groups[1].Value);
             var groupsHere = scope.Elements<GroupShape>().ToList();
-            if (gIdx < 1 || gIdx > groupsHere.Count) return null;
-            scope = groupsHere[gIdx - 1];
+            GroupShape? grp;
+            if (gm.Groups[1].Value.Length > 0)
+                grp = groupsHere.FirstOrDefault(g =>
+                    g.NonVisualGroupShapeProperties?.NonVisualDrawingProperties?.Id?.Value
+                        == (uint)int.Parse(gm.Groups[2].Value));
+            else
+            {
+                var gIdx = int.Parse(gm.Groups[2].Value);
+                grp = (gIdx >= 1 && gIdx <= groupsHere.Count) ? groupsHere[gIdx - 1] : null;
+            }
+            if (grp == null) return null;
+            scope = grp;
         }
         var shapes = scope.Elements<Shape>().ToList();
         Shape? shape;
@@ -3503,9 +4735,84 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
             shape = shapes[shapeIdx - 1];
             ordinal = shapeIdx;
         }
-        var styleEl = shape.GetFirstChild<ShapeStyle>();
-        if (styleEl == null) return null;
-        return (styleEl.OuterXml, ordinal);
+        var blipFill = shape.ShapeProperties?.GetFirstChild<DocumentFormat.OpenXml.Drawing.BlipFill>();
+        if (blipFill == null) return null;
+        var tile = blipFill.GetFirstChild<DocumentFormat.OpenXml.Drawing.Tile>();
+        if (tile != null) return (tile.OuterXml, ordinal);
+        // Bare blipFill: NEITHER <a:tile> nor <a:stretch>. PowerPoint renders
+        // this mode-less form TILED (sample06), but ApplyShapeImageFill always
+        // writes <a:stretch> on replay — the emitter must strip it back off.
+        // Signal with an empty Xml so EmitBlipTileReplace emits a remove.
+        if (blipFill.GetFirstChild<DocumentFormat.OpenXml.Drawing.Stretch>() == null)
+            return ("", ordinal);
+        return null;
+    }
+
+    // Text-field (<a:fld>) round-trip for a shape/placeholder. A slide-number /
+    // date / footer placeholder renders its value from an <a:fld type="slidenum"
+    // | "datetime…" | …> field run inside its text body. EmitParagraph only
+    // re-emits <a:r>/<a:br> children, so the <a:fld> was dropped on replay —
+    // the placeholder round-tripped but showed nothing (no page number). Return
+    // the sp ordinal plus, per 1-based paragraph, the verbatim <a:fld> outer XML
+    // so the emitter can raw-set insertbefore the paragraph's endParaRPr. Null
+    // when the shape carries no fields. Mirrors GetShapeStyleXmlWithOrdinal.
+    internal (int SpOrdinal, List<(int ParaOrdinal, string FldXml)> Fields)? GetShapeParagraphFieldXmls(string shapePath)
+    {
+        var m = Regex.Match(shapePath,
+            @"^/slide\[(\d+)\]((?:/group\[(?:@id=)?\d+\])*)/(?:shape|textbox|title|equation|placeholder)\[(@id=)?(\d+)\]$");
+        if (!m.Success) return null;
+        var slideIdx = int.Parse(m.Groups[1].Value);
+        var grpChain = m.Groups[2].Value;
+        var byId = m.Groups[3].Value.Length > 0;
+        var shapeIdx = int.Parse(m.Groups[4].Value);
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return null;
+        var slidePart = parts[slideIdx - 1];
+        OpenXmlCompositeElement? scope = GetSlide(slidePart).CommonSlideData?.ShapeTree;
+        if (scope == null) return null;
+        foreach (Match gm in Regex.Matches(grpChain, @"/group\[(@id=)?(\d+)\]"))
+        {
+            var groupsHere = scope.Elements<GroupShape>().ToList();
+            GroupShape? grp;
+            if (gm.Groups[1].Value.Length > 0)
+                grp = groupsHere.FirstOrDefault(g =>
+                    g.NonVisualGroupShapeProperties?.NonVisualDrawingProperties?.Id?.Value
+                        == (uint)int.Parse(gm.Groups[2].Value));
+            else
+            {
+                var gIdx = int.Parse(gm.Groups[2].Value);
+                grp = (gIdx >= 1 && gIdx <= groupsHere.Count) ? groupsHere[gIdx - 1] : null;
+            }
+            if (grp == null) return null;
+            scope = grp;
+        }
+        var shapes = scope.Elements<Shape>().ToList();
+        Shape? shape;
+        int ordinal;
+        if (byId)
+        {
+            shape = shapes.FirstOrDefault(
+                s => s.NonVisualShapeProperties?.NonVisualDrawingProperties?.Id?.Value == (uint)shapeIdx);
+            if (shape == null) return null;
+            ordinal = shapes.IndexOf(shape) + 1;
+        }
+        else
+        {
+            if (shapeIdx < 1 || shapeIdx > shapes.Count) return null;
+            shape = shapes[shapeIdx - 1];
+            ordinal = shapeIdx;
+        }
+        if (shape.TextBody == null) return null;
+        var fields = new List<(int, string)>();
+        int paraOrd = 0;
+        foreach (var para in shape.TextBody.Elements<DocumentFormat.OpenXml.Drawing.Paragraph>())
+        {
+            paraOrd++;
+            foreach (var fld in para.Elements<DocumentFormat.OpenXml.Drawing.Field>())
+                fields.Add((paraOrd, fld.OuterXml));
+        }
+        if (fields.Count == 0) return null;
+        return (ordinal, fields);
     }
 
     // Resolve a shape path's blipFill image bytes (image fill on a non-Picture

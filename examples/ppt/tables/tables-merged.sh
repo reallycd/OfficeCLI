@@ -7,8 +7,9 @@
 # write-side merging. This file walks through gridSpan; see tables-rows-cols.sh
 # slide 4 for a merge.down example.
 
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 DIR="$(dirname "$0")"
 PPTX="$DIR/tables-merged.pptx"
 
@@ -17,7 +18,7 @@ officecli create "$PPTX"
 officecli open "$PPTX"
 
 # --- Slide 1: 2-level header (gridSpan on row 1) ---
-officecli add "$PPTX" /presentation/slides --type slide
+officecli add "$PPTX" / --type slide
 officecli add "$PPTX" '/slide[1]' --type shape \
     --prop text="Two-Level Header (gridSpan)" --prop size=28 --prop bold=true \
     --prop x=0.5in --prop y=0.3in --prop width=12in --prop height=0.6in
@@ -63,7 +64,7 @@ for row in "3:Engineering:1.20M:18%:1.45M:22%" \
 done
 
 # --- Slide 2: Section header rows spanning the full table ---
-officecli add "$PPTX" /presentation/slides --type slide
+officecli add "$PPTX" / --type slide
 officecli add "$PPTX" '/slide[2]' --type shape \
     --prop text="Full-Width Section Headers" --prop size=28 --prop bold=true \
     --prop x=0.5in --prop y=0.3in --prop width=12in --prop height=0.6in

@@ -63,6 +63,22 @@ public static class DocumentHandlerFactory
         if (ext is ".docx" or ".xlsx" or ".pptx")
             GuardDecompressionBomb(filePath);
 
+        // CONSISTENCY(dangling-rel-repair): the reactive catch below only fires
+        // when the SDK throws at Open time (the docx LabelInfo case, where the
+        // part graph is walked eagerly). PowerPoint slides load their typed
+        // subparts (SlideLayoutPart, diagram drawing parts, …) LAZILY, so a
+        // dangling internal relationship on a slide surfaces only later — during
+        // `dump`/`query` traversal — where it escapes this try/catch and crashes
+        // the command. Real producers ship such decks (e.g. a diagramDrawing
+        // rId pointing at a diagrams/drawingN.xml that was never written) and
+        // PowerPoint tolerates them. Strip the dangling rels up-front so every
+        // command (not just Open) survives, reusing the same in-place repair the
+        // reactive path uses. The scan is read-only and only rewrites when a
+        // dangling rel is actually present, so the clean-file path pays only a
+        // cheap .rels read.
+        if ((ext is ".docx" or ".xlsx" or ".pptx") && HasDanglingInternalRels(filePath))
+            StripDanglingPackageRels(filePath);
+
         try
         {
             return OpenHandler(filePath, ext, editable);
@@ -315,11 +331,85 @@ public static class DocumentHandlerFactory
         return false;
     }
 
+    private static readonly System.Xml.Linq.XNamespace RelsNs =
+        "http://schemas.openxmlformats.org/package/2006/relationships";
+
+    /// <summary>
+    /// Base directory a .rels file's relative targets resolve against:
+    /// "x/_rels/y.xml.rels" -> "x"; the root "_rels/.rels" -> "".
+    /// </summary>
+    private static string RelsBaseDir(string relsEntryName)
+    {
+        var relsDir = (Path.GetDirectoryName(relsEntryName) ?? "").Replace('\\', '/');
+        return relsDir.EndsWith("_rels", StringComparison.OrdinalIgnoreCase)
+            ? relsDir.Substring(0, relsDir.Length - "_rels".Length).TrimEnd('/')
+            : relsDir;
+    }
+
+    /// <summary>
+    /// Resolve a relationship Target (relative or root-absolute) into a
+    /// normalized package-internal part name, or null when the relationship is
+    /// External or has no usable Target.
+    /// </summary>
+    private static string? ResolveInternalRelTarget(System.Xml.Linq.XElement rel, string baseDir)
+    {
+        if (string.Equals((string?)rel.Attribute("TargetMode"), "External", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var target = (string?)rel.Attribute("Target");
+        if (string.IsNullOrEmpty(target)) return null;
+        var resolved = target.StartsWith("/")
+            ? target.TrimStart('/')
+            : (baseDir.Length > 0 ? baseDir + "/" + target : target);
+        var segs = new List<string>();
+        foreach (var seg in resolved.Split('/'))
+        {
+            if (seg == "..") { if (segs.Count > 0) segs.RemoveAt(segs.Count - 1); }
+            else if (seg != "." && seg.Length > 0) segs.Add(seg);
+        }
+        return string.Join("/", segs);
+    }
+
+    /// <summary>
+    /// Read-only scan: does the package contain any internal relationship whose
+    /// target part is absent from the package? Used to gate the (mutating)
+    /// in-place repair so clean files are never rewritten. Returns false on any
+    /// read/parse error — the normal open path then surfaces the real problem.
+    /// </summary>
+    private static bool HasDanglingInternalRels(string filePath)
+    {
+        try
+        {
+            using var zip = ZipFile.OpenRead(filePath);
+            var names = new HashSet<string>(zip.Entries.Select(e => e.FullName), StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in zip.Entries)
+            {
+                if (!entry.FullName.EndsWith(".rels", StringComparison.OrdinalIgnoreCase)) continue;
+                string content;
+                using (var reader = new StreamReader(entry.Open(), Encoding.UTF8))
+                    content = reader.ReadToEnd();
+                System.Xml.Linq.XDocument xdoc;
+                try { xdoc = System.Xml.Linq.XDocument.Parse(content); }
+                catch { continue; }
+                if (xdoc.Root is null) continue;
+                var baseDir = RelsBaseDir(entry.FullName);
+                foreach (var rel in xdoc.Root.Elements(RelsNs + "Relationship"))
+                {
+                    var resolved = ResolveInternalRelTarget(rel, baseDir);
+                    if (resolved != null && !names.Contains(resolved))
+                        return true;
+                }
+            }
+        }
+        catch { return false; }
+        return false;
+    }
+
     /// <summary>
     /// Remove internal (non-External) relationships whose target part is
-    /// missing from the package. Word tolerates such dangling rels; the SDK
-    /// refuses to open the file. Only .rels entries are touched, and only the
-    /// dangling Relationship nodes are dropped.
+    /// missing from the package. Word/PowerPoint tolerate such dangling rels;
+    /// the SDK refuses to open (or crashes mid-traversal on) the file. Only
+    /// .rels entries are touched, and only the dangling Relationship nodes are
+    /// dropped.
     /// </summary>
     private static void StripDanglingPackageRels(string filePath)
     {
@@ -335,31 +425,12 @@ public static class DocumentHandlerFactory
             System.Xml.Linq.XDocument xdoc;
             try { xdoc = System.Xml.Linq.XDocument.Parse(content); }
             catch { continue; }
-            var ns = (System.Xml.Linq.XNamespace)"http://schemas.openxmlformats.org/package/2006/relationships";
-            // Base directory the .rels' relative targets resolve against:
-            // "x/_rels/y.xml.rels" -> "x"; the root "_rels/.rels" -> "".
-            var relsDir = (Path.GetDirectoryName(entry.FullName) ?? "").Replace('\\', '/');
-            var baseDir = relsDir.EndsWith("_rels", StringComparison.OrdinalIgnoreCase)
-                ? relsDir.Substring(0, relsDir.Length - "_rels".Length).TrimEnd('/')
-                : relsDir;
+            var baseDir = RelsBaseDir(entry.FullName);
             bool changed = false;
-            foreach (var rel in xdoc.Root!.Elements(ns + "Relationship").ToList())
+            foreach (var rel in xdoc.Root!.Elements(RelsNs + "Relationship").ToList())
             {
-                if (string.Equals((string?)rel.Attribute("TargetMode"), "External", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                var target = (string?)rel.Attribute("Target");
-                if (string.IsNullOrEmpty(target)) continue;
-                var resolved = target.StartsWith("/")
-                    ? target.TrimStart('/')
-                    : (baseDir.Length > 0 ? baseDir + "/" + target : target);
-                var segs = new List<string>();
-                foreach (var seg in resolved.Split('/'))
-                {
-                    if (seg == "..") { if (segs.Count > 0) segs.RemoveAt(segs.Count - 1); }
-                    else if (seg != "." && seg.Length > 0) segs.Add(seg);
-                }
-                resolved = string.Join("/", segs);
-                if (!names.Contains(resolved))
+                var resolved = ResolveInternalRelTarget(rel, baseDir);
+                if (resolved != null && !names.Contains(resolved))
                 {
                     rel.Remove();
                     changed = true;

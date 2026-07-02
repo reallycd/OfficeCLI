@@ -188,12 +188,41 @@ public static partial class PptxBatchEmitter
                     // series-scoped label font (chart-level fan-out is the
                     // only path that round-trips today).
                     "labelFont.color", "labelFont.size", "labelFont.bold",
-                    "labelFont.name" })
+                    "labelFont.name",
+                    // Chart-fidelity: source cell-range ref for the series
+                    // values. ParseSeriesDataExtended reads the dotted
+                    // `series{N}.valuesRef` and ApplySeriesReferences rebuilds
+                    // <c:numRef><c:f>…</c:f><c:numCache>…</> preserving the
+                    // literal data= values as the cache. Without it a
+                    // ref-authored source replayed as bare numLit.
+                    "valuesRef",
+                    // Theme-inherited series fill (source ser had no spPr) —
+                    // suppresses the DefaultSeriesColors injection at replay.
+                    "inheritFill",
+                    // Explicit invertIfNegative=true round-trip (Reader only
+                    // emits the flag when the source value is true).
+                    "invertIfNeg",
+                    // Source c:idx / c:order (theme-accent + stack-order keys)
+                    // when they differ from document position (combo reorder).
+                    "seriesIdx", "seriesOrder",
+                    // Verbatim per-series <c:dLbls> (per-point dLbl / numFmt /
+                    // separator — beyond the dataLabels flag summary).
+                    "dlbls",
+                    // Source numCache formatCode — sourceLinked data labels
+                    // render this format (thousands separators etc.).
+                    "valuesNumFmt" })
                 {
                     if (s.Format.TryGetValue(key, out var val) && val != null)
                     {
                         var sval = val.ToString();
                         if (string.IsNullOrEmpty(sval)) continue;
+                        // Verbatim dlbls is authoritative for the series'
+                        // label styling — a semantic labelFont.* companion
+                        // would rebuild the txPr and strip it (raw +
+                        // companion double-send family).
+                        if (key.StartsWith("labelFont.", StringComparison.Ordinal)
+                            && s.Format.ContainsKey("dlbls"))
+                            continue;
                         // Idempotence: when the chart-level `key` (Reader's
                         // first-series summary, replayed at chart Setter time
                         // by fanning to every series) already carries the
@@ -213,6 +242,24 @@ public static partial class PptxBatchEmitter
                         if (key == "trendline") anySeriesTrendline = true;
                     }
                 }
+                // Sparse series (blank source cells): Reader pads values with
+                // zeros and lists the blank 0-based indexes. Forward them as
+                // `series{N}._blankIndexes` so BuildNumberingCacheFromLiteral
+                // omits those points from the numCache (Builder consumes the
+                // key only under dispBlanksAs=gap, matching its R20-03 gate —
+                // under blanks-as-zero the padded zeros render identically).
+                if (s.Format.TryGetValue("blankIndexes", out var biVal)
+                    && biVal is string biStr && biStr.Length > 0
+                    // Builder reads _blankIndexes only on the numRef-rewrite
+                    // path — without a valuesRef the key would go unread and
+                    // trip the handler-as-truth unsupported_property warning.
+                    && s.Format.ContainsKey("valuesRef")
+                    && props.TryGetValue("dispBlanksAs", out var dbaVal)
+                    && string.Equals(dbaVal, "gap", StringComparison.OrdinalIgnoreCase))
+                {
+                    props[$"series{seriesIdx}._blankIndexes"] = biStr;
+                }
+
                 // R38: per-point sub-keys (point{M}.color, point{M}.explosion,
                 // point{M}.marker, …) are emitted by Reader onto each series
                 // node but the allowlist above only enumerates fixed keys.
@@ -242,7 +289,46 @@ public static partial class PptxBatchEmitter
                 props.Remove("trendline.dispRSqr");
                 props.Remove("trendline.dispEq");
             }
+            // Same double-send rationale for data labels: when the verbatim
+            // per-series dlbls rides the add row, the chart-level dataLabels
+            // flag summary (Reader's first-series view) would fan out at
+            // replay and rebuild every series' dLbls over the verbatim block.
+            if (fullChart.Children != null
+                && fullChart.Children.Any(s => s.Type == "series"
+                    && s.Format.ContainsKey("dlbls")))
+            {
+                props.Remove("dataLabels");
+            }
         }
+
+        // Chart-internal picture fills can't round-trip. AddChart rebuilds the
+        // chart semantically into a FRESH ChartPart and never carries the source
+        // chart's media parts (ppt/media/*.jpg + the chart-rels image
+        // relationship). Any verbatim <c:spPr> we captured (chartArea.spPr /
+        // plotArea.spPr / series spPr) that embeds an image via
+        // <a:blipFill><a:blip r:embed="rIdN"/> would replay a rIdN that doesn't
+        // exist in the new part's rels — a DANGLING reference that PowerPoint
+        // renders as a "cannot display image" error box (strictly worse than
+        // dropping the fill). Strip the image-bearing blipFill to <a:noFill/>
+        // so the area degrades cleanly to transparent, and drop any
+        // chartFill/plotFill=blip summary (BuildFillElement would otherwise
+        // degrade "blip" to a solid-black box). Consistent with the file-wide
+        // rule that the chart round-trips visually via semantic rebuild while
+        // its backing parts (embedded workbook, style/colors, media) do not.
+        // When the source chart carries image parts (picture/texture fills on
+        // chartSpace/plotArea/series spPr), carry them via add-part chartimage
+        // with pinned rIds so the verbatim spPr blipFills resolve — no need to
+        // degrade to noFill. Only sanitize when there is nothing to carry.
+        var slideOrdM = System.Text.RegularExpressions.Regex.Match(parentSlidePath, @"^/slide\[(\d+)\]$");
+        IReadOnlyList<PowerPointHandler.MasterImageInfo> chartImages =
+            Array.Empty<PowerPointHandler.MasterImageInfo>();
+        if (slideOrdM.Success)
+        {
+            try { chartImages = ppt.GetChartImageParts(int.Parse(slideOrdM.Groups[1].Value), chartOrdinal); }
+            catch { }
+        }
+        if (chartImages.Count == 0)
+            SanitizeChartImageFills(props);
 
         items.Add(new BatchItem
         {
@@ -251,6 +337,49 @@ public static partial class PptxBatchEmitter
             Type = "chart",
             Props = props.Count > 0 ? props : null,
         });
+
+        // Modern chart styling sub-parts (style1.xml / colors1.xml) — carry
+        // them verbatim so PowerPoint keeps the source's gridline tint /
+        // palette / effect defaults instead of the app default style.
+        if (slideOrdM.Success)
+        {
+            IReadOnlyList<(string Kind, string RelId, string Base64Data)> styleParts;
+            try { styleParts = ppt.GetChartStyleParts(int.Parse(slideOrdM.Groups[1].Value), chartOrdinal); }
+            catch { styleParts = Array.Empty<(string, string, string)>(); }
+            foreach (var sp in styleParts)
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "add-part",
+                    Parent = parentSlidePath,
+                    Type = "chartstyle",
+                    Props = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["chart"] = chartOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        ["kind"] = sp.Kind,
+                        ["rid"] = sp.RelId,
+                        ["data"] = sp.Base64Data,
+                    },
+                });
+            }
+        }
+
+        foreach (var ci in chartImages)
+        {
+            items.Add(new BatchItem
+            {
+                Command = "add-part",
+                Parent = parentSlidePath,
+                Type = "chartimage",
+                Props = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["chart"] = chartOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ["rid"] = ci.RelId,
+                    ["content-type"] = ci.ContentType,
+                    ["data"] = ci.Base64Data,
+                },
+            });
+        }
 
         // Axis-role round-trip. EmitChart's add row covers chart-level axis
         // shortcuts (axismin/axismax/axistitle) that only target the primary
@@ -268,7 +397,15 @@ public static partial class PptxBatchEmitter
         // would no longer match. Positional index is stable (chart-only,
         // 1-based within the slide, same ordering as ResolveChart).
         var replayChartPath = $"{parentSlidePath}/chart[{chartOrdinal}]";
-        EmitChartAxesIfDifferent(ppt, fullChart.Path, replayChartPath, items);
+        // Verbatim gridline.spPr owns the gridline stroke — strip the semantic
+        // companions so they can't rebuild the <a:ln> without its tint.
+        bool gridlineSpPrCarried = props.ContainsKey("gridline.spPr");
+        if (gridlineSpPrCarried)
+        {
+            props.Remove("gridlineColor");
+            props.Remove("gridlineWidth");
+        }
+        EmitChartAxesIfDifferent(ppt, fullChart.Path, replayChartPath, items, gridlineSpPrCarried);
     }
 
     // Keys BuildAxisNode emits with synthetic defaults that match a freshly-
@@ -306,7 +443,8 @@ public static partial class PptxBatchEmitter
         new(StringComparer.OrdinalIgnoreCase) { "title", "min", "max", "majorUnit", "format" };
 
     private static void EmitChartAxesIfDifferent(PowerPointHandler ppt,
-        string readChartPath, string replayChartPath, List<BatchItem> items)
+        string readChartPath, string replayChartPath, List<BatchItem> items,
+        bool gridlineSpPrCarried = false)
     {
         if (string.IsNullOrEmpty(readChartPath)) return;
 
@@ -343,6 +481,15 @@ public static partial class PptxBatchEmitter
                 if (k.Equals("majorGridlines", StringComparison.OrdinalIgnoreCase)
                   || k.Equals("minorGridlines", StringComparison.OrdinalIgnoreCase))
                     continue;
+                // When the verbatim gridline.spPr rides the chart add row it
+                // is authoritative for the gridline stroke — a semantic
+                // gridlineColor/gridlineWidth set here would rebuild the
+                // <a:ln> and strip the spPr's lumMod/lumOff tint (raw +
+                // companion double-send family).
+                if (gridlineSpPrCarried
+                    && (k.Equals("gridlineColor", StringComparison.OrdinalIgnoreCase)
+                        || k.Equals("gridlineWidth", StringComparison.OrdinalIgnoreCase)))
+                    continue;
                 // visible=true is BuildAxisNode's "always-emit" default.
                 if (k.Equals("visible", StringComparison.OrdinalIgnoreCase)
                     && s!.Equals("true", StringComparison.OrdinalIgnoreCase))
@@ -357,6 +504,55 @@ public static partial class PptxBatchEmitter
                 Path = replayAxisPath,
                 Props = setProps,
             });
+        }
+    }
+
+    // Matches a single <a:blipFill …>…</a:blipFill> subtree (blipFill does not
+    // nest, so a non-greedy match to the first close is exact).
+    private static readonly System.Text.RegularExpressions.Regex BlipFillRegex =
+        new(@"<a:blipFill\b.*?</a:blipFill>",
+            System.Text.RegularExpressions.RegexOptions.Singleline
+            | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Namespace-self-contained replacement so it stays valid wherever the
+    // stripped blipFill sat (the source verbatim spPr fragments re-declare
+    // xmlns:a on each child element).
+    private const string NoFillReplacement =
+        "<a:noFill xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" />";
+
+    // Strip image-bearing chart fills from the emitted chart props (see caller
+    // for the why). Only blipFills that actually reference an image part
+    // (r:embed / r:link) are neutralized; a bare/inline blipFill without a
+    // relationship is left untouched.
+    internal static void SanitizeChartImageFills(Dictionary<string, string> props)
+    {
+        foreach (var key in props.Keys.ToList())
+        {
+            var v = props[key];
+            if (string.IsNullOrEmpty(v)) continue;
+            if (v.IndexOf("<a:blipFill", StringComparison.Ordinal) < 0) continue;
+            var sanitized = BlipFillRegex.Replace(v, m =>
+            {
+                var bf = m.Value;
+                bool refsImage =
+                    bf.IndexOf("r:embed", StringComparison.Ordinal) >= 0
+                    || bf.IndexOf("r:link", StringComparison.Ordinal) >= 0;
+                return refsImage ? NoFillReplacement : bf;
+            });
+            if (!ReferenceEquals(sanitized, v) && sanitized != v)
+                props[key] = sanitized;
+        }
+
+        // "blip" summary fill hints (chartFill=blip / plotFill=blip) can never
+        // be satisfied without the media part — BuildFillElement degrades them
+        // to a solid-black box. Drop them so the (now noFill) verbatim spPr
+        // owns the area's appearance.
+        foreach (var fk in new[] { "chartFill", "plotFill" })
+        {
+            if (props.TryGetValue(fk, out var fv) && fv != null
+                && (fv.Equals("blip", StringComparison.OrdinalIgnoreCase)
+                    || fv.StartsWith("blip:", StringComparison.OrdinalIgnoreCase)))
+                props.Remove(fk);
         }
     }
 }

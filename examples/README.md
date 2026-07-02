@@ -4,59 +4,90 @@ Comprehensive examples demonstrating OfficeCLI capabilities for Word, Excel, and
 
 ## 📂 Directory Structure
 
+Every example below ships all four files — `.{md,sh,py,<ext>}` — even where the
+tree abbreviates. Only `ppt/templates/styles/*/build*.sh` are `.sh`-only.
+
 ```
 examples/
-├── README.md                          # This file
-├── word/                              # 📄 Word examples
-│   ├── formulas.sh / formulas.docx
-│   ├── tables.sh / tables.docx
-│   ├── textbox.sh
-│   ├── run-formatting.{sh,md,docx}      # run/character property surface
-│   ├── paragraph-formatting.{sh,md,docx}# paragraph property surface
-│   ├── numbering.sh / numbering.docx
-│   └── revisions.{sh,md,docx}         # tracked-change (revision) API
-├── excel/                             # 📊 Excel examples
-│   ├── cell-formatting.{md,py,xlsx}   # Full cell property surface (fonts/fills/borders/numFmt/data)
-│   ├── charts.sh / charts.xlsx        # Master chart showcase
-│   ├── charts/                        # Per-type chart scripts
-│   │   ├── charts-demo.{sh,md,xlsx}
-│   │   └── charts-<type>.{md,py,xlsx}
-│   │       (basic, advanced, extended, area, bar, boxwhisker,
-│   │        bubble, column, combo, histogram, line, pie, radar,
-│   │        scatter, stock, waterfall)
-│   └── pivot-tables.py / pivot-tables.xlsx
-└── ppt/                               # 🎨 PowerPoint examples
-    ├── presentation.{md,sh,pptx}
-    ├── animations.{md,sh,pptx}
-    ├── video.{md,py,pptx}
-    ├── 3d-model.{md,sh,pptx}
-    ├── charts/                        # PowerPoint chart showcases
-    │   └── charts-<type>.{md,py,pptx}
+├── README.md                              # This file
+├── word/                                  # 📄 Word examples — *.{md,sh,py,docx}
+│   ├── formulas.{md,sh,py,docx}             # LaTeX math/chemistry/physics formulas
+│   ├── tables.{md,sh,py,docx}               # styled tables
+│   ├── textbox.{md,sh,py,docx}              # formatted text boxes
+│   ├── charts.{md,sh,py,docx}               # inline charts (14 types incl. treemap/waterfall)
+│   ├── run-formatting.{md,sh,py,docx}       # run/character property surface
+│   ├── paragraph-formatting.{md,sh,py,docx} # paragraph property surface
+│   ├── document-formatting.{md,sh,py,docx}  # document-level property surface
+│   ├── sections.{md,sh,py,docx}             # section layout — multi-column, footnote/endnote props, per-section page setup
+│   ├── content-controls.{md,sh,py,docx}     # SDT content controls — text/dropdown/combobox/date/picture/group intake form
+│   ├── fields.{md,sh,py,docx}               # field codes (PAGE/DATE/REF/IF/HYPERLINK) + auto-populating table of contents
+│   ├── pictures.{md,sh,py,docx}             # inline/floating images — crop, alt, wrap, behind-text, absolute position
+│   ├── numbering.{md,sh,py,docx}            # list/numbering styles
+│   └── revisions.{md,sh,py,docx}            # tracked-change (revision) API
+├── excel/                                 # 📊 Excel examples — *.{md,sh,py,xlsx}
+│   ├── cell-formatting.{md,sh,py,xlsx}      # full cell property surface (fonts/fills/borders/numFmt/data)
+│   ├── conditional-formatting.{md,sh,py,xlsx}
+│   ├── data-validation.{md,sh,py,xlsx}        # dropdown lists, number/date/text/custom rules, input & error messages
+│   ├── sheet-settings.{md,sh,py,xlsx}         # freeze panes, print area/titles, headers/footers, display & protection
+│   ├── sparklines.{md,sh,py,xlsx}             # in-cell line/column/win-loss mini charts + point markers
+│   ├── workbook-settings.{md,sh,py,xlsx}
+│   ├── pivot-tables.{md,sh,py,xlsx}
+│   ├── slicers.{md,sh,py,xlsx}                # pivot-table slicers (field/caption/columnCount/rowHeight)
+│   ├── shapes.{md,sh,py,xlsx}                 # drawing shapes — geometry, flip, glow, gradient, reflection, outline
+│   ├── charts.{md,sh,py,xlsx}               # master chart showcase
+│   └── charts/                              # per-type chart scripts — charts-<type>.{md,sh,py,xlsx}
+│           (demo, basic, advanced, extended, area, bar, boxwhisker,
+│            bubble, column, combo, histogram, line, pie, radar,
+│            scatter, stock, waterfall)
+└── ppt/                                   # 🎨 PowerPoint examples — *.{md,sh,py,pptx}
+    ├── presentation.{md,sh,py,pptx}
+    ├── presentation-settings.{md,sh,py,pptx}
+    ├── animations.{md,sh,py,pptx}
+    ├── video.{md,sh,py,pptx}
+    ├── 3d-model.{md,sh,py,pptx}
+    ├── charts/                              # charts-<type>.{md,sh,py,pptx}
     │       (column, bar, line, pie, doughnut, area, scatter,
     │        bubble, radar, stock, combo, waterfall, 3d, advanced)
-    ├── tables/                        # PowerPoint table showcases
-    │   └── tables-<topic>.{md,sh,pptx}
-    │       (basic, styled, merged, borders, rows-cols, financial)
-    ├── transitions/                   # Slide transition showcases
-    │   └── transitions-<topic>.{md,sh,pptx}
+    ├── tables/                              # tables-<topic>.{md,sh,py,pptx}
+    │       (basic, styled, merged, borders, rows-cols, financial, nested)
+    ├── transitions/                         # transitions-<topic>.{md,sh,py,pptx}
     │       (basic, directional, shapes, bands, dynamic, modern, random, timing, morph)
-    ├── shapes/                        # Primitive shape building blocks
-    │   ├── shapes-basic.{md,sh,pptx}        # geometries, fills, outlines, rotation, basic effects
-    │   ├── shapes-connectors.{md,sh,pptx}   # straight/elbow/curve connectors + groups
-    │   ├── shapes-effects.{md,sh,pptx}      # autoFit, flip, image fill, 3D, softEdge, links, zorder
-    │   └── shapes-typography.{md,sh,pptx}   # paragraph/char spacing, kern, case, RTL, font.cs, lang
-    ├── textboxes/                     # Text container primitives
-    │   ├── textboxes-basic.{md,sh,pptx}     # alignment, bullets, runs, per-script fonts
-    │   └── textboxes-advanced.{md,sh,pptx}  # per-paragraph overrides, indents, per-run typography
-    └── pictures/                      # Image embedding
-        └── pictures-basic.{md,py,pptx}      # src forms, crop, rotation, clickable links
+    ├── shapes/                              # shapes-<topic>.{md,sh,py,pptx}
+    │       (basic, connectors, effects, typography)
+    ├── textboxes/                           # textboxes-<topic>.{md,sh,py,pptx}
+    │       (basic, advanced)
+    ├── pictures/                            # pictures-basic.{md,sh,py,pptx}
+    ├── ole/                                 # ole-embed.{md,sh,py,pptx} — embedded Excel/Word OLE objects
+    └── templates/styles/*/build*.sh         # full-deck template generators (.sh only)
 ```
 
-Each example follows the same trio: `<name>.md` (walkthrough), `<name>.sh`/`.py` (build script), `<name>.<ext>` (pre-generated output).
+Each example ships the same **four-file set**:
+
+| File | Role |
+|------|------|
+| `<name>.md` | Walkthrough — what the example demonstrates and the key techniques |
+| `<name>.sh` | **CLI** build script — drives the `officecli` binary directly (`officecli create / add / set / close / validate`) |
+| `<name>.py` | **SDK** build script — drives the [`officecli` Python SDK](../sdk/python/) (`import officecli`; `with officecli.create(...) as doc: doc.batch([...])`) |
+| `<name>.<ext>` | Pre-generated output (`.docx` / `.xlsx` / `.pptx`) |
+
+The `.sh` and `.py` are **equivalent twins** — both regenerate the same output document, one via the command line and one via the Python SDK. Run whichever fits your workflow.
+
+> The full-deck template generators under `ppt/templates/styles/*/build*.sh` are
+> standalone deck builders, not four-file API examples, so they ship as `.sh` only.
 
 ---
 
 ## 🚀 Quick Start
+
+Every example runs **two equivalent ways** — pick one:
+
+```bash
+bash <name>.sh        # via the officecli CLI binary
+python3 <name>.py     # via the officecli Python SDK  (pip install officecli-sdk)
+```
+
+Both regenerate the same output document. The commands below show one form per
+example; swap `bash …​.sh` ⇄ `python3 …​.py` freely.
 
 ### By Document Type
 
@@ -76,8 +107,8 @@ bash revisions.sh            # Tracked-change (revision) API — ins/del/format/
 ```bash
 cd excel
 python cell-formatting.py    # Full cell property surface: fonts, fills, borders, number formats, formulas/links
-bash charts.sh               # Master chart showcase
-bash charts/charts-demo.sh   # 14+ chart types
+bash charts.sh               # Master chart showcase (8 chart types in one workbook)
+bash charts/charts-basic.sh  # Per-type high-level examples (any charts/charts-<type>.sh)
 python charts/charts-line.py # Single-type example (any charts/charts-<type>.py)
 python pivot-tables.py       # Pivot tables
 ```

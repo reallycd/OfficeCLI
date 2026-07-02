@@ -15,6 +15,7 @@ public partial class PowerPointHandler
     public List<string> Set(string path, Dictionary<string, string> properties)
     {
         Modified = true;
+        LastUnrecognizedLatex = new List<string>();
         path = NormalizePptxPathSegmentCasing(path);
         path = NormalizeCellPath(path);
         path = ResolveIdPath(path);

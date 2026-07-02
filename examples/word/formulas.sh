@@ -215,6 +215,82 @@ $CLI add "$OUT" /body --type equation --prop 'formula=E = mc^{2}' --prop mode=di
 $CLI add "$OUT" /body --type paragraph --prop text="57. Inline mode — equation embedded mid-sentence:"
 $CLI add "$OUT" /body --type equation --prop 'formula=A = \pi r^{2}' --prop mode=inline
 
+# ==================== X. Coverage Completeness — Additional Supported Commands ====================
+$CLI add "$OUT" /body --type paragraph --prop text="X. Coverage Completeness — Additional Supported Commands" --prop style=Heading2
+
+$CLI add "$OUT" /body --type paragraph --prop text="58. N-ary Contour Integrals (oint / oiint / oiiint):"
+$CLI add "$OUT" /body --type equation --prop 'formula=\oint_C \vec{F} \cdot d\vec{r} = \iint_S (\nabla \times \vec{F}) \cdot d\vec{S}, \quad \oiint_S \vec{E} \cdot d\vec{A} = \frac{Q}{\epsilon_0}, \quad \oiiint_V \rho \, dV'
+
+$CLI add "$OUT" /body --type paragraph --prop text="59. Limit-style Operators with Under-limits (max / min / sup / inf):"
+$CLI add "$OUT" /body --type equation --prop 'formula=\max_{1 \le i \le n} a_i \geq \min_{1 \le i \le n} a_i, \quad \sup_{x \in S} f(x) \geq \inf_{x \in S} f(x)'
+
+$CLI add "$OUT" /body --type paragraph --prop text="60. More Limit Operators (limsup / liminf / argmax / argmin):"
+$CLI add "$OUT" /body --type equation --prop 'formula=\limsup_{n \to \infty} x_n \geq \liminf_{n \to \infty} x_n, \quad \hat{\theta} = \argmax_{\theta} L(\theta) = \argmin_{\theta} (-L(\theta))'
+
+$CLI add "$OUT" /body --type paragraph --prop text="61. Named Operators with Limits (det / gcd / Pr):"
+$CLI add "$OUT" /body --type equation --prop 'formula=\det_{A \in M} A, \quad \gcd_{i} a_i, \quad \Pr_{x \sim D}[X = x]'
+
+$CLI add "$OUT" /body --type paragraph --prop text="62. Limits Placement Control (\\limits / \\nolimits):"
+$CLI add "$OUT" /body --type equation --prop 'formula=\lim\limits_{x \to 0} \frac{\sin x}{x} = 1, \quad \sum\nolimits_{i=1}^{n} i = \frac{n(n+1)}{2}'
+
+$CLI add "$OUT" /body --type paragraph --prop text="63. N-ary Product (prod):"
+$CLI add "$OUT" /body --type equation --prop 'formula=n! = \prod_{k=1}^{n} k, \quad \prod_{p \text{ prime}} \frac{1}{1 - p^{-s}} = \zeta(s)'
+
+$CLI add "$OUT" /body --type paragraph --prop text="64. Binary Operators (div / ast / star / circ / oplus / ominus / otimes / odot / bullet):"
+$CLI add "$OUT" /body --type equation --prop 'formula=a \div b, \quad f \ast g, \quad a \star b, \quad f \circ g, \quad a \oplus b \ominus c, \quad u \otimes v \odot w, \quad x \bullet y'
+
+$CLI add "$OUT" /body --type paragraph --prop text="65. Arrows (leftarrow / uparrow / downarrow / leftrightarrow / Rightarrow / Leftarrow / Leftrightarrow / gets / implies):"
+$CLI add "$OUT" /body --type equation --prop 'formula=a \leftarrow b \uparrow c \downarrow d \leftrightarrow e, \quad P \Rightarrow Q, \quad R \Leftarrow S, \quad X \Leftrightarrow Y, \quad n \gets n+1, \quad p \implies q'
+
+$CLI add "$OUT" /body --type paragraph --prop text="66. Math Fonts (boldsymbol / mathit) and Over/Under-set:"
+$CLI add "$OUT" /body --type equation --prop 'formula=\boldsymbol{\alpha} + \mathit{xyz}, \quad \overset{!}{=} \quad \underset{n \to \infty}{\lim} a_n'
+
+$CLI add "$OUT" /body --type paragraph --prop text="67. Relations, Logic, Sets, Trig, and Legacy Fraction (\\neq / \\sim / \\subset / \\lor / \\neg / \\wedge / \\parallel / \\varnothing / \\complement / \\cos / \\tan / \\ln / {a \\over b}):"
+$CLI add "$OUT" /body --type equation --prop 'formula=a \neq b \sim c, \quad A \subset B \supset C, \quad p \lor \neg q \wedge r, \quad u \vee v, \quad \ell_1 \parallel \ell_2, \quad \varnothing = \complement_U U, \quad \cos^2 x + \tan x - \ln x, \quad {a \over b}'
+
+# ==================== XI. Full Symbol & Environment Coverage ====================
+$CLI add "$OUT" /body --type paragraph --prop text="XI. Full Symbol & Environment Coverage" --prop style=Heading2
+
+# Features: Greek variants — \chi \iota \kappa \omega \tau \upsilon \varepsilon \varphi \varpi \varrho \varsigma \vartheta \varkappa \digamma
+$CLI add "$OUT" /body --type paragraph --prop text="68. Greek Variants and Extra Letters:"
+$CLI add "$OUT" /body --type equation --prop 'formula=\chi, \iota, \kappa, \omega, \tau, \upsilon, \varepsilon, \varphi, \varpi, \varrho, \varsigma, \vartheta, \varkappa, \digamma'
+
+# Features: relations — \cong \simeq \asymp \doteq \propto \prec \succ \preceq \succeq \ll \gg \models \vdash \dashv \perp \top \ni \sqsubset \sqsubseteq \sqsupset \sqsupseteq \subsetneq \supsetneq \Vdash
+$CLI add "$OUT" /body --type paragraph --prop text="69. Relation Symbols:"
+$CLI add "$OUT" /body --type equation --prop 'formula=a \cong b \simeq c \asymp d \doteq e, \quad f \propto g, \quad x \prec y \succ z, \quad p \preceq q \succeq r, \quad m \ll n \gg k, \quad \Gamma \models \phi \vdash \psi \dashv \chi \Vdash \omega, \quad u \perp v, \quad \top, \quad a \ni b, \quad S \sqsubset T \sqsubseteq U \sqsupset V \sqsupseteq W, \quad A \subsetneq B \supsetneq C'
+
+# Features: negated relations — \nleq \ngeq \nmid \nparallel \nsubseteq \nsupseteq \nexists
+$CLI add "$OUT" /body --type paragraph --prop text="70. Negated Relations:"
+$CLI add "$OUT" /body --type equation --prop 'formula=a \nleq b, \quad c \ngeq d, \quad e \nmid f, \quad g \nparallel h, \quad A \nsubseteq B, \quad C \nsupseteq D, \quad \nexists x'
+
+# Features: arrows — \longleftarrow \longrightarrow \longleftrightarrow \longmapsto \hookleftarrow \hookrightarrow \twoheadrightarrow \rightsquigarrow \leftharpoonup \leftharpoondown \rightharpoonup \rightharpoondown \nearrow \searrow \swarrow \nwarrow \curvearrowleft \curvearrowright \impliedby
+$CLI add "$OUT" /body --type paragraph --prop text="71. Extended Arrows:"
+$CLI add "$OUT" /body --type equation --prop 'formula=a \longleftarrow b \longrightarrow c \longleftrightarrow d, \quad x \longmapsto y, \quad e \hookleftarrow f \hookrightarrow g, \quad p \twoheadrightarrow q \rightsquigarrow r, \quad u \leftharpoonup v \leftharpoondown w \rightharpoonup s \rightharpoondown t, \quad \nearrow \searrow \swarrow \nwarrow, \quad \alpha \curvearrowleft \beta \curvearrowright \gamma, \quad P \impliedby Q'
+
+# Features: misc symbols — \aleph \beth \gimel \daleth \wp \Re \Im \Sigma \angle \measuredangle \sphericalangle \triangle \triangleleft \triangleright \square \blacksquare \Diamond \diamond \diamondsuit \clubsuit \heartsuit \spadesuit \flat \sharp \natural \dagger \ddagger \bigstar \amalg \uplus \sqcap \sqcup \wr \bowtie \frown \smile \mp \bigtriangledown
+$CLI add "$OUT" /body --type paragraph --prop text="72. Miscellaneous Symbols:"
+$CLI add "$OUT" /body --type equation --prop 'formula=\aleph, \beth, \gimel, \daleth, \wp, \Re, \Im, \Sigma, \quad \angle, \measuredangle, \sphericalangle, \triangle, \triangleleft, \triangleright, \quad \square, \blacksquare, \Diamond, \diamond, \diamondsuit, \clubsuit, \heartsuit, \spadesuit, \quad \flat, \sharp, \natural, \dagger, \ddagger, \bigstar, \quad a \amalg b \uplus c \sqcap d \sqcup e \wr f, \quad x \bowtie y \frown z \smile w, \quad p \mp q, \quad \bigtriangledown'
+
+# Features: math font families — \mathfrak \mathsf \mathtt \textbf \textit \textsf \texttt
+$CLI add "$OUT" /body --type paragraph --prop text="73. Math Font Families (Fraktur / sans / mono / bold / italic text):"
+$CLI add "$OUT" /body --type equation --prop 'formula=\mathfrak{ABCDabcd} \quad \mathsf{ABCDabcd} \quad \mathtt{ABCDabcd} \quad \textbf{ABCDabcd} \quad \textit{ABCDabcd} \quad \textsf{ABCDabcd} \quad \texttt{ABCDabcd}'
+
+# Features: environments — Bmatrix Vmatrix (brace / double-bar matrices)
+$CLI add "$OUT" /body --type paragraph --prop text="74. Environments — Bmatrix and Vmatrix:"
+$CLI add "$OUT" /body --type equation --prop 'formula=\begin{Bmatrix} a & b \\ c & d \end{Bmatrix} \quad \begin{Vmatrix} a & b \\ c & d \end{Vmatrix}'
+
+# Features: environments — smallmatrix array (with colspec)
+$CLI add "$OUT" /body --type paragraph --prop text="75. Environments — smallmatrix and array (colspec):"
+$CLI add "$OUT" /body --type equation --prop 'formula=\left(\begin{smallmatrix} 1 & 0 \\ 0 & 1 \end{smallmatrix}\right) \quad \begin{array}{cc} x & y \\ z & w \end{array}'
+
+# Features: environments — aligned align (multi alignment points)
+$CLI add "$OUT" /body --type paragraph --prop text="76. Environments — aligned and align (multi alignment points):"
+$CLI add "$OUT" /body --type equation --prop 'formula=\begin{aligned} a &= b \\ c &= d \end{aligned} \qquad \begin{align} a &= b & c &= d \\ e &= f & g &= h \end{align}'
+
+# Features: environments — gather split substack
+$CLI add "$OUT" /body --type paragraph --prop text="77. Environments — gather, split, and substack:"
+$CLI add "$OUT" /body --type equation --prop 'formula=\begin{gather} x = 1 \\ y = 2 \end{gather} \qquad \begin{split} a &= b + c \\ &= d \end{split} \qquad \sum_{\substack{i=1 \\ j=1}}^{n} a_{ij}'
+
 $CLI close "$OUT"
 
 $CLI validate "$OUT"

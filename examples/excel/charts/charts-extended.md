@@ -31,10 +31,10 @@ Every extended-chart-specific knob is exercised by at least one chart:
 
 Generic cx styling exercised across the deck: `title.glow`, `title.shadow`, `title.bold`/`size`/`color`, `dataLabels`, `labelFont`, `legend` position, `legendfont`, `axisfont`, `colors` palette, `chartFill`, `plotFill`.
 
-> **Notes on cx:chart limitations:**
+> **Notes on cx:chart styling:**
 >
-> - `chartFill` / `plotFill` only accept a **solid** hex color (or `none`). Unlike regular cChart, gradient `C1-C2:angle` is not supported.
-> - `colors=` palette **does not work per-data-point** on single-series cx charts (funnel, treemap, sunburst). OfficeCLI only applies the first palette color to the whole series, so every bar/tile/segment ends up the same color. Omit `colors=` on these charts and let Excel's theme drive the default rainbow. `colors=` still works normally on multi-series cx charts (boxWhisker) and on all regular cChart types.
+> - `chartFill` / `plotFill` accept a solid hex color, `none`, or a gradient — the same `C1-C2:angle` (and `c1,c2` stop-list) syntax as regular cChart.
+> - `colors=` palette works **per-data-point** on single-series cx charts (funnel, treemap, sunburst): each segment gets the next palette color (emitted as `cx:dataPt` fills, cycling if there are more points than colors). On multi-series cx charts (boxWhisker) `colors=` is one color per series, as on regular cCharts.
 
 ---
 
@@ -302,7 +302,7 @@ officecli add charts-extended.xlsx "/5-Chart Meta" --type chart \
 | `legend` | all cx | `bottom` \| `none` | 1/3 |
 | `legendfont` | all cx | `"9:8B949E:Helvetica Neue"` | 1 |
 | `axisfont` | all cx | `"10:58626E:Helvetica Neue"` | 1 |
-| `colors` | multi-series cx only (not useful on funnel/treemap/sunburst — see limitations note) | `4472C4,5B9BD5,...` | — |
+| `colors` | per-point on single-series cx (funnel/treemap/sunburst); per-series on multi-series cx | `4472C4,5B9BD5,...` | — |
 | `chartFill` (solid only) | all cx | `F8FAFC` | 1/2 |
 | `plotFill` (solid only) | all cx | `FFFFFF` | 2 |
 | `anchor` | all chart types | `"A1:M20"` | 5 |

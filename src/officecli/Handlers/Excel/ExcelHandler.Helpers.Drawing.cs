@@ -21,6 +21,43 @@ public partial class ExcelHandler
     /// the caller wires in an SVG image part. Keeps Add/Set picture paths
     /// free of inline extension boilerplate.
     /// </summary>
+    /// <summary>
+    /// CONSISTENCY(shape-line): build a shape <a:ln> outline from the compound
+    /// 'color[:width[:style]]' form (mirrors the pptx shape line grammar and
+    /// the xlsx Set path). 'none' → NoFill outline. width in points; style is
+    /// a prstDash token (solid/dash/dot/dashdot/longdash). Single-place OOXML
+    /// mutation so Add and Set stay identical.
+    /// </summary>
+    private static Drawing.Outline BuildShapeOutline(string value)
+    {
+        if (value.Equals("none", StringComparison.OrdinalIgnoreCase))
+            return new Drawing.Outline(new Drawing.NoFill());
+
+        var parts = value.Split(':');
+        var outline = new Drawing.Outline(DrawingColorBuilder.BuildSolidFill(parts[0]));
+        if (parts.Length > 1
+            && double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var wpt))
+        {
+            outline.Width = (int)Math.Round(wpt * EmuConverter.EmuPerPoint);
+        }
+        if (parts.Length > 2)
+        {
+            var dash = parts[2].ToLowerInvariant() switch
+            {
+                "dash" => Drawing.PresetLineDashValues.Dash,
+                "dot" => Drawing.PresetLineDashValues.Dot,
+                "dashdot" => Drawing.PresetLineDashValues.DashDot,
+                "longdash" => Drawing.PresetLineDashValues.LargeDash,
+                "solid" => Drawing.PresetLineDashValues.Solid,
+                _ => (Drawing.PresetLineDashValues?)null
+            };
+            if (dash != null)
+                outline.AppendChild(new Drawing.PresetDash { Val = dash });
+        }
+        return outline;
+    }
+
     private static XDR.BlipFill BuildPictureBlipFill(string pngRelId, string? svgRelId)
         => BuildPictureBlipFill(pngRelId, svgRelId, null);
 

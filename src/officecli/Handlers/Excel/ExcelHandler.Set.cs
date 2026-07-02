@@ -1411,7 +1411,7 @@ public partial class ExcelHandler
 
                     if (!string.IsNullOrEmpty(value) && !value.Equals("none", StringComparison.OrdinalIgnoreCase))
                     {
-                        var dn = new DefinedName($"{sheetName}!{value}") { Name = "_xlnm.Print_Area" };
+                        var dn = new DefinedName($"{Core.ModernFunctionQualifier.QuoteSheetNameForRef(sheetName)}!{value}") { Name = "_xlnm.Print_Area" };
                         if (sheetIdx >= 0) dn.LocalSheetId = (uint)sheetIdx;
                         definedNames.AppendChild(dn);
                     }
@@ -1471,7 +1471,9 @@ public partial class ExcelHandler
                                 v = rows ? $"${parts[0]}:${parts[1]}" : $"${parts[0]}:${parts[1]}";
                         }
                         // Allow user to pass already-qualified "Sheet1!$1:$1"; otherwise prefix.
-                        return v.Contains('!') ? v : $"{sheet}!{v}";
+                        // Quote the sheet name when Excel requires it (digit-start,
+                        // space, hyphen, …) — an unquoted name corrupts the workbook.
+                        return v.Contains('!') ? v : $"{Core.ModernFunctionQualifier.QuoteSheetNameForRef(sheet)}!{v}";
                     }
 
                     if (string.IsNullOrEmpty(value) || value.Equals("none", StringComparison.OrdinalIgnoreCase))

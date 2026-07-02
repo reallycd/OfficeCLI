@@ -6,8 +6,9 @@
 # groups: metadata, slide setup, print, slideshow, privacy, theme. CLI twin of
 # presentation-settings.py (officecli SDK); both produce an equivalent
 # presentation-settings.pptx.
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 FILE="$(dirname "$0")/presentation-settings.pptx"
 echo "Building $FILE ..."
 rm -f "$FILE"

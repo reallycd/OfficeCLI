@@ -165,7 +165,8 @@ public partial class PowerPointHandler
     private static List<string> SetRunOrShapeProperties(
         Dictionary<string, string> properties, List<Drawing.Run> runs, Shape shape, OpenXmlPart? part = null,
         bool runContext = false,
-        string? unsupportedContextHint = null)
+        string? unsupportedContextHint = null,
+        ICollection<string>? unrecognizedLatex = null)
     {
         var unsupported = new List<string>();
 
@@ -581,6 +582,38 @@ public partial class PowerPointHandler
                 // `textOutline.color` allow additive Set without overwriting
                 // the other half. Schema order bucket 1 (ln) — ReorderDrawingRunProperties
                 // moves it before solidFill/latin/etc.
+                case "textFillRaw" or "textfillraw":
+                {
+                    // Verbatim <a:blipFill> glyph fill (WordArt picture fill,
+                    // sample10). The referenced ImagePart rides separately via
+                    // add-part image with the pinned rId.
+                    foreach (var run in runs)
+                    {
+                        var rp = run.RunProperties ?? (run.RunProperties = new Drawing.RunProperties());
+                        rp.RemoveAllChildren<Drawing.SolidFill>();
+                        rp.RemoveAllChildren<Drawing.GradientFill>();
+                        rp.RemoveAllChildren<Drawing.BlipFill>();
+                        rp.RemoveAllChildren<Drawing.PatternFill>();
+                        if (!string.IsNullOrWhiteSpace(value))
+                            InsertFillInRunProperties(rp, new Drawing.BlipFill(value));
+                    }
+                    break;
+                }
+
+                case "textOutlineRaw" or "textoutlineraw":
+                {
+                    // Verbatim run <a:ln> — dash / gradient stroke / cap-join
+                    // forms the width:color compound can't express (sample10).
+                    foreach (var run in runs)
+                    {
+                        var rp = run.RunProperties ?? (run.RunProperties = new Drawing.RunProperties());
+                        rp.RemoveAllChildren<Drawing.Outline>();
+                        if (!string.IsNullOrWhiteSpace(value))
+                            rp.PrependChild(new Drawing.Outline(value));
+                    }
+                    break;
+                }
+
                 case "textOutline" or "textoutline":
                 {
                     // "none" / "false" → strip; mirrors text underline=none clearing.
@@ -766,7 +799,7 @@ public partial class PowerPointHandler
                     foreach (var para in shape.TextBody?.Elements<Drawing.Paragraph>() ?? Enumerable.Empty<Drawing.Paragraph>())
                     {
                         var pProps = para.ParagraphProperties ?? (para.ParagraphProperties = new Drawing.ParagraphProperties());
-                        ApplyListStyle(pProps, value);
+                        ApplyListStyle(pProps, value, preserveIndent: properties.ContainsKey("indent") || properties.ContainsKey("marginLeft") || properties.ContainsKey("marginleft") || properties.ContainsKey("marL") || properties.ContainsKey("marl"));
                     }
                     break;
                 }
@@ -961,7 +994,7 @@ public partial class PowerPointHandler
                     }
                     var avLst = prstAdj.GetFirstChild<Drawing.AdjustValueList>()
                         ?? prstAdj.AppendChild(new Drawing.AdjustValueList())!;
-                    ApplyAdjustHandles(avLst, value);
+                    ApplyAdjustHandles(avLst, value, prstAdj.Preset?.Value);
                     break;
                 }
 
@@ -1058,9 +1091,21 @@ public partial class PowerPointHandler
                     if (spPr == null) { unsupported.Add(key); break; }
                     var outline = EnsureOutline(spPr);
                     outline.Width = Core.EmuConverter.ParseLineWidth(value);
-                    EnsureOutlineHasFill(outline);
+                    // styledLine: the emitter signals that a <p:style> raw-set
+                    // will follow and no explicit line colour was dumped — the
+                    // stroke colour comes from lnRef, so injecting the default
+                    // black here would override the theme tint (stress013's
+                    // grey/orange borders replayed black). Mirrors the
+                    // connector styledLine contract.
+                    if (!properties.ContainsKey("styledLine") && !properties.ContainsKey("styledline"))
+                        EnsureOutlineHasFill(outline);
                     break;
                 }
+
+                case "styledline":
+                    // Signal-only key (see linewidth above) — consumed so the
+                    // handler-as-truth tracker doesn't report it unsupported.
+                    break;
 
                 case "line.gradient" or "linegradient":
                 {
@@ -1076,7 +1121,7 @@ public partial class PowerPointHandler
                     outline.RemoveAllChildren<Drawing.SolidFill>();
                     outline.RemoveAllChildren<Drawing.NoFill>();
                     outline.RemoveAllChildren<Drawing.GradientFill>();
-                    var grad = BuildGradientFill(value);
+                    var grad = BuildGradientFill(NormalizeLineGradientSpec(value));
                     // CT_LineProperties schema: fill (solidFill/noFill/gradFill/pattFill) → prstDash → ...
                     var prstDashAnchor = outline.GetFirstChild<Drawing.PresetDash>();
                     if (prstDashAnchor != null)
@@ -1137,6 +1182,13 @@ public partial class PowerPointHandler
                     var spPr = shape.ShapeProperties;
                     if (spPr == null) { unsupported.Add(key); break; }
                     var outline = EnsureOutline(spPr);
+                    // BUGFIX (CompanionInterferenceScanTests): preserve a
+                    // previously-set miter limit when re-affirming lineJoin=miter
+                    // without an inline limit token. Same rebuild-drops-sibling
+                    // family as the autoFit/legend/labelPos fixes — RemoveAllChildren
+                    // + fresh <a:miter> used to wipe the lim attribute set via the
+                    // standalone miterLimit= property.
+                    var prevMiterLimit = outline.GetFirstChild<Drawing.Miter>()?.Limit;
                     outline.RemoveAllChildren<Drawing.Round>();
                     outline.RemoveAllChildren<Drawing.LineJoinBevel>();
                     outline.RemoveAllChildren<Drawing.Miter>();
@@ -1158,7 +1210,7 @@ public partial class PowerPointHandler
                         "bevel" => new Drawing.LineJoinBevel(),
                         "miter" => compoundMiterLimit.HasValue
                             ? new Drawing.Miter { Limit = compoundMiterLimit.Value }
-                            : new Drawing.Miter(),
+                            : (prevMiterLimit != null ? new Drawing.Miter { Limit = prevMiterLimit } : new Drawing.Miter()),
                         _ => throw new ArgumentException($"Invalid 'lineJoin' value: '{joinValue}'. Valid values: round, bevel, miter.")
                     };
                     // CT_LineProperties schema: ... → prstDash → (round|bevel|miter) → headEnd → tailEnd
@@ -1184,6 +1236,10 @@ public partial class PowerPointHandler
                     if (!int.TryParse(value, System.Globalization.NumberStyles.Integer,
                             System.Globalization.CultureInfo.InvariantCulture, out var limVal))
                         throw new ArgumentException($"Invalid 'miterLimit' value: '{value}'. Expected integer (1000ths of a percent, e.g. 800000 = 800%).");
+                    // BUGFIX (NumericBoundaryScanTests): <a:miter lim> is a
+                    // non-negative percentage; a negative value is schema-invalid.
+                    if (limVal < 0)
+                        throw new ArgumentException($"Invalid 'miterLimit' value: '{value}'. Must be >= 0 (1000ths of a percent, e.g. 800000 = 800%).");
                     var outline = EnsureOutline(spPr);
                     var miterEl = outline.GetFirstChild<Drawing.Miter>();
                     if (miterEl == null)
@@ -1273,6 +1329,11 @@ public partial class PowerPointHandler
                     if (spPr == null) { unsupported.Add(key); break; }
                     if (!double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var lnOpacity) || double.IsNaN(lnOpacity) || double.IsInfinity(lnOpacity))
                         throw new ArgumentException($"Invalid 'lineopacity' value: '{value}'. Expected a finite decimal 0.0-1.0 (e.g. 0.5 = 50% opacity).");
+                    // BUGFIX (NumericBoundaryScanTests): enforce the stated 0.0-1.0
+                    // range. Out-of-range values produced an <a:alpha> outside
+                    // [0,100000] → schema-invalid file PowerPoint refuses to open.
+                    if (lnOpacity < 0.0 || lnOpacity > 1.0)
+                        throw new ArgumentException($"Invalid 'lineopacity' value: '{value}'. Expected a decimal in 0.0-1.0 (e.g. 0.5 = 50% opacity).");
                     var outline = EnsureOutline(spPr);
                     var solidFillLn = outline.GetFirstChild<Drawing.SolidFill>();
                     if (solidFillLn == null)
@@ -1554,6 +1615,97 @@ public partial class PowerPointHandler
                     break;
                 }
 
+                case "textwarpraw":
+                {
+                    // Verbatim <a:prstTxWarp> (round-trips the avLst adjust
+                    // values the semantic textwarp= preset-name form loses).
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.RemoveAllChildren<Drawing.PresetTextWarp>();
+                    if (!string.IsNullOrWhiteSpace(value))
+                        bodyPr.InsertAt(new Drawing.PresetTextWarp(value), 0); // schema: first bodyPr child
+                    break;
+                }
+
+                case "textscene3draw":
+                {
+                    // Verbatim <a:scene3d> INSIDE bodyPr — 3D text camera/light
+                    // (distinct from the shape-level scene3d on spPr).
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.RemoveAllChildren<Drawing.Scene3DType>();
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        // Schema order: …autofit, scene3d, sp3d — insert before
+                        // an existing sp3d, else append.
+                        var sp3dSibling = bodyPr.GetFirstChild<Drawing.Shape3DType>();
+                        var scene = new Drawing.Scene3DType(value);
+                        if (sp3dSibling != null) bodyPr.InsertBefore(scene, sp3dSibling);
+                        else bodyPr.AppendChild(scene);
+                    }
+                    break;
+                }
+
+                case "textsp3draw":
+                {
+                    // Verbatim <a:sp3d> INSIDE bodyPr — 3D text extrusion/bevel.
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.RemoveAllChildren<Drawing.Shape3DType>();
+                    if (!string.IsNullOrWhiteSpace(value))
+                        bodyPr.AppendChild(new Drawing.Shape3DType(value));
+                    break;
+                }
+
+                case "vertoverflow":
+                {
+                    // <a:bodyPr vertOverflow="clip|ellipsis|overflow">.
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.VerticalOverflow = value.ToLowerInvariant() switch
+                    {
+                        "clip" => Drawing.TextVerticalOverflowValues.Clip,
+                        "ellipsis" => Drawing.TextVerticalOverflowValues.Ellipsis,
+                        "overflow" => Drawing.TextVerticalOverflowValues.Overflow,
+                        _ => throw new ArgumentException($"Invalid 'vertOverflow' value: '{value}'. Valid values: clip, ellipsis, overflow.")
+                    };
+                    break;
+                }
+
+                case "horzoverflow":
+                {
+                    // <a:bodyPr horzOverflow="clip|overflow">.
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.HorizontalOverflow = value.ToLowerInvariant() switch
+                    {
+                        "clip" => Drawing.TextHorizontalOverflowValues.Clip,
+                        "overflow" => Drawing.TextHorizontalOverflowValues.Overflow,
+                        _ => throw new ArgumentException($"Invalid 'horzOverflow' value: '{value}'. Valid values: clip, overflow.")
+                    };
+                    break;
+                }
+
+                case "anchorctr" or "anchorcenter":
+                {
+                    // <a:bodyPr anchorCtr="0|1"> — horizontal centering of the
+                    // whole text block (distinct from paragraph align).
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.AnchorCenter = IsTruthy(value);
+                    break;
+                }
+
+                case "upright":
+                {
+                    // <a:bodyPr upright="1"> — glyphs stay upright inside a
+                    // rotated text body.
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.UpRight = IsTruthy(value);
+                    break;
+                }
+
                 case "wrap" or "wordwrap":
                 {
                     // Shape-level <a:bodyPr @wrap = "square" | "none">.
@@ -1593,6 +1745,14 @@ public partial class PowerPointHandler
                 {
                     var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
                     if (bodyPr == null) { unsupported.Add(key); break; }
+                    // BUGFIX (CompanionInterferenceScanTests): capture the existing
+                    // normAutofit's scale attributes before removing it, so
+                    // re-affirming the autofit mode (autoFit=normal) doesn't wipe a
+                    // previously-set fontScale / lnSpcReduction. Same rebuild-drops-
+                    // sibling family as the chart legend/labelPos fixes.
+                    var prevNaf = bodyPr.GetFirstChild<Drawing.NormalAutoFit>();
+                    var prevFontScale = prevNaf?.FontScale;
+                    var prevLnSpcReduction = prevNaf?.LineSpaceReduction;
                     bodyPr.RemoveAllChildren<Drawing.NormalAutoFit>();
                     bodyPr.RemoveAllChildren<Drawing.ShapeAutoFit>();
                     bodyPr.RemoveAllChildren<Drawing.NoAutoFit>();
@@ -1602,7 +1762,15 @@ public partial class PowerPointHandler
                         // <a:normAutofit> IS the shrink-text-on-overflow mode; the
                         // optional fontScale/lnSpcReduction attributes carry the
                         // computed shrink ratio (callers may tune via fontScale=).
-                        case "true" or "shrink" or "normal" or "normautofit" or "auto": bodyPr.AppendChild(ApplyNormalAutoFitScale(new Drawing.NormalAutoFit(), properties)); break;
+                        case "true" or "shrink" or "normal" or "normautofit" or "auto":
+                        {
+                            var naf = ApplyNormalAutoFitScale(new Drawing.NormalAutoFit(), properties);
+                            // Carry over the prior scale when this Set didn't supply one.
+                            if (naf.FontScale == null && prevFontScale != null) naf.FontScale = prevFontScale;
+                            if (naf.LineSpaceReduction == null && prevLnSpcReduction != null) naf.LineSpaceReduction = prevLnSpcReduction;
+                            bodyPr.AppendChild(naf);
+                            break;
+                        }
                         case "shape" or "spautofit" or "resize": bodyPr.AppendChild(new Drawing.ShapeAutoFit()); break;
                         case "false" or "none": bodyPr.AppendChild(new Drawing.NoAutoFit()); break;
                         default: throw new ArgumentException($"Invalid autofit value: '{value}'. Valid values: true/shrink/normal, shape/resize, false/none.");
@@ -2208,7 +2376,9 @@ public partial class PowerPointHandler
                     var textBody = shape.TextBody;
                     if (textBody == null) { unsupported.Add(key); break; }
 
-                    var mathContent = FormulaParser.Parse(value);
+                    // R3-fuzz-1: lenient parse (warn + exit 2 + placeholder)
+                    // instead of throwing on a too-deep/unparseable formula.
+                    var mathContent = FormulaParser.ParseLenient(value, unrecognizedLatex);
                     M.OfficeMath oMath = mathContent is M.OfficeMath dm
                         ? dm : new M.OfficeMath(mathContent.CloneNode(true));
                     var mathPara = new M.Paragraph(oMath);
@@ -3752,7 +3922,7 @@ public partial class PowerPointHandler
         var lsEl = firstParaProps?.GetFirstChild<Drawing.LineSpacing>();
         if (lsEl != null)
         {
-            var pct = lsEl.GetFirstChild<Drawing.SpacingPercent>()?.Val?.Value;
+            var pct = lsEl.GetFirstChild<Drawing.SpacingPercent>().PercentVal();
             if (pct.HasValue)
                 lineSpacingMultiplier = pct.Value / 100000.0;
             var pts = lsEl.GetFirstChild<Drawing.SpacingPoints>()?.Val?.Value;

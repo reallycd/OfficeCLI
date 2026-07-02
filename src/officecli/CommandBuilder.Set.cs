@@ -258,8 +258,12 @@ static partial class CommandBuilder
                 _ => null
             };
 
+            // R4-bt-1: an equation mode switch MOVES the element (oMathPara ⇄
+            // oMath), changing its canonical path. Report the NEW resolvable
+            // path so the "Updated …" line points at a path that still resolves.
+            var reportPath = (handler as OfficeCli.Handlers.WordHandler)?.LastSetNewPath ?? path;
             var message = applied.Count > 0
-                ? $"Updated {path}: {string.Join(", ", applied.Select(kv => $"{kv.Key}={kv.Value}"))}"
+                ? $"Updated {reportPath}: {string.Join(", ", applied.Select(kv => $"{kv.Key}={kv.Value}"))}"
                   + (findMatchCount.HasValue ? $" ({findMatchCount.Value} matched)" : "")
                   + (selectorCount > 1 ? $" ({selectorCount} elements matched)" : "")
                 : $"Error: No properties applied to {path}";
@@ -274,9 +278,32 @@ static partial class CommandBuilder
                 if (setSpatialLine != null) setOverlaps = CheckPositionOverlap(handler, path);
             }
 
+            // Unrecognized LaTeX commands/environments from an equation Set
+            // (formula=). Same UX as unsupported_property (warning + JSON
+            // envelope + exit 2); the equation is still written (lenient
+            // accept). CONSISTENCY: mirrors CommandBuilder.Add and
+            // ResidentServer.ExecuteSet.
+            var setUnrecognizedLatex = handler switch
+            {
+                OfficeCli.Handlers.WordHandler wlx => wlx.LastUnrecognizedLatex,
+                OfficeCli.Handlers.PowerPointHandler plx => plx.LastUnrecognizedLatex,
+                _ => null,
+            };
+            bool hasUnrecognizedLatex = setUnrecognizedLatex is { Count: > 0 };
+
             if (json)
             {
                 var allWarnings = new List<OfficeCli.Core.CliWarning>();
+                if (hasUnrecognizedLatex)
+                {
+                    foreach (var tok in setUnrecognizedLatex!)
+                        allWarnings.Add(new OfficeCli.Core.CliWarning
+                        {
+                            Message = $"unrecognized_latex_command: {tok}",
+                            Code = "unrecognized_latex_command",
+                            Suggestion = "Check the command spelling; see https://katex.org/docs/supported.html for supported syntax.",
+                        });
+                }
                 if (findMatchCount is 0)
                 {
                     allWarnings.Add(new OfficeCli.Core.CliWarning
@@ -358,6 +385,9 @@ static partial class CommandBuilder
                     foreach (var w in setWhWarnPlain.LastSetWarnings)
                         Console.Error.WriteLine($"  WARNING: {w}");
                 }
+                if (hasUnrecognizedLatex)
+                    foreach (var tok in setUnrecognizedLatex!)
+                        Console.Error.WriteLine($"  WARNING: unrecognized_latex_command: {tok}");
             }
             NotifyWatch(handler, file.FullName, path);
 
@@ -386,6 +416,7 @@ static partial class CommandBuilder
             }
 
             if (stillUnsupported.Count > 0) return 2;
+            if (hasUnrecognizedLatex) return 2;
             return 0;
         }, json); });
 

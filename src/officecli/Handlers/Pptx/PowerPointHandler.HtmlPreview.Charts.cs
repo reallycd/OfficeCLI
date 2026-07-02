@@ -57,7 +57,7 @@ public partial class PowerPointHandler
                 var cxChart = extPart.ChartSpace?
                     .GetFirstChild<DocumentFormat.OpenXml.Office2016.Drawing.ChartDrawing.Chart>();
                 if (cxChart == null) return;
-                info = ChartSvgRenderer.ExtractCxChartInfo(cxChart);
+                info = ChartSvgRenderer.ExtractCxChartInfo(cxChart, themeColors);
                 chart = null;
                 plotArea = null;
             }
@@ -123,6 +123,12 @@ public partial class PowerPointHandler
 
         // Container with chart background
         var bgStyle = info.ChartFillColor != null ? $"background:#{info.ChartFillColor};" : "background:transparent;";
+        // Chart-area border (<c:chartSpace><c:spPr><a:ln>). No a:ln => no border.
+        if (info.ChartBorderColor != null)
+        {
+            var cbW = info.ChartBorderWidthEmu.HasValue ? info.ChartBorderWidthEmu.Value / 12700.0 * 4.0 / 3.0 : 1.0;
+            bgStyle += $"border:{cbW:0.##}px solid {ChartSvgRenderer.CssHexColor(info.ChartBorderColor)};";
+        }
         sb.AppendLine($"    <div class=\"shape\"{dataPathAttr} style=\"left:{x}pt;top:{y}pt;width:{w}pt;height:{h}pt;{bgStyle}display:flex;flex-direction:column;overflow:hidden\">");
 
         // Title — honor the chart's own title run color when present (raw OOXML
@@ -130,7 +136,9 @@ public partial class PowerPointHandler
         if (!string.IsNullOrEmpty(info.Title))
         {
             var titleColor = info.TitleFontColor != null ? ChartSvgRenderer.CssHexColor(info.TitleFontColor) : chartTextColor;
-            sb.AppendLine($"      <div style=\"text-align:center;font-size:{info.TitleFontSize};font-weight:bold;padding:4px;flex-shrink:0;color:{titleColor}\">{ChartSvgRenderer.HtmlEncode(info.Title)}</div>");
+            double.TryParse(info.TitleFontSize.Replace("pt", ""), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var titlePt);
+            var titleInner = ChartSvgRenderer.BuildTitleInnerHtml(info, titleColor, info.TitleBold, titlePt > 0 ? titlePt : 14);
+            sb.AppendLine($"      <div style=\"text-align:center;font-size:{info.TitleFontSize};font-weight:{(info.TitleBold ? "bold" : "normal")};padding:4px;flex-shrink:0;color:{titleColor}\">{titleInner}</div>");
         }
 
         // Legend position drives the plot+legend layout, mirroring the Word/Excel

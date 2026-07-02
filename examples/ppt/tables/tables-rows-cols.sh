@@ -4,8 +4,9 @@
 # per-row height (set row.height), per-column width (set col.width),
 # column seed text, gridSpan (horizontal merge), merge.down (vertical merge).
 
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 DIR="$(dirname "$0")"
 PPTX="$DIR/tables-rows-cols.pptx"
 
@@ -19,7 +20,7 @@ officecli open "$PPTX"
 #   RIGHT B. headerFill/bodyFill → per-cell stamp, does NOT follow; manual top-up needed.
 # Placed side-by-side (each 6in wide, half the 13.33in widescreen slide) so the
 # visual contrast is immediate.
-officecli add "$PPTX" /presentation/slides --type slide
+officecli add "$PPTX" / --type slide
 officecli add "$PPTX" '/slide[1]' --type shape \
     --prop text="Grow a Table — Theme vs Per-Cell Stamp" --prop size=28 --prop bold=true \
     --prop x=0.5in --prop y=0.3in --prop width=12in --prop height=0.6in
@@ -95,7 +96,7 @@ for r in 2 3 4; do
 done
 
 # --- Slide 2: Per-row heights & per-column widths ---
-officecli add "$PPTX" /presentation/slides --type slide
+officecli add "$PPTX" / --type slide
 officecli add "$PPTX" '/slide[2]' --type shape \
     --prop text="Per-Row Height + Per-Column Width" --prop size=28 --prop bold=true \
     --prop x=0.5in --prop y=0.3in --prop width=12in --prop height=0.6in
@@ -142,7 +143,7 @@ officecli set "$PPTX" '/slide[2]/table[1]/tr[4]/tc[3]' --prop text="Tallest row 
 officecli set "$PPTX" '/slide[2]/table[1]/tr[4]/tc[4]' --prop text="z"
 
 # --- Slide 3: Uniform row height via table-level rowHeight ---
-officecli add "$PPTX" /presentation/slides --type slide
+officecli add "$PPTX" / --type slide
 officecli add "$PPTX" '/slide[3]' --type shape \
     --prop text="Uniform rowHeight (table-level)" --prop size=28 --prop bold=true \
     --prop x=0.5in --prop y=0.3in --prop width=12in --prop height=0.6in
@@ -161,7 +162,7 @@ officecli add "$PPTX" '/slide[3]' --type table \
 # Visual merging is done in-place via gridSpan (horizontal) or merge.down
 # (vertical, wraps rowSpan + vMerge). Two tables on this slide show the
 # two axes of merging.
-officecli add "$PPTX" /presentation/slides --type slide
+officecli add "$PPTX" / --type slide
 officecli add "$PPTX" '/slide[4]' --type shape \
     --prop text="Cell Merging — gridSpan (horizontal) + merge.down (vertical)" \
     --prop size=28 --prop bold=true \

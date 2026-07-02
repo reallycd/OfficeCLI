@@ -283,7 +283,7 @@ officecli add paragraph-formatting.docx /body --type paragraph \
 
 ## Paragraph Borders (pBdr)
 
-Whole-box border shorthand, accepting `style`, `style;size;color`, or `style;size;color;space`.
+Whole-box shorthand (`border=`) sets all four sides at once, accepting `style`, `style;size;color`, or `style;size;color;space`. Per-side keys (`border.top`, `border.bottom`, `border.left`, `border.right`) take the same value and can be mixed for a partial box (e.g. a rule above and below only).
 
 ```bash
 officecli add paragraph-formatting.docx /body --type paragraph \
@@ -291,9 +291,12 @@ officecli add paragraph-formatting.docx /body --type paragraph \
 officecli add paragraph-formatting.docx /body --type paragraph \
   --prop "text=Red 1pt box (style;size;color)" \
   --prop "border=single;8;FF0000"
+officecli add paragraph-formatting.docx /body --type paragraph \
+  --prop "text=Per-side: top + bottom only (rule above and below)" \
+  --prop "border.top=single;8;0070C0" --prop "border.bottom=single;8;0070C0"
 ```
 
-**Features:** `border` (whole-box paragraph border; format `style` or `style;size;color` or `style;size;color;space`; style values: single/double/thick/dotted/dashed/dotDash/…)
+**Features:** `border` (whole-box paragraph border; format `style` or `style;size;color` or `style;size;color;space`; style values: single/double/thick/dotted/dashed/dotDash/…), `border.top`/`border.bottom`/`border.left`/`border.right` (per-side, same value format)
 
 ## Vertical Text Alignment
 

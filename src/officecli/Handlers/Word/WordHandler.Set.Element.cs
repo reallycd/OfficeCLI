@@ -307,6 +307,24 @@ public partial class WordHandler
                     }
                     else unsupported.Add(key);
                     break;
+                case "decorative":
+                    // Accessibility flag stored as an adec:decorative docPr extension.
+                    // Symmetric with `alt` (both operate on <wp:docPr>).
+                    var drawingDec = run.GetFirstChild<Drawing>();
+                    if (drawingDec != null)
+                    {
+                        var docPropsDec = drawingDec.Descendants<DW.DocProperties>().FirstOrDefault();
+                        if (docPropsDec != null)
+                        {
+                            if (IsTruthy(value)) SetPictureDecorative(docPropsDec);
+                            else docPropsDec.GetFirstChild<A.NonVisualDrawingPropertiesExtensionList>()?
+                                .Elements<A.Extension>()
+                                .Where(e => string.Equals(e.Uri?.Value, DecorativeExtUri, StringComparison.OrdinalIgnoreCase))
+                                .ToList().ForEach(e => e.Remove());
+                        }
+                    }
+                    else unsupported.Add(key);
+                    break;
                 case "width":
                 {
                     var drawingW = run.GetFirstChild<Drawing>();
@@ -666,7 +684,7 @@ public partial class WordHandler
                 case "formula":
                 {
                     // Replace this run with an inline oMath in the same position
-                    var mathContent = FormulaParser.Parse(value);
+                    var mathContent = FormulaParser.ParseLenient(value, LastUnrecognizedLatex);
                     M.OfficeMath oMath = mathContent is M.OfficeMath dm
                         ? dm : new M.OfficeMath(mathContent.CloneNode(true));
                     run.InsertAfterSelf(oMath);
@@ -914,7 +932,7 @@ public partial class WordHandler
                     // Clear existing oMath children and rebuild from new formula
                     foreach (var child in mPara.ChildElements.ToList())
                         child.Remove();
-                    var mathContent = FormulaParser.Parse(value);
+                    var mathContent = FormulaParser.ParseLenient(value, LastUnrecognizedLatex);
                     M.OfficeMath oMath = mathContent is M.OfficeMath dm
                         ? dm : new M.OfficeMath(mathContent.CloneNode(true));
                     mPara.AppendChild(oMath);
@@ -933,8 +951,16 @@ public partial class WordHandler
                         if (hostPara != null && inner != null)
                         {
                             var clone = (M.OfficeMath)inner.CloneNode(true);
-                            hostPara.InsertBefore(clone, mPara);
+                            // Insert into mPara's ACTUAL parent — for a hyperlink-
+                            // nested equation that parent is the w:hyperlink, not
+                            // hostPara, so hostPara.InsertBefore threw "not a child
+                            // of this element". Non-hyperlink: Parent == hostPara.
+                            mPara.Parent!.InsertBefore(clone, mPara);
                             mPara.Remove();
+                            // R4-bt-1: the equation MOVED (oMathPara → bare
+                            // oMath). Report the new resolvable path so the CLI
+                            // "Updated …" line points at a path that resolves.
+                            LastSetNewPath = ComputeMathElementPath(clone);
                         }
                     }
                     else if (modeNorm == "display")
@@ -956,6 +982,78 @@ public partial class WordHandler
         }
 
         var affectedPara = mPara.Ancestors<Paragraph>().FirstOrDefault();
+        if (affectedPara != null)
+            affectedPara.TextId = GenerateParaId();
+        SaveDoc();
+        return unsupported;
+    }
+
+    // An INLINE equation resolves to a bare m:oMath sitting directly inside a
+    // w:p (no m:oMathPara wrapper). The display form is m:oMathPara wrapping
+    // m:oMath; SetElementMPara owns the m:oMathPara (display) case, so this
+    // helper owns the inline case. BUG-BT3: a `set mode=display` on an inline
+    // equation previously fell through SetElement with no matching arm,
+    // returning an empty unsupported list — the CLI printed "Updated … exit 0"
+    // while writing nothing (a silent no-op). Implement inline→display by
+    // wrapping the m:oMath in an m:oMathPara in place.
+    private List<string> SetElementOMath(M.OfficeMath oMath, Dictionary<string, string> properties)
+    {
+        var unsupported = new List<string>();
+        foreach (var (key, value) in properties)
+        {
+            var k = key.ToLowerInvariant();
+            switch (k)
+            {
+                case "formula":
+                {
+                    // Rebuild the equation contents from the new formula, keeping
+                    // it inline (mirrors the run-level formula set path).
+                    foreach (var child in oMath.ChildElements.ToList())
+                        child.Remove();
+                    var mathContent = FormulaParser.ParseLenient(value, LastUnrecognizedLatex);
+                    if (mathContent is M.OfficeMath parsed)
+                        foreach (var c in parsed.ChildElements.ToList())
+                            oMath.AppendChild(c.CloneNode(true));
+                    else
+                        oMath.AppendChild(mathContent.CloneNode(true));
+                    break;
+                }
+                case "mode":
+                {
+                    var modeNorm = value.ToLowerInvariant();
+                    if (modeNorm == "display")
+                    {
+                        // Wrap the inline m:oMath in an m:oMathPara so it renders
+                        // as a centered display block. m:oMathPara is the only
+                        // legal parent that gives display placement.
+                        var mPara = new M.Paragraph();
+                        oMath.InsertBeforeSelf(mPara);
+                        oMath.Remove();
+                        mPara.AppendChild(oMath);
+                        // R4-bt-1: the equation MOVED (bare oMath → oMathPara).
+                        // Report the new resolvable path (the wrapping
+                        // m:oMathPara is the new target).
+                        LastSetNewPath = ComputeMathElementPath(mPara);
+                    }
+                    else if (modeNorm == "inline")
+                    {
+                        // Already inline — no-op.
+                    }
+                    else
+                    {
+                        unsupported.Add($"mode (valid: inline, display)");
+                    }
+                    break;
+                }
+                default:
+                    unsupported.Add(unsupported.Count == 0
+                        ? $"{key} (valid equation props: formula, mode)"
+                        : key);
+                    break;
+            }
+        }
+
+        var affectedPara = oMath.Ancestors<Paragraph>().FirstOrDefault();
         if (affectedPara != null)
             affectedPara.TextId = GenerateParaId();
         SaveDoc();
@@ -1108,7 +1206,7 @@ public partial class WordHandler
                     foreach (var child in para.ChildElements
                         .Where(c => c is not ParagraphProperties).ToList())
                         child.Remove();
-                    var mathContent = FormulaParser.Parse(value);
+                    var mathContent = FormulaParser.ParseLenient(value, LastUnrecognizedLatex);
                     M.OfficeMath oMath = mathContent is M.OfficeMath dm
                         ? dm : new M.OfficeMath(mathContent.CloneNode(true));
                     para.AppendChild(new M.Paragraph(oMath));

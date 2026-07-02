@@ -210,7 +210,7 @@ public partial class PowerPointHandler
             sb.AppendLine(">");
 
             // Render slide elements + inherited layout placeholders
-            RenderLayoutPlaceholders(sb, slidePart, slideColors);
+            RenderLayoutPlaceholders(sb, slidePart, slideColors, slideNum);
             RenderSlideElements(sb, slidePart, slideNum, slideWidthEmu, slideHeightEmu, slideColors);
 
             sb.AppendLine("    </div>");
@@ -318,7 +318,7 @@ public partial class PowerPointHandler
             sb.Append($" style=\"{string.Join("", slideStyles)}\"");
         sb.AppendLine(">");
 
-        RenderLayoutPlaceholders(sb, slidePart, slideColors);
+        RenderLayoutPlaceholders(sb, slidePart, slideColors, slideNum);
         RenderSlideElements(sb, slidePart, slideNum, slideWidthEmu, slideHeightEmu, slideColors);
 
         sb.AppendLine("    </div>");
@@ -426,30 +426,75 @@ public partial class PowerPointHandler
     private string GetSlideBackgroundCss(SlidePart slidePart, Dictionary<string, string> themeColors)
     {
         var slide = GetSlide(slidePart);
-        var bgPr = slide.CommonSlideData?.Background?.BackgroundProperties;
-        if (bgPr == null)
-        {
-            // Check slide layout and master for inherited background
-            var layoutBg = slidePart.SlideLayoutPart?.SlideLayout?.CommonSlideData?.Background?.BackgroundProperties;
-            var masterBg = slidePart.SlideLayoutPart?.SlideMasterPart?.SlideMaster?.CommonSlideData?.Background?.BackgroundProperties;
-            bgPr = layoutBg ?? masterBg;
-        }
-        if (bgPr == null)
-        {
-            // R4-3: a slide can style its background via <p:bgRef> (a theme
-            // background-fill-style index + a schemeClr) instead of explicit
-            // bgPr. bgPr is null in that case, so resolve the bgRef's scheme
-            // color against the theme map (same resolver the chart series use)
-            // and paint it; previously this fell through to "" → white.
-            var bgRef = slide.CommonSlideData?.Background?.GetFirstChild<BackgroundStyleReference>()
-                ?? slidePart.SlideLayoutPart?.SlideLayout?.CommonSlideData?.Background?.GetFirstChild<BackgroundStyleReference>()
-                ?? slidePart.SlideLayoutPart?.SlideMasterPart?.SlideMaster?.CommonSlideData?.Background?.GetFirstChild<BackgroundStyleReference>();
-            var bgRefColor = bgRef != null ? ResolveStyleMatrixRefColor(bgRef, themeColors) : null;
-            if (bgRefColor != null) return $"background:{bgRefColor};";
-            return "";
-        }
 
-        return BackgroundPropertiesToCss(bgPr, slidePart, themeColors);
+        // R40-BG2: per OOXML, a slide's OWN <p:bg> (whether <p:bgPr> or
+        // <p:bgRef>) always wins over inherited layout/master backgrounds.
+        // Resolve each level top-down; at every level "bgPr OR bgRef present
+        // wins before descending". Previously bgPr was collected across all
+        // three levels first, so a master bgPr could shadow the slide's own
+        // bgRef.
+        var slideCss = LevelBackgroundCss(slide.CommonSlideData?.Background, slidePart, themeColors);
+        if (slideCss != null) return slideCss;
+
+        // Image/blip backgrounds inherited from the layout/master register their
+        // r:embed relationship in the LAYOUT/MASTER part, not the slide part, so
+        // the blip must be resolved against the owning part (else GetPartById throws
+        // and the background is silently dropped).
+        var layoutCss = LevelBackgroundCss(
+            slidePart.SlideLayoutPart?.SlideLayout?.CommonSlideData?.Background,
+            (OpenXmlPart?)slidePart.SlideLayoutPart ?? slidePart, themeColors);
+        if (layoutCss != null) return layoutCss;
+
+        var masterCss = LevelBackgroundCss(
+            slidePart.SlideLayoutPart?.SlideMasterPart?.SlideMaster?.CommonSlideData?.Background,
+            (OpenXmlPart?)slidePart.SlideLayoutPart?.SlideMasterPart ?? slidePart, themeColors);
+        if (masterCss != null) return masterCss;
+
+        return "";
+    }
+
+    // R40-BG2: resolve a single level's background. At each level the explicit
+    // <p:bgPr> wins; otherwise a <p:bgRef> (theme background-fill-style index +
+    // schemeClr) is resolved against the theme map. Returns null when this level
+    // has no background at all, so the caller can descend to the next level.
+    private string? LevelBackgroundCss(Background? bg, OpenXmlPart part, Dictionary<string, string> themeColors)
+    {
+        if (bg == null) return null;
+
+        var bgPr = bg.BackgroundProperties;
+        if (bgPr != null)
+            return BackgroundPropertiesToCss(bgPr, part, themeColors);
+
+        // R4-3: a level can style its background via <p:bgRef> instead of
+        // explicit bgPr. Resolve the bgRef's scheme color against the theme map.
+        var bgRef = bg.GetFirstChild<BackgroundStyleReference>();
+        if (bgRef != null)
+        {
+            // The bgRef idx selects an entry in the theme's <a:bgFillStyleLst>
+            // (idx 1001..1003 -> entries 0..2). When that entry is a GRADIENT whose
+            // stops reference phClr, the background is a tinted theme gradient — not a
+            // flat color. Inject phClr = the bgRef's resolved color and emit the
+            // gradient, exactly like shape fillRef (GetStyleFillRefCss). Previously the
+            // idx was ignored, so every themed gradient background rendered as a solid.
+            var idx = (int)(bgRef.Index?.Value ?? 0);
+            var bgFill = idx >= 1001
+                ? ResolveFormatScheme(part)?.BackgroundFillStyleList?.ChildElements
+                    .OfType<OpenXmlElement>().ElementAtOrDefault(idx - 1001)
+                : null;
+            var bgRefColor = ResolveStyleMatrixRefColor(bgRef, themeColors);
+            if (bgFill is Drawing.GradientFill gf)
+            {
+                var phHex = bgRefColor != null && bgRefColor.StartsWith('#') ? bgRefColor[1..] : null;
+                var patched = phHex != null
+                    ? new Dictionary<string, string>(themeColors) { ["phClr"] = phHex }
+                    : themeColors;
+                var css = GradientToCss(gf, patched);
+                if (!string.IsNullOrEmpty(css) && css != "transparent")
+                    return $"background:{css};";
+            }
+            if (bgRefColor != null) return $"background:{bgRefColor};";
+        }
+        return null;
     }
 
     // R4-3: resolve a <p:bgRef>/<a:*Ref> style-matrix reference's color. The
@@ -463,6 +508,11 @@ public partial class PowerPointHandler
         if (schemeColor?.Val?.HasValue == true)
         {
             var schemeName = schemeColor.Val!.InnerText;
+            // R40-BG1: in a bgRef context, <a:schemeClr val="phClr"/> means
+            // "the theme's background anchor" = lt1 (bg1). phClr is never in the
+            // theme color map, so map it to lt1 before lookup (invisible on the
+            // default white-bg1 theme, wrong color on non-white-bg1 themes).
+            if (schemeName == "phClr") schemeName = "lt1";
             if (schemeName != null && themeColors.TryGetValue(schemeName, out var themeHex))
                 return ApplyColorTransforms(themeHex, schemeColor);
         }
@@ -491,27 +541,32 @@ public partial class PowerPointHandler
             var dataUri = BlipToDataUri(blipFill, part);
             if (dataUri != null)
             {
-                // R4-4: honor <a:tile> — repeat at native size rather than cover.
-                var css = blipFill.GetFirstChild<Drawing.Tile>() != null
-                    ? $"background:url('{dataUri}') repeat;background-size:auto;"
-                    : $"background:url('{dataUri}') center/cover no-repeat;";
-                // R59-5: surface <a:alphaModFix amt="..."/> as CSS opacity so
-                // the HTML preview matches PowerPoint's faded image bg render.
-                // amt is 0..100000 (100000 = opaque). Skip when opaque/default
-                // to keep the emitted CSS minimal.
+                // <a:alphaModFix amt="..."/>: PowerPoint composites the background
+                // image at this alpha over the slide's (white) base — fading ONLY the
+                // background. amt is 0..100000 (100000 = opaque). Emitting `opacity` on
+                // the slide div faded EVERY shape/text on the slide (CSS opacity applies
+                // to the whole subtree). Reproduce the blend with a translucent-white
+                // overlay layer painted over the image: (1-alpha) white over the image ==
+                // alpha*image + (1-alpha)*white, exactly PowerPoint's compositing, while
+                // leaving all shapes fully opaque. (.slide's base is white.)
                 var alphaMod = blipFill.GetFirstChild<Drawing.Blip>()?.GetFirstChild<Drawing.AlphaModulationFixed>();
-                if (alphaMod?.Amount?.HasValue == true)
+                var overlay = "";
+                if (alphaMod?.Amount?.HasValue == true && alphaMod.Amount.Value < 100000)
                 {
-                    var amt = alphaMod.Amount.Value;
-                    if (amt < 100000)
-                    {
-                        var opacity = amt / 100000.0;
-                        css += $"opacity:{opacity:0.##};";
-                    }
+                    var ov = 1.0 - alphaMod.Amount.Value / 100000.0;
+                    overlay = $"linear-gradient(rgba(255,255,255,{ov:0.##}),rgba(255,255,255,{ov:0.##})),";
                 }
-                return css;
+                // R4-4: honor <a:tile> — repeat at native size rather than cover.
+                return blipFill.GetFirstChild<Drawing.Tile>() != null
+                    ? $"background:{overlay}url('{dataUri}') repeat;background-size:auto;"
+                    : $"background:{overlay}url('{dataUri}') center/cover no-repeat;";
             }
         }
+
+        // Pattern slide backgrounds (third-party files) — mirror shape pattFill.
+        var pattFill = bgPr.GetFirstChild<Drawing.PatternFill>();
+        if (pattFill != null)
+            return PatternFillToCss(pattFill, themeColors) + ";";
 
         return "";
     }
@@ -609,7 +664,7 @@ public partial class PowerPointHandler
         // Per-element-type positional counters used to build the data-path of each
         // top-level element. We prefer @id= when the element has a cNvPr id (stable
         // across edits), and fall back to positional [N] otherwise.
-        int shapeIdx = 0, picIdx = 0, tableIdx = 0, chartIdx = 0, cxnIdx = 0, groupIdx = 0, oleIdx = 0, model3dIdx = 0;
+        int shapeIdx = 0, picIdx = 0, tableIdx = 0, chartIdx = 0, cxnIdx = 0, groupIdx = 0, oleIdx = 0, model3dIdx = 0, smartartIdx = 0;
         string PathFor(string typeName, OpenXmlElement el, int positional)
             => $"/slide[{slideNum}]/{BuildElementPathSegment(typeName, el, positional)}";
 
@@ -620,7 +675,7 @@ public partial class PowerPointHandler
             {
                 case Shape shape:
                     shapeIdx++;
-                    RenderShape(sb, shape, slidePart, themeColors, dataPath: PathFor("shape", shape, shapeIdx));
+                    RenderShape(sb, shape, slidePart, themeColors, dataPath: PathFor("shape", shape, shapeIdx), slideNumber: slideNum);
                     break;
                 case Picture pic:
                     picIdx++;
@@ -630,7 +685,7 @@ public partial class PowerPointHandler
                     if (gf.Descendants<Drawing.Table>().Any())
                     {
                         tableIdx++;
-                        RenderTable(sb, gf, themeColors, dataPath: PathFor("table", gf, tableIdx));
+                        RenderTable(sb, gf, themeColors, dataPath: PathFor("table", gf, tableIdx), part: slidePart);
                     }
                     else if (gf.Descendants().Any(e => e.LocalName == "chart" && e.NamespaceUri.Contains("chart")))
                     {
@@ -642,10 +697,17 @@ public partial class PowerPointHandler
                         oleIdx++;
                         RenderOlePlaceholder(sb, gf, slidePart, dataPath: PathFor("ole", gf, oleIdx));
                     }
+                    else if (gf.Descendants().Any(e =>
+                                 (e.LocalName == "graphicData" && (e.GetAttributes().Any(a => a.LocalName == "uri" && a.Value != null && a.Value.Contains("diagram"))))
+                                 || (e.LocalName == "relIds" && e.NamespaceUri.Contains("diagram"))))
+                    {
+                        smartartIdx++;
+                        RenderSmartArt(sb, gf, slidePart, themeColors, dataPath: PathFor("smartart", gf, smartartIdx));
+                    }
                     break;
                 case ConnectionShape cxn:
                     cxnIdx++;
-                    RenderConnector(sb, cxn, themeColors, dataPath: PathFor("connector", cxn, cxnIdx));
+                    RenderConnector(sb, cxn, themeColors, dataPath: PathFor("connector", cxn, cxnIdx), part: slidePart);
                     break;
                 case GroupShape grp:
                     groupIdx++;
@@ -675,7 +737,7 @@ public partial class PowerPointHandler
     /// overridden by the slide itself. This includes footers, slide numbers,
     /// date/time, logos, and decorative shapes from the layout/master.
     /// </summary>
-    private void RenderLayoutPlaceholders(StringBuilder sb, SlidePart slidePart, Dictionary<string, string> themeColors)
+    private void RenderLayoutPlaceholders(StringBuilder sb, SlidePart slidePart, Dictionary<string, string> themeColors, int slideNum = 1)
     {
         // Collect placeholder identifiers already present on the slide
         var slidePlaceholders = new HashSet<string>();
@@ -694,7 +756,7 @@ public partial class PowerPointHandler
         // Render shapes from SlideLayout (higher priority)
         var layoutPart = slidePart.SlideLayoutPart;
         if (layoutPart != null)
-            RenderInheritedShapes(sb, layoutPart.SlideLayout?.CommonSlideData?.ShapeTree, layoutPart, slidePlaceholders, themeColors);
+            RenderInheritedShapes(sb, layoutPart.SlideLayout?.CommonSlideData?.ShapeTree, layoutPart, slidePlaceholders, themeColors, slideNum);
 
         // Render shapes from SlideMaster (lower priority, only if not in layout).
         // R12-2: <p:sld showMasterSp="0"> suppresses master-level decoration.
@@ -703,7 +765,7 @@ public partial class PowerPointHandler
         var showMasterSp = GetSlide(slidePart).ShowMasterShapes?.Value ?? true;
         var masterPart = layoutPart?.SlideMasterPart;
         if (masterPart != null && showMasterSp)
-            RenderInheritedShapes(sb, masterPart.SlideMaster?.CommonSlideData?.ShapeTree, masterPart, slidePlaceholders, themeColors);
+            RenderInheritedShapes(sb, masterPart.SlideMaster?.CommonSlideData?.ShapeTree, masterPart, slidePlaceholders, themeColors, slideNum);
     }
 
     // RenderInheritedShapes — render the layout/master shapes that the slide
@@ -723,7 +785,7 @@ public partial class PowerPointHandler
     //      placeholder authored without an explicit type leaked its prompt
     //      text onto the slide.
     private void RenderInheritedShapes(StringBuilder sb, ShapeTree? shapeTree, OpenXmlPart part,
-        HashSet<string> skipIndices, Dictionary<string, string> themeColors)
+        HashSet<string> skipIndices, Dictionary<string, string> themeColors, int slideNum = 1)
     {
         if (shapeTree == null) return;
 
@@ -732,7 +794,7 @@ public partial class PowerPointHandler
             switch (element)
             {
                 case Shape shape:
-                    RenderInheritedShape(sb, shape, part, skipIndices, themeColors);
+                    RenderInheritedShape(sb, shape, part, skipIndices, themeColors, slideNum);
                     break;
                 // R12-1: PowerPoint renders group/connector/graphic-frame
                 // decoration from the layout/master tree too. The old code
@@ -742,7 +804,7 @@ public partial class PowerPointHandler
                     RenderGroup(sb, grp, part, themeColors);
                     break;
                 case ConnectionShape cxn:
-                    RenderConnector(sb, cxn, themeColors);
+                    RenderConnector(sb, cxn, themeColors, part: part);
                     break;
                 case GraphicFrame gf:
                     // Only tables are cheap to inherit here; RenderChart needs a
@@ -750,7 +812,7 @@ public partial class PowerPointHandler
                     // layout/master tree doesn't provide. Layout/master charts
                     // are rare, so leave them out (R12-1 scope).
                     if (gf.Descendants<Drawing.Table>().Any())
-                        RenderTable(sb, gf, themeColors);
+                        RenderTable(sb, gf, themeColors, part: part);
                     break;
             }
         }
@@ -763,7 +825,7 @@ public partial class PowerPointHandler
     }
 
     private void RenderInheritedShape(StringBuilder sb, Shape shape, OpenXmlPart part,
-        HashSet<string> skipIndices, Dictionary<string, string> themeColors)
+        HashSet<string> skipIndices, Dictionary<string, string> themeColors, int slideNum = 1)
     {
         var ph = shape.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
             ?.GetFirstChild<PlaceholderShape>();
@@ -788,15 +850,35 @@ public partial class PowerPointHandler
         // it as empty: a content placeholder with only prompt text and no
         // fill/outline isn't worth an empty box on the slide.
         var text = suppressText ? "" : GetShapeText(shape);
-        var hasFill = shape.ShapeProperties?.GetFirstChild<Drawing.SolidFill>() != null
-            || shape.ShapeProperties?.GetFirstChild<Drawing.GradientFill>() != null
-            || shape.ShapeProperties?.GetFirstChild<Drawing.BlipFill>() != null;
-        var hasLine = shape.ShapeProperties?.GetFirstChild<Drawing.Outline>()?.GetFirstChild<Drawing.SolidFill>() != null;
+        var spPr = shape.ShapeProperties;
+        var hasFill = spPr?.GetFirstChild<Drawing.SolidFill>() != null
+            || spPr?.GetFirstChild<Drawing.GradientFill>() != null
+            || spPr?.GetFirstChild<Drawing.BlipFill>() != null
+            || spPr?.GetFirstChild<Drawing.PatternFill>() != null;
+        // A visible outline needs a fill (solid OR gradient) — a width-only <a:ln w="X"/>
+        // with no fill child renders NOTHING in PowerPoint (verified), so it must NOT
+        // count as a line here. Previously only SolidFill was checked, so a layout/master
+        // decoration whose only outline was a GRADIENT was silently dropped while
+        // RenderShape/ParseOutline would have drawn it.
+        var ln = spPr?.GetFirstChild<Drawing.Outline>();
+        var hasLine = ln != null && ln.GetFirstChild<Drawing.NoFill>() == null
+            && (ln.GetFirstChild<Drawing.SolidFill>() != null
+                || ln.GetFirstChild<Drawing.GradientFill>() != null);
+
+        // Style-matrix fill/line (<p:style>/<a:fillRef>/<a:lnRef>) also make the shape
+        // visible — RenderShape falls back to GetStyleFillRefCss/GetStyleLineRefCss when
+        // spPr carries no fill/outline. A layout/master decoration styled only via the
+        // theme shape gallery (fillRef accent, empty spPr) was dropped by this guard
+        // while RenderShape would have drawn the themed fill. Mirror that fallback here.
+        if (!hasFill && !string.IsNullOrEmpty(GetStyleFillRefCss(shape.ShapeStyle, part, themeColors)))
+            hasFill = true;
+        if (!hasLine && !string.IsNullOrEmpty(GetStyleLineRefCss(shape.ShapeStyle, part, themeColors)))
+            hasLine = true;
 
         if (string.IsNullOrWhiteSpace(text) && !hasFill && !hasLine)
             return;
 
-        RenderShape(sb, shape, part, themeColors, suppressText: suppressText);
+        RenderShape(sb, shape, part, themeColors, suppressText: suppressText, slideNumber: slideNum);
     }
 
     private static bool IsLayoutSuppliedTextPlaceholder(PlaceholderValues type) =>

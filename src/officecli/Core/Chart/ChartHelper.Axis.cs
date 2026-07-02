@@ -92,9 +92,22 @@ internal static partial class ChartHelper
         var deleted = deleteEl?.Val?.Value == true;
         node.Format["visible"] = (!deleted).ToString().ToLowerInvariant();
 
-        // Scaling min/max — only meaningful on value axes
+        // Date-axis base time unit (days/months/years) — drives the tick
+        // spacing of the plotted range; a years-based source replayed as
+        // days renders hairline bars.
+        if (axis is C.DateAxis dateAxEl)
+        {
+            var btu = dateAxEl.GetFirstChild<C.BaseTimeUnit>()?.Val;
+            if (btu?.HasValue == true)
+                node.Format["baseTimeUnit"] = btu.InnerText;
+        }
+
+        // Scaling min/max — meaningful on value axes and on a DateAxis
+        // (its min/max are date serials that window the plotted range).
         if (role.Equals("value", StringComparison.OrdinalIgnoreCase)
-            || role.Equals("value2", StringComparison.OrdinalIgnoreCase))
+            || role.Equals("value2", StringComparison.OrdinalIgnoreCase)
+            || (role.Equals("category", StringComparison.OrdinalIgnoreCase)
+                && axis is C.DateAxis))
         {
             var scaling = axis.GetFirstChild<C.Scaling>();
             var minEl = scaling?.GetFirstChild<C.MinAxisValue>();
@@ -224,12 +237,18 @@ internal static partial class ChartHelper
                     // always targets the primary value axis. For role=value2 we must
                     // write to the secondary axis directly to mirror BuildAxisNode's
                     // Skip(1) read path. Same for max/crosses/crossesat below.
-                    if (normalizedRole == "value2" && targetAxis is OpenXmlCompositeElement minAx2)
+                    // Category (date) and series axes must also write directly:
+                    // the legacy `axismin` fallback targets the primary VALUE
+                    // axis, which would clobber the wrong scaling.
+                    if (normalizedRole is "value2" or "category" or "series"
+                        && targetAxis is OpenXmlCompositeElement minAx2)
                     {
                         var scaling = minAx2.GetFirstChild<C.Scaling>();
                         if (scaling != null)
                         {
                             scaling.RemoveAllChildren<C.MinAxisValue>();
+                            // CT_Scaling order: logBase, orientation, max, min —
+                            // min is last, so append is always valid.
                             scaling.AppendChild(new C.MinAxisValue { Val = ParseHelpers.SafeParseDouble(value, "min") });
                         }
                         directlyHandled.Add(key);
@@ -241,7 +260,8 @@ internal static partial class ChartHelper
                     break;
 
                 case "max":
-                    if (normalizedRole == "value2" && targetAxis is OpenXmlCompositeElement maxAx2)
+                    if (normalizedRole is "value2" or "category" or "series"
+                        && targetAxis is OpenXmlCompositeElement maxAx2)
                     {
                         var scaling = maxAx2.GetFirstChild<C.Scaling>();
                         if (scaling != null)
@@ -452,6 +472,50 @@ internal static partial class ChartHelper
                         var nfBefore = axNf.GetFirstChild<C.MajorTickMark>();
                         if (nfBefore != null) axNf.InsertBefore(nf, nfBefore);
                         else axNf.AppendChild(nf);
+
+                        // Date axis: real PowerPoint only engages date-axis
+                        // layout when the CATEGORY numCache carries a
+                        // date-looking formatCode — with "General" it renders
+                        // an empty plot. Propagate the axis format into every
+                        // series' cat numCache/numLit formatCode.
+                        if (axNf is C.DateAxis && plotArea != null)
+                        {
+                            foreach (var catData in plotArea
+                                .Descendants<C.CategoryAxisData>())
+                            {
+                                var cache = (OpenXmlCompositeElement?)catData
+                                        .GetFirstChild<C.NumberReference>()
+                                        ?.GetFirstChild<C.NumberingCache>()
+                                    ?? catData.GetFirstChild<C.NumberLiteral>();
+                                var fc = cache?.GetFirstChild<C.FormatCode>();
+                                if (fc != null) fc.Text = value;
+                            }
+                        }
+                    }
+                    directlyHandled.Add(key);
+                    break;
+                }
+
+                case "basetimeunit":
+                {
+                    // Date-axis base time unit round-trip (days/months/years).
+                    if (targetAxis is C.DateAxis daxBtu)
+                    {
+                        var btuVal = value.Trim().ToLowerInvariant() switch
+                        {
+                            "days" or "day" => (C.TimeUnitValues?)C.TimeUnitValues.Days,
+                            "months" or "month" => C.TimeUnitValues.Months,
+                            "years" or "year" => C.TimeUnitValues.Years,
+                            _ => null,
+                        };
+                        if (btuVal == null)
+                            throw new ArgumentException($"Invalid baseTimeUnit '{value}': expected days, months, or years.");
+                        daxBtu.RemoveAllChildren<C.BaseTimeUnit>();
+                        var btuEl = new C.BaseTimeUnit { Val = btuVal.Value };
+                        // CT_DateAx: …auto?, lblOffset?, baseTimeUnit?, majorUnit?…
+                        var btuBefore = (OpenXmlElement?)daxBtu.GetFirstChild<C.MajorUnit>();
+                        if (btuBefore != null) daxBtu.InsertBefore(btuEl, btuBefore);
+                        else daxBtu.AppendChild(btuEl);
                     }
                     directlyHandled.Add(key);
                     break;

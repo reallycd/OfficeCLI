@@ -371,6 +371,17 @@ public partial class PowerPointHandler
                     // (manual letterbox padding inside the picture frame) and
                     // negative insets (manual outset crop). R47 fixed the
                     // srcRect side; this is the stretch/fillRect counterpart.
+                    // Bare <a:stretch/> (no fillRect child): real PowerPoint
+                    // renders a negative-srcRect "outset crop" differently
+                    // with vs without an explicit <a:fillRect/> (sample17 —
+                    // the zoom vanished when replay added one). Preserve the
+                    // source's bare form when the dump flags it.
+                    if (properties.TryGetValue("stretchBare", out var sbVal)
+                        && IsTruthy(sbVal))
+                    {
+                        picture.BlipFill.AppendChild(new Drawing.Stretch());
+                        goto stretchDone;
+                    }
                     var fr = new Drawing.FillRectangle();
                     if (properties.TryGetValue("fillRect", out var frStr)
                         || properties.TryGetValue("fillrect", out frStr))
@@ -389,18 +400,67 @@ public partial class PowerPointHandler
                         }
                     }
                     picture.BlipFill.AppendChild(new Drawing.Stretch(fr));
+                    stretchDone: ;
                 }
 
                 picture.ShapeProperties = new ShapeProperties();
                 picture.ShapeProperties.Transform2D = new Drawing.Transform2D();
                 picture.ShapeProperties.Transform2D.Offset = new Drawing.Offset { X = xEmu, Y = yEmu };
                 picture.ShapeProperties.Transform2D.Extents = new Drawing.Extents { Cx = cxEmu, Cy = cyEmu };
-                var picGeomName = "rect";
-                if (properties.TryGetValue("geometry", out var picGeom) || properties.TryGetValue("shape", out picGeom))
-                    picGeomName = picGeom;
-                picture.ShapeProperties.AppendChild(
-                    new Drawing.PresetGeometry(new Drawing.AdjustValueList()) { Preset = ParsePresetShape(picGeomName) }
-                );
+                // Crop-to-shape: verbatim <a:custGeom> (crop to freeform,
+                // mirrors AddShape's customGeometryXml splice) wins over a
+                // preset name; default rect otherwise.
+                if (properties.TryGetValue("customGeometryXml", out var picCustXml) && picCustXml.Length > 0)
+                {
+                    picture.ShapeProperties.AppendChild(new Drawing.CustomGeometry(picCustXml));
+                }
+                else
+                {
+                    var picGeomName = "rect";
+                    if (properties.TryGetValue("geometry", out var picGeom) || properties.TryGetValue("shape", out picGeom))
+                        picGeomName = picGeom;
+                    var picGeomPreset = ParsePresetShape(picGeomName);
+                    var picAvLst = new Drawing.AdjustValueList();
+                    // Preset adjust handles (crop-shape corner radius etc.) —
+                    // mirror AddShape's adj= consumption.
+                    if (properties.TryGetValue("adj", out var picAdjSpec)
+                        && !string.IsNullOrWhiteSpace(picAdjSpec))
+                        ApplyAdjustHandles(picAvLst, picAdjSpec, picGeomPreset);
+                    picture.ShapeProperties.AppendChild(
+                        new Drawing.PresetGeometry(picAvLst) { Preset = picGeomPreset }
+                    );
+                }
+
+                // Shape fill on the picture frame (paints wherever the image
+                // doesn't cover — negative srcRect outsets, sample17).
+                // Schema order within spPr: geom → fill → ln → effectLst.
+                if (properties.TryGetValue("frameFill", out var picFrameFill)
+                    && !string.IsNullOrWhiteSpace(picFrameFill))
+                    picture.ShapeProperties.AppendChild(BuildSolidFill(picFrameFill));
+
+                // Picture border — verbatim <a:ln> from PictureToNode's
+                // lineRaw (the white frame around a crop-to-shape picture).
+                if (properties.TryGetValue("lineRaw", out var picLnRaw)
+                    && !string.IsNullOrWhiteSpace(picLnRaw))
+                    picture.ShapeProperties.AppendChild(new Drawing.Outline(picLnRaw));
+
+                // Verbatim <a:effectLst> — byte-faithful shadow/glow replay
+                // (the semantic shadow= backfills dist/dir defaults the
+                // source may not carry).
+                if (properties.TryGetValue("effectsRaw", out var picFxRaw)
+                    && !string.IsNullOrWhiteSpace(picFxRaw))
+                    picture.ShapeProperties.AppendChild(new Drawing.EffectList(picFxRaw));
+
+                // 3D on the picture's spPr — verbatim <a:scene3d>/<a:sp3d>
+                // carriers from PictureToNode (a 3D-rotated picture replayed
+                // flat without them). Schema order puts scene3d before sp3d;
+                // append in that order right after the geometry.
+                if (properties.TryGetValue("scene3dRaw", out var picScene3dRaw)
+                    && !string.IsNullOrWhiteSpace(picScene3dRaw))
+                    picture.ShapeProperties.AppendChild(new Drawing.Scene3DType(picScene3dRaw));
+                if (properties.TryGetValue("sp3dRaw", out var picSp3dRaw)
+                    && !string.IsNullOrWhiteSpace(picSp3dRaw))
+                    picture.ShapeProperties.AppendChild(new Drawing.Shape3DType(picSp3dRaw));
 
                 // CONSISTENCY(shape-picture-parity): rotation lives on the
                 // same Transform2D as shape/connector/group; PowerPoint
@@ -413,6 +473,16 @@ public partial class PowerPointHandler
                     picture.ShapeProperties.Transform2D!.Rotation =
                         (int)(ParseHelpers.SafeParseDouble(picRotStr, "rotation") * 60000);
                 }
+
+                // CONSISTENCY(shape-picture-parity): flip lives on the same
+                // Transform2D @flipH/@flipV as shape/connector. ShapeProperties
+                // Set handles these for shapes; mirror on Add for pictures so
+                // Add and Set agree on the property surface. Read via
+                // TryGetValue (handler-as-truth) — do NOT copy into a fresh dict.
+                if (properties.TryGetValue("flipH", out var picFlipH) || properties.TryGetValue("fliph", out picFlipH))
+                    picture.ShapeProperties.Transform2D!.HorizontalFlip = IsTruthy(picFlipH);
+                if (properties.TryGetValue("flipV", out var picFlipV) || properties.TryGetValue("flipv", out picFlipV))
+                    picture.ShapeProperties.Transform2D!.VerticalFlip = IsTruthy(picFlipV);
 
                 // bt-2: blip-level filters. Set.Media accepts opacity and
                 // biLevel on a picture; Add must mirror so dump→replay

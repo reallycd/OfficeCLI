@@ -58,19 +58,91 @@ internal partial class ChartSvgRenderer
     public string ValueColor { get; set; } = "#D0D8E0";
     public string CatColor { get; set; } = "#C8D0D8";
     public string AxisColor { get; set; } = "#B0B8C0";
+    // Axis tick-label bold (<c:catAx>/<c:valAx><c:txPr>…<a:defRPr b="1">). PowerPoint
+    // renders bold tick labels; previously dropped. Paired with CatColor/AxisColor
+    // respectively so the weight tracks the same axis as the color, orientation-independent.
+    public bool CatTickLabelsBold { get; set; }
+    public bool ValTickLabelsBold { get; set; }
+    public bool CatTickLabelsItalic { get; set; }
+    public bool ValTickLabelsItalic { get; set; }
+    private string CatTickWeightAttr => (CatTickLabelsBold ? " font-weight=\"bold\"" : "") + (CatTickLabelsItalic ? " font-style=\"italic\"" : "");
+    private string ValTickWeightAttr => (ValTickLabelsBold ? " font-weight=\"bold\"" : "") + (ValTickLabelsItalic ? " font-style=\"italic\"" : "");
     public string SecondaryAxisColor { get; set; } = "#aaa";
     public string GridColor { get; set; } = "#333";
+    // Value-axis major-gridline dash name (<a:prstDash val="...">). Null/"solid"
+    // => solid gridlines (no stroke-dasharray emitted). Synced from ChartInfo.
+    public string? GridlineDash { get; set; }
+    // Value-axis major-gridline stroke width (px). Default thin hairline; overridden
+    // from <c:majorGridlines><a:ln w=> when present. Synced from ChartInfo.
+    public double GridlineWidthPx { get; set; } = 0.5;
     // Whether the chart XML declared <c:majorGridlines> on the value/category axis.
     // Gridlines are emitted only when present (real PowerPoint draws none otherwise).
     // Default true so paths that don't parse axis info keep prior behavior.
     public bool ShowValGridlines { get; set; } = true;
     public bool ShowCatGridlines { get; set; } = true;
+    // Fainter minor gridlines (<c:minorGridlines>). Drawn at majorUnit/N
+    // sub-intervals between major ticks; lighter stroke so they stay
+    // subordinate to the major gridlines. Synced from ChartInfo.
+    public bool ShowValMinorGridlines { get; set; }
+    // Category-axis minor gridlines (<c:catAx><c:minorGridlines/>). PowerPoint
+    // draws these as thin lines at the category-slot boundaries; ChartInfo read
+    // it but the renderer had no consumer (val minor was rendered, cat minor was
+    // dropped). Synced from ChartInfo.CatMinorGridlines.
+    public bool ShowCatMinorGridlines { get; set; }
+    // Number of minor sub-intervals per major interval (PowerPoint default 5).
+    public int MinorGridlineCount { get; set; } = 5;
+    // Axis visibility (<c:delete val="1"/> deletes the axis). When false the
+    // axis tick labels and its (major+minor) gridlines are suppressed.
+    public bool ValAxisVisible { get; set; } = true;
+    public bool CatAxisVisible { get; set; } = true;
+    // <c:tickLblPos val="none"/>: hide the axis TICK LABELS while keeping the axis
+    // line, tick marks, and gridlines (distinct from <c:delete>, which hides the
+    // whole axis). Synced from ChartInfo. Gates only the label-text emit sites.
+    public bool ValTickLabelsHidden { get; set; }
+    public bool CatTickLabelsHidden { get; set; }
+    // Major tick marks (<c:majorTickMark val="out|in|cross|none">). Short
+    // perpendicular lines drawn at each major label position. Null/"none" => no
+    // ticks. Synced from ChartInfo; only drawn when the element is present.
+    public string? ValMajorTickMark { get; set; }
+    public string? CatMajorTickMark { get; set; }
+    // Category-axis label skip interval (<c:catAx><c:tickLblSkip val="N"/>): show
+    // only every Nth category label (PowerPoint keeps all bars/points, only thins
+    // the labels). 1 = every label. Synced from ChartInfo.
+    public int CatTickLabelSkip { get; set; } = 1;
+    // Per-series set of data-point indices whose data label was explicitly deleted
+    // (<c:dLbl><c:delete/>); synced from ChartInfo. LabelDeleted(series, point) gates
+    // each per-point label emit so PowerPoint's "delete this one label" is honored.
+    public List<HashSet<int>> PerPointDeletedLabels { get; set; } = [];
+    private bool LabelDeleted(int series, int pointIdx)
+        => series >= 0 && series < PerPointDeletedLabels.Count && PerPointDeletedLabels[series].Contains(pointIdx);
+    // Length of a major tick mark in px (PowerPoint draws ~4-5px).
+    public const int MajorTickLen = 4;
     public string AxisLineColor { get; set; } = "#555";
     public int ValFontPx { get; set; } = 9;
     public int CatFontPx { get; set; } = 9;
     public int DataLabelFontPx { get; set; } = 8;
+    // Explicit data-label text color (<c:dLbls><c:txPr>…<a:solidFill>), '#'-prefixed
+    // CSS, or null to use the theme text color (ValueColor). PowerPoint honors it.
+    public string? DataLabelColor { get; set; }
+    // Data-label fill: explicit color when authored, else the theme text color.
+    // Pie/doughnut slice labels keep their own white-on-slice default separately.
+    private string DataLabelFill => DataLabelColor ?? ValueColor;
+    // Data-label bold/italic (<c:dLbls><c:txPr>…<a:defRPr b="1" i="1">). PowerPoint
+    // honors both; previously dropped (only size+color were read).
+    public bool DataLabelBold { get; set; }
+    public bool DataLabelItalic { get; set; }
+    private string DataLabelStyleAttr => (DataLabelBold ? " font-weight=\"bold\"" : "") + (DataLabelItalic ? " font-style=\"italic\"" : "");
+    // Value-axis display-units divisor (<c:dispUnits><c:builtInUnit>). Applied to
+    // value-axis tick labels only (not data labels). 1.0 = no scaling. Synced from
+    // ChartInfo. See FmtValAxis.
+    public double ValAxisUnitDivisor { get; set; } = 1.0;
     // <c:dLblPos> for bar/column labels: inEnd|outEnd|ctr|inBase. Synced from ChartInfo.
     public string DataLabelPos { get; set; } = "outEnd";
+    // Whether <c:dLblPos> was explicitly present in the XML. Pie/doughnut's OOXML
+    // default position is bestFit (on-segment), not outEnd — so when no explicit
+    // position is set, pie/doughnut labels must sit ON the ring (PowerPoint behavior),
+    // not outside. Bar/column keep their outEnd default. Synced from ChartInfo.
+    public bool HasExplicitDataLabelPos { get; set; }
     public int AxisTickCount { get; set; } = 4;
     // <c:firstSliceAng> for pie/doughnut: degrees clockwise the first slice's
     // start edge is rotated from 12 o'clock. Synced from ChartInfo. 0 = top.
@@ -79,6 +151,18 @@ internal partial class ChartSvgRenderer
     // Index = series index. Null/absent entry → use the renderer's default
     // (1.0 = opaque, matching native). Synced from ChartInfo.SeriesFillOpacities.
     public List<double?> SeriesFillOpacities { get; set; } = [];
+
+    // Per-series invertIfNegative flag (bar/column). True (PowerPoint's
+    // observed default when <c:invertIfNegative> is absent) means negative
+    // bars render hollow: white/plot-background interior with the series
+    // color as a thin outline. Explicit <c:invertIfNegative val="0"/> sets
+    // false → negatives keep the solid series fill. Index = series index;
+    // absent entry defaults to true. Synced from ChartInfo.InvertIfNegative.
+    public List<bool> InvertIfNegative { get; set; } = [];
+
+    // Whether series s inverts negative bars. Absent entry → true (default).
+    private bool SeriesInverts(int s)
+        => s < 0 || s >= InvertIfNegative.Count || InvertIfNegative[s];
 
     // Series fill opacity for index s, falling back to the supplied default
     // when the series declared no explicit <a:alpha>. Default is full opacity
@@ -93,6 +177,78 @@ internal partial class ChartSvgRenderer
     // CONSISTENCY(html-encode): shared plain entity-encoder lives in Core/HtmlPreviewHelper.
     public static string HtmlEncode(string text) => HtmlPreviewHelper.HtmlEncode(text);
 
+    /// <summary>Build the inner HTML for a chart title. When the title has per-run
+    /// formatting (<see cref="ChartInfo.TitleRuns"/>), emit one styled &lt;span&gt;
+    /// per run so a mixed-format title (bold word + normal word, per-run colors)
+    /// renders like PowerPoint instead of collapsing to the first run's style.
+    /// Otherwise returns the plain encoded title text. <paramref name="defaultColor"/>
+    /// is the title's fallback color (a run without its own color inherits it),
+    /// <paramref name="defaultBold"/> the fallback weight, <paramref name="defaultSizePt"/>
+    /// the fallback font size in points.</summary>
+    public static string BuildTitleInnerHtml(ChartInfo info, string defaultColor, bool defaultBold, double defaultSizePt)
+    {
+        if (info.TitleRuns == null || info.TitleRuns.Count == 0)
+            return HtmlEncode(info.Title ?? "");
+        var sb = new System.Text.StringBuilder();
+        foreach (var run in info.TitleRuns)
+        {
+            var weight = (run.Bold ?? defaultBold) ? "bold" : "normal";
+            var color = run.Color ?? defaultColor;
+            var size = run.FontSizePt ?? defaultSizePt;
+            var extra = (run.Italic ? "font-style:italic;" : "") + (run.Underline ? "text-decoration:underline;" : "");
+            sb.Append($"<span style=\"font-weight:{weight};color:{color};font-size:{size:0.##}pt;{extra}\">{HtmlEncode(run.Text)}</span>");
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Emit a bottom (horizontal) axis tick label &lt;text&gt;, applying an
+    /// SVG rotate transform when <paramref name="rotationDeg"/> is non-null/non-zero
+    /// (degrees, OOXML <c:txPr><a:bodyPr rot> already divided by 60000).
+    ///
+    /// We emit the RAW OOXML angle as the SVG rotate angle (no negation): SVG
+    /// has its Y axis pointing down, which matches what PowerPoint actually
+    /// draws. With PowerPoint's common rot=-45 we anchor the END of the text
+    /// just below the tick (text-anchor="end") and pivot about that point with
+    /// SVG rotate(-45): the left end of the text maps down-left and the text
+    /// reads up-right ("/"), hanging below the axis exactly like PowerPoint.
+    /// For a positive OOXML angle the label trails right (text-anchor="start").
+    /// The anchor y is nudged a few px below the axis baseline so the top-right
+    /// end of the rotated text sits just under the tick. When rotationDeg is
+    /// null/0 the output is byte-for-byte the unrotated centered label
+    /// (regression-safe).</summary>
+    private static void EmitBottomAxisLabel(StringBuilder sb, double x, double y,
+        string color, int fontSize, string label, int? rotationDeg, string weightAttr = "")
+    {
+        var enc = HtmlEncode(label);
+        if (rotationDeg is not int rot || rot == 0)
+        {
+            sb.AppendLine($"        <text x=\"{x:0.#}\" y=\"{y:0.#}\" fill=\"{color}\" font-size=\"{fontSize}\"{weightAttr} text-anchor=\"middle\">{enc}</text>");
+            return;
+        }
+        var ay = y + 4;                          // nudge anchor just below the axis
+        var anchor = rot < 0 ? "end" : "start";  // rot<0 trails down-left, reads up-right
+        sb.AppendLine($"        <text x=\"{x:0.#}\" y=\"{ay:0.#}\" fill=\"{color}\" font-size=\"{fontSize}\"{weightAttr} text-anchor=\"{anchor}\" transform=\"rotate({rot} {x:0.#} {ay:0.#})\">{enc}</text>");
+    }
+
+    /// <summary>
+    /// Emit a LEFT (value) axis tick label, honoring a <c:valAx><c:txPr><a:bodyPr rot>
+    /// rotation. The non-rotated path is byte-identical to the legacy raw emit
+    /// (text-anchor=end, dominant-baseline=middle) so unchanged charts are unaffected;
+    /// a non-zero rotation adds a rotate() transform around the label's right-edge
+    /// anchor. Mirrors EmitBottomAxisLabel for the bottom (category) axis.
+    /// </summary>
+    private static void EmitLeftAxisLabel(StringBuilder sb, double x, double y,
+        string color, int fontSize, string label, int? rotationDeg, string weightAttr = "")
+    {
+        var enc = HtmlEncode(label);
+        if (rotationDeg is not int rot || rot == 0)
+        {
+            sb.AppendLine($"        <text x=\"{x:0.#}\" y=\"{y:0.#}\" fill=\"{color}\" font-size=\"{fontSize}\"{weightAttr} text-anchor=\"end\" dominant-baseline=\"middle\">{enc}</text>");
+            return;
+        }
+        sb.AppendLine($"        <text x=\"{x:0.#}\" y=\"{y:0.#}\" fill=\"{color}\" font-size=\"{fontSize}\"{weightAttr} text-anchor=\"end\" dominant-baseline=\"middle\" transform=\"rotate({rot} {x:0.#} {y:0.#})\">{enc}</text>");
+    }
+
     public void RenderBarChartSvg(StringBuilder sb, List<(string name, double[] values)> series,
         string[] categories, List<string> colors, int ox, int oy, int pw, int ph,
         bool horizontal, bool stacked = false, bool percentStacked = false,
@@ -101,8 +257,38 @@ internal partial class ChartSvgRenderer
         bool showDataLabels = false, string? valNumFmt = null, string? plotFillColor = null,
         List<(string Name, double Value, string Color, double WidthPt, string Dash)>? referenceLines = null,
         bool isWaterfall = false, List<ErrorBarInfo?>? errorBars = null,
-        bool labelAsPercent = false, string? dataLabelNumFmt = null)
+        bool labelAsPercent = false, string? dataLabelNumFmt = null, int? ooxmlOverlap = null,
+        bool isReversed = false, List<Dictionary<int, string>>? perPointColors = null,
+        int? catLabelRotationDeg = null, int? valLabelRotationDeg = null,
+        List<TrendlineInfo?>? trendlines = null,
+        bool showSerName = false, bool showCatName = false, bool showVal = true,
+        double? logBase = null)
     {
+        // Per-data-point fill override (c:dPt): for series s, category idx c,
+        // return the explicit dPt color when present, else the per-series color.
+        // No dPt anywhere => behaves exactly as colors[s % colors.Count].
+        string BarFill(int s, int catIdx)
+            => perPointColors != null && s < perPointColors.Count
+               && perPointColors[s].TryGetValue(catIdx, out var pc)
+                ? pc : colors[s % colors.Count];
+
+        // Fill/stroke SVG attributes for a (series, category, value) rect.
+        // PowerPoint's "invert if negative" (the effective default when
+        // <c:invertIfNegative> is absent) renders negative bars hollow: a
+        // white/plot-background interior outlined in the series color. Only
+        // applied to clustered/standard bars (not stacked, not waterfall).
+        // Positive bars and non-inverting series keep the solid series fill.
+        string BarFillAttrs(int s, int catIdx, double v)
+        {
+            var seriesColor = BarFill(s, catIdx);
+            if (v < 0 && SeriesInverts(s))
+            {
+                var hollow = plotFillColor != null ? $"#{plotFillColor}" : "#FFFFFF";
+                return $"fill=\"{hollow}\" stroke=\"{seriesColor}\" stroke-width=\"1\"";
+            }
+            return $"fill=\"{seriesColor}\"";
+        }
+
         var allValues = series.SelectMany(s => s.values).ToArray();
         if (allValues.Length == 0) return;
         var catCount = Math.Max(categories.Length, series.Max(s => s.values.Length));
@@ -116,10 +302,22 @@ internal partial class ChartSvgRenderer
         // Prefer an explicit data-label format (<c:dLbls><c:numFmt>); it applies
         // even to integer values (so #,##0 yields "1,000" not raw "1000"). Fall
         // back to the bare-integer shortcut then the axis numFmt otherwise.
-        string LabelText(double rawVal, double pctVal)
+        string ValuePart(double rawVal, double pctVal)
             => labelAsPercent ? $"{pctVal:0}%"
                : !string.IsNullOrEmpty(dataLabelNumFmt) ? FormatAxisValue(rawVal, dataLabelNumFmt)
                : (rawVal % 1 == 0 ? $"{(int)rawVal}" : FormatAxisValue(rawVal, valNumFmt));
+        // Compose the label from the enabled parts in PowerPoint's order:
+        // series name, category name, value/percent. When no show* flag is
+        // explicitly set the legacy default (value only) is preserved by the
+        // showVal=true default the call sites pass.
+        string LabelText(int s, int catIdx, double rawVal, double pctVal)
+        {
+            var parts = new List<string>();
+            if (showSerName && s < series.Count) parts.Add(series[s].name);
+            if (showCatName && catIdx >= 0 && catIdx < categories.Length) parts.Add(categories[catIdx]);
+            if (showVal) parts.Add(ValuePart(rawVal, pctVal));
+            return string.Join(", ", parts);
+        }
 
         double maxVal;
         // Stacked mixed-sign support: positive segments stack from 0 upward and
@@ -166,7 +364,36 @@ internal partial class ChartSvgRenderer
                 tickStep = ooxmlMajorUnit.Value;
                 nTicks = (int)Math.Round(niceMax / tickStep);
             }
-            else (niceMax, tickStep, nTicks) = ComputeNiceAxis(ooxmlMax ?? maxVal);
+            else if (ooxmlMajorUnit.HasValue && ooxmlMajorUnit.Value > 0
+                     && !(ooxmlMin.HasValue && ooxmlMin.Value > 0))
+            {
+                // majorUnit set without an explicit max: PowerPoint keeps the
+                // entered tick spacing and rounds the auto-scaled top UP to the
+                // next multiple of it (e.g. data max 40, majorUnit 20 -> top 60,
+                // ticks 0/20/40/60). Previously majorUnit was honored ONLY when a
+                // max was also present, so the axis fell back to the every-N
+                // nice scale and ignored the entered unit.
+                tickStep = ooxmlMajorUnit.Value;
+                var autoTop = ComputeNiceAxis(maxVal).niceMax;
+                niceMax = Math.Ceiling(autoTop / tickStep) * tickStep;
+                nTicks = (int)Math.Round(niceMax / tickStep);
+            }
+            else
+            {
+                // Min-aware nice axis (parity with line/area path): explicit
+                // non-zero axis min, no explicit max/majorUnit → derive step/top
+                // from the VISIBLE range [axisMin, dataMax] instead of [0,
+                // dataMax], so the top doesn't overshoot. Zero/absent min falls
+                // through to the unchanged ComputeNiceAxis path.
+                if (ooxmlMin.HasValue && ooxmlMin.Value > 0 && !ooxmlMax.HasValue)
+                    (niceMax, tickStep, nTicks) = ComputeNiceAxisFromMin(ooxmlMin.Value, maxVal);
+                else
+                    (niceMax, tickStep, nTicks) = ComputeNiceAxis(ooxmlMax ?? maxVal);
+                // An explicit axis max with no major unit must be honored exactly
+                // (PowerPoint pins the top to the entered value); ComputeNiceAxis
+                // would round it up. Mirrors the line/area-chart fix (R25).
+                if (ooxmlMax.HasValue) niceMax = ooxmlMax.Value;
+            }
             // Extend the axis floor below zero for negative data (mirrors the
             // line-chart DataToY path): snap the negative floor to the same
             // tickStep so a gridline lands on zero and on the negative extreme.
@@ -177,10 +404,37 @@ internal partial class ChartSvgRenderer
                 var negMagnitude = ComputeNiceAxis(-dataMin).niceMax;
                 niceMin = -negMagnitude;
             }
-            if (niceMin < 0)
+            // BUG1(R25): when an explicit axisMin is applied after nTicks was
+            // computed against a zero floor, the tick count is stale and the
+            // loop overshoots axisMax (e.g. min=50/max=400/unit=100 emitted a
+            // 450 tick). Recompute for any non-zero niceMin so no tick exceeds
+            // niceMax. (The negative branch already relied on this.)
+            if (niceMin != 0)
                 nTicks = (int)Math.Ceiling((niceMax - niceMin) / tickStep);
         }
         else { niceMax = 100; nTicks = 5; tickStep = 20; }
+
+        // Logarithmic value axis (<c:valAx><c:scaling><c:logBase>). Mirrors the
+        // line renderer's isLog branch: only meaningful for non-stacked,
+        // all-positive data (log of a non-positive value is undefined, and
+        // PowerPoint forces a linear axis for stacked/percent/waterfall). The
+        // axis spans whole decades; niceMin/niceMax become the decade floor/
+        // ceiling VALUES (so reference-line/zero-baseline guards keep working)
+        // while ValFrac maps log(v) evenly across [logMinExp, logMaxExp].
+        bool isLog = logBase.HasValue && logBase.Value > 1
+                     && !percentStacked && !stacked && !isWaterfall
+                     && allValues.All(v => v > 0);
+        double logB = logBase ?? 10, logMinExp = 0, logMaxExp = 1;
+        if (isLog)
+        {
+            logMinExp = Math.Floor(Math.Log(allValues.Min()) / Math.Log(logB));
+            logMaxExp = Math.Ceiling(Math.Log(allValues.Max()) / Math.Log(logB));
+            if (logMinExp >= logMaxExp) logMaxExp = logMinExp + 1;
+            nTicks = (int)(logMaxExp - logMinExp);
+            tickStep = 1;
+            niceMin = Math.Pow(logB, logMinExp);
+            niceMax = Math.Pow(logB, logMaxExp);
+        }
 
         // Span and zero-position helpers. span is the full axis range; a value
         // maps to a fraction of the plot along the value axis, with zero sitting
@@ -189,6 +443,23 @@ internal partial class ChartSvgRenderer
         var span = niceMax - niceMin;
         if (span <= 0) span = 1;
         var zeroFrac = (0 - niceMin) / span;
+
+        // Value→[0,1] fraction along the value axis from the axis floor. Linear:
+        // proportional to (v − niceMin). Log: proportional to log(v) between the
+        // decade floor/ceiling exponents (non-positive values clamp to the
+        // floor). The grouped bar/column rects derive their length from the
+        // difference of two ValFrac-based endpoints, so log spacing flows through
+        // automatically; in linear mode that difference is algebraically
+        // identical to the old |val|/span·extent so unreversed output is unchanged.
+        double ValFrac(double v)
+        {
+            if (isLog)
+            {
+                var lv = v > 0 ? Math.Log(v) / Math.Log(logB) : logMinExp;
+                return Math.Max(0, Math.Min(1, (lv - logMinExp) / (logMaxExp - logMinExp)));
+            }
+            return (v - niceMin) / span;
+        }
 
         if (horizontal)
         {
@@ -204,17 +475,76 @@ internal partial class ChartSvgRenderer
 
             var groupH = (double)ph / Math.Max(catCount, 1);
             var gapPct = (ooxmlGapWidth ?? 150) / 100.0;
-            double barH, gap;
+            // Overlap (clustered only): o>0 makes adjacent series bars overlap,
+            // o<0 inserts a gap between them. Default 0 (bars touch). overlap=0
+            // reproduces the prior layout exactly (effectiveSlots == serCount,
+            // pitch == barH). See ChartSvgRenderer header / PM formula.
+            var overlapPct = (ooxmlOverlap ?? 0) / 100.0;
+            double barH, gap, pitchH = 0;
             if (stacked) { barH = groupH / (1 + gapPct); gap = (groupH - barH) / 2; }
-            else { barH = groupH / (serCount + gapPct); gap = barH * gapPct / 2; }
+            else
+            {
+                var effectiveSlots = serCount - (serCount - 1) * overlapPct;
+                barH = groupH / (gapPct + effectiveSlots);
+                pitchH = barH * (1 - overlapPct);
+                var clusterH = barH + (serCount - 1) * pitchH;
+                gap = (groupH - clusterH) / 2;
+            }
 
+            // Value→X mapping. Normal: niceMin at left (plotOx), niceMax at right.
+            // Reversed (<c:scaling><c:orientation val="maxMin"/>): niceMin at right,
+            // niceMax at left, mirroring the line renderer's value→Y reversal so the
+            // value axis flips while categories stay put. Non-reversed expression is
+            // byte-identical to the prior inline `plotOx + ((v-niceMin)/span)*plotPw`.
+            double ValToX(double v)
+            {
+                var frac = ValFrac(v);
+                return isReversed ? plotOx + plotPw - frac * plotPw : plotOx + frac * plotPw;
+            }
             // Zero-baseline X coordinate within the plot (== plotOx when niceMin==0).
-            var plotZeroX = plotOx + zeroFrac * plotPw;
-            if (ShowValGridlines)
+            var plotZeroX = ValToX(0);
+            // Tick fraction → X. Reversed flips the fraction so tick 0 sits at the
+            // right edge and the last tick at the left, keeping gridlines/labels
+            // aligned with the reversed bars.
+            double TickX(double tFrac) => isReversed
+                ? plotOx + (double)plotPw * (1 - tFrac)
+                : plotOx + (double)plotPw * tFrac;
+            // Gridlines at the tick VALUES on the value scale (ValToX), matching the bars
+            // — not even pixel fractions, which diverge when an explicit axisMax isn't a
+            // multiple of tickStep. No-op when nTicks*tickStep==span.
+            if (ShowValMinorGridlines && ValAxisVisible)
+            for (int t = 0; t < nTicks; t++)
+                for (int m = 1; m < MinorGridlineCount; m++)
+                {
+                    var minorVal = niceMin + tickStep * (t + (double)m / MinorGridlineCount);
+                    if (minorVal > niceMax + 1e-9) continue;
+                    var gx = ValToX(minorVal);
+                    sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.25\" opacity=\"0.5\"/>");
+                }
+            if (ShowValGridlines && ValAxisVisible)
             for (int t = 0; t <= nTicks; t++)
             {
-                var gx = plotOx + (double)plotPw * t / nTicks;
-                sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+                var tickVal = niceMin + tickStep * t;
+                if (tickVal > niceMax + 1e-9) continue;
+                var gx = ValToX(tickVal);
+                sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"{GridlineWidthPx:0.##}\"{ValGridDashAttr}/>");
+            }
+            // Category-axis major gridlines (horizontal) — at the category-slot
+            // boundaries. The category axis is vertical for horizontal bars, so
+            // the gridlines run horizontally across the plot width. Gated on
+            // <c:catAx><c:majorGridlines/> + category-axis visibility.
+            if (ShowCatGridlines && CatAxisVisible)
+            for (int i = 0; i <= catCount; i++)
+            {
+                var gy = oy + (double)ph * i / Math.Max(catCount, 1);
+                sb.AppendLine($"        <line x1=\"{plotOx}\" y1=\"{gy:0.#}\" x2=\"{plotOx + plotPw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+            }
+            // Category-axis minor gridlines (horizontal, at slot boundaries).
+            if (ShowCatMinorGridlines && CatAxisVisible)
+            for (int i = 0; i <= catCount; i++)
+            {
+                var gy = oy + (double)ph * i / Math.Max(catCount, 1);
+                sb.AppendLine($"        <line x1=\"{plotOx}\" y1=\"{gy:0.#}\" x2=\"{plotOx + plotPw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.25\" opacity=\"0.5\"/>");
             }
             sb.AppendLine($"        <line x1=\"{plotOx}\" y1=\"{oy}\" x2=\"{plotOx}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
             sb.AppendLine($"        <line x1=\"{plotOx}\" y1=\"{oy + ph}\" x2=\"{plotOx + plotPw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -240,22 +570,24 @@ internal partial class ChartSvgRenderer
                         double bx;
                         if (val >= 0)
                         {
-                            bx = plotOx + ((posCursor - niceMin) / span) * plotPw;
+                            // Left edge of the positive segment = the smaller-value end.
+                            // Normal: posCursor; reversed: posCursor+val (mirrored).
+                            bx = isReversed ? ValToX(posCursor + val) : ValToX(posCursor);
                             posCursor += val;
                         }
                         else
                         {
-                            bx = plotOx + ((negCursor + val - niceMin) / span) * plotPw;
+                            bx = isReversed ? ValToX(negCursor) : ValToX(negCursor + val);
                             negCursor += val;
                         }
                         var by = oy + c * groupH + gap;
                         if (segW > 0.5)
-                            sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{segW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
+                            sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{segW:0.#}\" height=\"{barH:0.#}\" fill=\"{BarFill(s, dataIdx)}\" opacity=\"{FillOpacity(s)}\"/>");
                         // Label at segment center — skip if segment narrower than ~2 chars to avoid overflow
-                        if (showDataLabels && segW > DataLabelFontPx * 1.6)
+                        if (showDataLabels && !LabelDeleted(s, dataIdx) && segW > DataLabelFontPx * 1.6)
                         {
-                            var vlabel = LabelText(rawVal, val);
-                            sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + segW / 2:0.#}\" y=\"{by + barH / 2:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\" dominant-baseline=\"middle\">{vlabel}</text>");
+                            var vlabel = LabelText(s, dataIdx, rawVal, val);
+                            sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + segW / 2:0.#}\" y=\"{by + barH / 2:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"middle\" dominant-baseline=\"middle\">{vlabel}</text>");
                         }
                     }
                     else
@@ -263,16 +595,21 @@ internal partial class ChartSvgRenderer
                         // Draw from the zero baseline: positive extends right, negative
                         // extends left. Always emit a non-negative width using the
                         // absolute magnitude (a negative width would clip to zero).
-                        var barW = Math.Abs(val) / span * plotPw;
-                        var bx = val >= 0 ? plotZeroX : plotZeroX - barW;
-                        var by = oy + c * groupH + gap + (serCount - 1 - s) * barH;
-                        sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
+                        // Bar spans from the zero baseline (or, on a log axis, the
+                        // decade floor) to the value; length is the gap between the
+                        // two mapped endpoints. Linear: identical to |val|/span·plotPw.
+                        var valX = ValToX(val);
+                        var barW = Math.Abs(valX - plotZeroX);
+                        // Left edge is the smaller X of the two endpoints. Reversed flips which end that is.
+                        var bx = Math.Min(plotZeroX, valX);
+                        var by = oy + c * groupH + gap + (serCount - 1 - s) * pitchH;
+                        sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" {BarFillAttrs(s, dataIdx, val)} opacity=\"{FillOpacity(s)}\"/>");
                         // Data label at the bar's end (grouped horizontal bars).
                         // Mirrors the stacked-branch and vertical-column label logic
                         // which previously left non-stacked horizontal bars unlabeled.
-                        if (showDataLabels && barH > DataLabelFontPx)
+                        if (showDataLabels && !LabelDeleted(s, dataIdx) && barH > DataLabelFontPx)
                         {
-                            var vlabel = LabelText(rawVal, val);
+                            var vlabel = LabelText(s, dataIdx, rawVal, val);
                             // Honor <c:dLblPos>: outEnd places the label just past the
                             // bar tip; inEnd inside the bar near the tip; ctr at the
                             // bar's midpoint; inBase near the zero baseline. Without
@@ -299,7 +636,7 @@ internal partial class ChartSvgRenderer
                                     anchor = val >= 0 ? "start" : "end";
                                     break;
                             }
-                            sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{lx:0.#}\" y=\"{by + barH / 2:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"{anchor}\" dominant-baseline=\"middle\">{vlabel}</text>");
+                            sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{lx:0.#}\" y=\"{by + barH / 2:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"{anchor}\" dominant-baseline=\"middle\">{vlabel}</text>");
                         }
                     }
                 }
@@ -333,14 +670,14 @@ internal partial class ChartSvgRenderer
                     {
                         var dataIdx = catCount - 1 - c;
                         var rawVal = dataIdx < series[s].values.Length ? series[s].values[dataIdx] : 0;
-                        var by = oy + c * groupH + gap + (serCount - 1 - s) * barH;
+                        var by = oy + c * groupH + gap + (serCount - 1 - s) * pitchH;
                         var cy = by + barH / 2;
-                        var bxTip = plotOx + ((rawVal - niceMin) / span) * plotPw;
+                        var bxTip = ValToX(rawVal);
                         double plusErr = eb.ValueType == "percentage" ? Math.Abs(rawVal) * eb.Value / 100.0 : errAmount;
                         var showPlus = eb.BarType is "both" or "plus";
                         var showMinus = eb.BarType is "both" or "minus";
-                        var xPlus = showPlus ? plotOx + ((rawVal + plusErr - niceMin) / span) * plotPw : bxTip;
-                        var xMinus = showMinus ? plotOx + ((rawVal - plusErr - niceMin) / span) * plotPw : bxTip;
+                        var xPlus = showPlus ? ValToX(rawVal + plusErr) : bxTip;
+                        var xMinus = showMinus ? ValToX(rawVal - plusErr) : bxTip;
                         // Horizontal whisker line
                         sb.AppendLine($"        <line x1=\"{xMinus:0.#}\" y1=\"{cy:0.#}\" x2=\"{xPlus:0.#}\" y2=\"{cy:0.#}\" stroke=\"{ebColor}\" stroke-width=\"{eb.Width:0.#}\"/>");
                         // Short VERTICAL cap lines at each end (y1==y2 false → these
@@ -354,19 +691,30 @@ internal partial class ChartSvgRenderer
                     }
                 }
             }
+            if (CatAxisVisible)
             for (int c = 0; c < catCount; c++)
             {
                 var dataIdx = catCount - 1 - c;
                 var label = dataIdx < categories.Length ? categories[dataIdx] : "";
                 var ly = oy + c * groupH + groupH / 2;
-                sb.AppendLine($"        <text x=\"{plotOx - 4}\" y=\"{ly:0.#}\" fill=\"{CatColor}\" font-size=\"{catFontSize}\" text-anchor=\"end\" dominant-baseline=\"middle\">{HtmlEncode(label)}</text>");
+                // Horizontal bars: category axis is VERTICAL on the left (x=plotOx).
+                if (TickMarkVisible(CatMajorTickMark))
+                    EmitVAxisTick(sb, plotOx, ly, CatMajorTickMark!);
+                if (!CatTickLabelsHidden && (CatTickLabelSkip <= 1 || dataIdx % CatTickLabelSkip == 0))
+                    sb.AppendLine($"        <text x=\"{plotOx - 4}\" y=\"{ly:0.#}\" fill=\"{CatColor}\" font-size=\"{catFontSize}\"{CatTickWeightAttr} text-anchor=\"end\" dominant-baseline=\"middle\">{HtmlEncode(label)}</text>");
             }
+            if (ValAxisVisible)
             for (int t = 0; t <= nTicks; t++)
             {
-                var val = niceMin + tickStep * t;
-                var label = percentStacked ? $"{(int)val}%" : FormatAxisValue(val, valNumFmt);
-                var tx = plotOx + (double)plotPw * t / nTicks;
-                sb.AppendLine($"        <text x=\"{tx:0.#}\" y=\"{oy + ph + 16}\" fill=\"{AxisColor}\" font-size=\"{valFontSize}\" text-anchor=\"middle\">{label}</text>");
+                var val = isLog ? Math.Pow(logB, logMinExp + t) : niceMin + tickStep * t;
+                if (val > niceMax + 1e-9) continue; // BUG1(R25): no label past axisMax
+                var label = percentStacked ? $"{(int)val}%" : FmtValAxis(val, valNumFmt);
+                var tx = ValToX(val);
+                // Horizontal bars: value axis is HORIZONTAL at the bottom (y=oy+ph).
+                if (TickMarkVisible(ValMajorTickMark))
+                    EmitHAxisTick(sb, tx, oy + ph, ValMajorTickMark!);
+                if (!ValTickLabelsHidden)
+                    EmitBottomAxisLabel(sb, tx, oy + ph + 16, AxisColor, valFontSize, label, valLabelRotationDeg, ValTickWeightAttr);
             }
             // Reference-line overlays: horizontal bars → vertical line at value position on the X (value) axis.
             // For percentStacked charts, the value axis is 0–1 in OOXML but we display 0–100, so scale accordingly.
@@ -375,7 +723,7 @@ internal partial class ChartSvgRenderer
                 {
                     var v = percentStacked ? rl.Value * 100 : rl.Value;
                     if (v < niceMin || v > niceMax) continue;
-                    var rx = plotOx + ((v - niceMin) / span) * plotPw;
+                    var rx = ValToX(v);
                     var strokeColor = rl.Color.StartsWith("#") ? rl.Color : "#" + rl.Color;
                     var dashArray = RefLineDashArray(rl.Dash);
                     sb.AppendLine($"        <line x1=\"{rx:0.#}\" y1=\"{oy}\" x2=\"{rx:0.#}\" y2=\"{oy + ph}\" stroke=\"{strokeColor}\" stroke-width=\"{rl.WidthPt:0.##}\" stroke-dasharray=\"{dashArray}\"/>");
@@ -385,17 +733,75 @@ internal partial class ChartSvgRenderer
         {
             var groupW = (double)pw / Math.Max(catCount, 1);
             var gapPct = (ooxmlGapWidth ?? 150) / 100.0;
-            double barW, gap;
+            // Overlap (clustered only) — see horizontal branch / PM formula.
+            // overlap=0 reproduces the prior layout exactly (pitch == barW).
+            var overlapPct = (ooxmlOverlap ?? 0) / 100.0;
+            double barW, gap, pitchW = 0;
             if (stacked) { barW = groupW / (1 + gapPct); gap = (groupW - barW) / 2; }
-            else { barW = groupW / (serCount + gapPct); gap = barW * gapPct / 2; }
+            else
+            {
+                var effectiveSlots = serCount - (serCount - 1) * overlapPct;
+                barW = groupW / (gapPct + effectiveSlots);
+                pitchW = barW * (1 - overlapPct);
+                var clusterW = barW + (serCount - 1) * pitchW;
+                gap = (groupW - clusterW) / 2;
+            }
 
+            // Value→Y mapping. Normal: niceMin at the bottom (oy+ph), niceMax at the
+            // top (oy). Reversed (<c:scaling><c:orientation val="maxMin"/>): niceMin at
+            // the TOP, niceMax at the BOTTOM — the same inversion the line renderer's
+            // MapY applies. Non-reversed expression is byte-identical to the prior
+            // inline `oy + ph - ((v-niceMin)/span)*ph`, so unreversed output is unchanged.
+            double ValToY(double v)
+            {
+                var frac = ValFrac(v);
+                return isReversed ? oy + frac * ph : oy + ph - frac * ph;
+            }
+            // Tick fraction → Y. Reversed flips so tick 0 sits at the top.
+            double TickY(double tFrac) => isReversed
+                ? oy + (double)ph * tFrac
+                : oy + ph - (double)ph * tFrac;
             // Zero-baseline Y coordinate within the plot (== oy+ph when niceMin==0).
-            var plotZeroY = oy + ph - zeroFrac * ph;
-            if (ShowValGridlines)
+            var plotZeroY = ValToY(0);
+            // Gridlines sit at the tick VALUES on the value scale (via ValToY), not at
+            // even pixel fractions (TickY). These coincide when nTicks*tickStep == span,
+            // but an explicit axisMax that isn't a multiple of tickStep breaks that, and
+            // pixel-even gridlines then diverge from the value-proportional bars (a bar
+            // would overshoot its own labeled gridline). ValToY keeps gridline, label,
+            // and bar in agreement; the >niceMax guard drops a tick past the axis top.
+            if (ShowValGridlines && ValAxisVisible)
             for (int t = 0; t <= nTicks; t++)
             {
-                var gy = oy + ph - (double)ph * t / nTicks;
-                sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+                var tickVal = niceMin + tickStep * t;
+                if (tickVal > niceMax + 1e-9) continue;
+                var gy = ValToY(tickVal);
+                sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"{GridlineWidthPx:0.##}\"{ValGridDashAttr}/>");
+            }
+            if (ShowValMinorGridlines && ValAxisVisible)
+            for (int t = 0; t < nTicks; t++)
+                for (int m = 1; m < MinorGridlineCount; m++)
+                {
+                    var minorVal = niceMin + tickStep * (t + (double)m / MinorGridlineCount);
+                    if (minorVal > niceMax + 1e-9) continue;
+                    var gy = ValToY(minorVal);
+                    sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.25\" opacity=\"0.5\"/>");
+                }
+            // Category-axis major gridlines (vertical) — at the category-slot
+            // boundaries. Only when <c:catAx><c:majorGridlines/> was declared
+            // and the category axis is visible (PowerPoint draws none otherwise).
+            if (ShowCatGridlines && CatAxisVisible)
+            for (int i = 0; i <= catCount; i++)
+            {
+                var gx = ox + (double)pw * i / Math.Max(catCount, 1);
+                sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+            }
+            // Category-axis minor gridlines (vertical) — thin lines at the same slot
+            // boundaries (PowerPoint draws cat minor gridlines there; was dropped).
+            if (ShowCatMinorGridlines && CatAxisVisible)
+            for (int i = 0; i <= catCount; i++)
+            {
+                var gx = ox + (double)pw * i / Math.Max(catCount, 1);
+                sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.25\" opacity=\"0.5\"/>");
             }
             sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy}\" x2=\"{ox}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
             sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy + ph}\" x2=\"{ox + pw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -431,11 +837,11 @@ internal partial class ChartSvgRenderer
                             if (s > 0)
                             {
                                 if (barH > 0.5)
-                                    sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
-                                if (showDataLabels && barH > DataLabelFontPx + 2)
+                                    sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{BarFill(s, c)}\" opacity=\"{FillOpacity(s)}\"/>");
+                                if (showDataLabels && !LabelDeleted(s, c) && barH > DataLabelFontPx + 2)
                                 {
-                                    var vlabel = FormatAxisValue(rawVal, valNumFmt);
-                                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2:0.#}\" y=\"{by + barH / 2:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\" dominant-baseline=\"middle\">{vlabel}</text>");
+                                    var vlabel = LabelText(s, c, rawVal, rawVal);
+                                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2:0.#}\" y=\"{by + barH / 2:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"middle\" dominant-baseline=\"middle\">{vlabel}</text>");
                                 }
                             }
                             // Waterfall connector line — a short HORIZONTAL
@@ -461,20 +867,23 @@ internal partial class ChartSvgRenderer
                             double by;
                             if (val >= 0)
                             {
-                                by = oy + ph - ((posCursor + val - niceMin) / span) * ph;
+                                // Top edge of the rect = the higher-value end. Normal: the
+                                // far end (posCursor+val) is higher up; reversed it is lower,
+                                // so the rect top is at the near end (posCursor).
+                                by = isReversed ? ValToY(posCursor) : ValToY(posCursor + val);
                                 posCursor += val;
                             }
                             else
                             {
-                                by = oy + ph - ((negCursor - niceMin) / span) * ph;
+                                by = isReversed ? ValToY(negCursor + val) : ValToY(negCursor);
                                 negCursor += val;
                             }
                             if (segH > 0.5)
-                                sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{segH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
-                            if (showDataLabels && segH > DataLabelFontPx + 2)
+                                sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{segH:0.#}\" fill=\"{BarFill(s, c)}\" opacity=\"{FillOpacity(s)}\"/>");
+                            if (showDataLabels && !LabelDeleted(s, c) && segH > DataLabelFontPx + 2)
                             {
-                                var vlabel = LabelText(rawVal, val);
-                                sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2:0.#}\" y=\"{by + segH / 2:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\" dominant-baseline=\"middle\">{vlabel}</text>");
+                                var vlabel = LabelText(s, c, rawVal, val);
+                                sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2:0.#}\" y=\"{by + segH / 2:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"middle\" dominant-baseline=\"middle\">{vlabel}</text>");
                             }
                         }
                     }
@@ -483,15 +892,46 @@ internal partial class ChartSvgRenderer
                         // Draw from the zero baseline: positive extends up, negative
                         // extends down. Always emit a non-negative height using the
                         // absolute magnitude (a negative height would clip to zero).
-                        var bh = Math.Abs(val) / span * ph;
-                        var bx = ox + c * groupW + gap + s * barW;
-                        var by = val >= 0 ? plotZeroY - bh : plotZeroY;
-                        sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{bh:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
-                        if (showDataLabels)
+                        var bx = ox + c * groupW + gap + s * pitchW;
+                        // Bar spans from the zero baseline (or, on a log axis, the
+                        // decade floor) to the value; height is the gap between the
+                        // two mapped endpoints. Linear: identical to |val|/span·ph.
+                        // Top edge is the smaller Y of the two endpoints; reversed flips
+                        // which end that is (with maxMin the baseline is at the TOP so
+                        // bars grow downward).
+                        var valY = ValToY(val);
+                        var bh = Math.Abs(valY - plotZeroY);
+                        var by = Math.Min(plotZeroY, valY);
+                        sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{by:0.#}\" width=\"{barW:0.#}\" height=\"{bh:0.#}\" {BarFillAttrs(s, c, val)} opacity=\"{FillOpacity(s)}\"/>");
+                        if (showDataLabels && !LabelDeleted(s, c))
                         {
-                            var vlabel = LabelText(rawVal, val);
-                            var ly = val >= 0 ? by - 3 : by + bh + DataLabelFontPx;
-                            sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2:0.#}\" y=\"{ly:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\">{vlabel}</text>");
+                            var vlabel = LabelText(s, c, rawVal, val);
+                            // Honor <c:dLblPos> for vertical columns. The value-end tip
+                            // is the top edge (by) when the bar grows up, else the bottom
+                            // edge (by+bh); the base edge is the opposite. outEnd places
+                            // the label just past the tip (Office default); inEnd just
+                            // inside the tip; ctr at the bar midpoint; inBase near the
+                            // zero baseline. Without this, inEnd and outEnd were identical.
+                            var labelAbove = isReversed ? val < 0 : val >= 0;
+                            var tipY = labelAbove ? by : by + bh;
+                            var baseY = labelAbove ? by + bh : by;
+                            double ly;
+                            switch (DataLabelPos)
+                            {
+                                case "inEnd":
+                                    ly = labelAbove ? tipY + DataLabelFontPx + 1 : tipY - 3;
+                                    break;
+                                case "ctr":
+                                    ly = by + bh / 2 + DataLabelFontPx / 2.0;
+                                    break;
+                                case "inBase":
+                                    ly = labelAbove ? baseY - 3 : baseY + DataLabelFontPx + 1;
+                                    break;
+                                default: // outEnd (Office default)
+                                    ly = labelAbove ? tipY - 3 : tipY + DataLabelFontPx;
+                                    break;
+                            }
+                            sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2:0.#}\" y=\"{ly:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"middle\">{vlabel}</text>");
                         }
                     }
                 }
@@ -520,14 +960,14 @@ internal partial class ChartSvgRenderer
                     for (int c = 0; c < catCount; c++)
                     {
                         var rawVal = c < series[s].values.Length ? series[s].values[c] : 0;
-                        var bx = ox + c * groupW + gap + s * barW + barW / 2;
-                        var byTop = oy + ph - ((rawVal - niceMin) / span) * ph;
+                        var bx = ox + c * groupW + gap + s * pitchW + barW / 2;
+                        var byTop = ValToY(rawVal);
                         double plusErr = eb.ValueType == "percentage" ? Math.Abs(rawVal) * eb.Value / 100.0 : errAmount;
                         double minusErr = plusErr;
                         var showPlus = eb.BarType is "both" or "plus";
                         var showMinus = eb.BarType is "both" or "minus";
-                        var yTop = showPlus ? oy + ph - ((rawVal + plusErr - niceMin) / span) * ph : byTop;
-                        var yBot = showMinus ? oy + ph - ((rawVal - minusErr - niceMin) / span) * ph : byTop;
+                        var yTop = showPlus ? ValToY(rawVal + plusErr) : byTop;
+                        var yBot = showMinus ? ValToY(rawVal - minusErr) : byTop;
                         sb.AppendLine($"        <line x1=\"{bx:0.#}\" y1=\"{yTop:0.#}\" x2=\"{bx:0.#}\" y2=\"{yBot:0.#}\" stroke=\"{ebColor}\" stroke-width=\"{eb.Width:0.#}\"/>");
                         if (showPlus && !eb.NoEndCap)
                             sb.AppendLine($"        <line x1=\"{bx - capW:0.#}\" y1=\"{yTop:0.#}\" x2=\"{bx + capW:0.#}\" y2=\"{yTop:0.#}\" stroke=\"{ebColor}\" stroke-width=\"{eb.Width:0.#}\"/>");
@@ -536,18 +976,53 @@ internal partial class ChartSvgRenderer
                     }
                 }
             }
+            // Trendlines on vertical (column) bar charts. PowerPoint regresses over
+            // the 1-based category index and draws the fitted curve across the plot,
+            // each category anchored at its group center (ox + (i+0.5)*groupW).
+            if (trendlines != null && !stacked)
+            {
+                for (int s = 0; s < serCount; s++)
+                {
+                    var tl = s < trendlines.Count ? trendlines[s] : null;
+                    if (tl == null) continue;
+                    var vals = series[s].values;
+                    if (vals.Length < 2) continue;
+                    var lineColor = tl.Color ?? colors[s % colors.Count];
+                    var xData = new double[vals.Length];
+                    var yData = new double[vals.Length];
+                    for (int i = 0; i < vals.Length; i++) { xData[i] = i + 1; yData[i] = vals[i]; }
+                    Func<double, double> tlMapX = xv => ox + (xv - 0.5) * groupW;
+                    AppendTrendline(sb, tl, xData, yData, tlMapX, ValToY, lineColor, ox + pw, oy + 12);
+                }
+            }
+            if (CatAxisVisible)
             for (int c = 0; c < catCount; c++)
             {
                 var label = c < categories.Length ? categories[c] : "";
                 var lx = ox + c * groupW + groupW / 2;
-                sb.AppendLine($"        <text x=\"{lx:0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{catFontSize}\" text-anchor=\"middle\">{HtmlEncode(label)}</text>");
+                // Vertical columns: category axis is HORIZONTAL at the bottom (y=oy+ph).
+                if (TickMarkVisible(CatMajorTickMark))
+                    EmitHAxisTick(sb, lx, oy + ph, CatMajorTickMark!);
+                if (!CatTickLabelsHidden && (CatTickLabelSkip <= 1 || c % CatTickLabelSkip == 0))
+                    EmitBottomAxisLabel(sb, lx, oy + ph + 16, CatColor, catFontSize, label, catLabelRotationDeg, CatTickWeightAttr);
             }
+            if (ValAxisVisible)
             for (int t = 0; t <= nTicks; t++)
             {
-                var val = niceMin + tickStep * t;
-                var label = percentStacked ? $"{(int)val}%" : FormatAxisValue(val, valNumFmt);
-                var ty = oy + ph - (double)ph * t / nTicks;
-                sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{ty:0.#}\" fill=\"{AxisColor}\" font-size=\"{valFontSize}\" text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
+                var val = isLog ? Math.Pow(logB, logMinExp + t) : niceMin + tickStep * t;
+                // BUG1(R25): with an explicit axisMin/max/majorUnit the final
+                // tick can land above axisMax (e.g. 450 > 400); real PowerPoint
+                // omits any label past the axis top. Skip it.
+                if (val > niceMax + 1e-9) continue;
+                var label = percentStacked ? $"{(int)val}%" : FmtValAxis(val, valNumFmt);
+                // Position the label at the VALUE on the scale (matches the gridlines and
+                // bars) rather than an even pixel fraction; no-op when nTicks*tickStep==span.
+                var ty = ValToY(val);
+                // Vertical columns: value axis is VERTICAL on the left (x=ox).
+                if (TickMarkVisible(ValMajorTickMark))
+                    EmitVAxisTick(sb, ox, ty, ValMajorTickMark!);
+                if (!ValTickLabelsHidden)
+                    EmitLeftAxisLabel(sb, ox - 4, ty, AxisColor, valFontSize, label, valLabelRotationDeg, ValTickWeightAttr);
             }
             // Reference-line overlays: vertical bars/columns → horizontal line at value position on the Y (value) axis.
             if (referenceLines != null)
@@ -555,7 +1030,7 @@ internal partial class ChartSvgRenderer
                 {
                     var v = percentStacked ? rl.Value * 100 : rl.Value;
                     if (v < niceMin || v > niceMax) continue;
-                    var ry = oy + ph - ((v - niceMin) / span) * ph;
+                    var ry = ValToY(v);
                     var strokeColor = rl.Color.StartsWith("#") ? rl.Color : "#" + rl.Color;
                     var dashArray = RefLineDashArray(rl.Dash);
                     sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{ry:0.#}\" x2=\"{ox + pw}\" y2=\"{ry:0.#}\" stroke=\"{strokeColor}\" stroke-width=\"{rl.WidthPt:0.##}\" stroke-dasharray=\"{dashArray}\"/>");
@@ -635,6 +1110,13 @@ internal partial class ChartSvgRenderer
         Func<double, double> mapXVal, Func<double, double> mapY, string lineColor, double fallbackLabelX, double fallbackLabelY)
     {
         if (xData.Length < 2) return;
+        // An explicit trendline color (tl.Color, from <c:trendline><c:spPr><a:ln>)
+        // arrives as raw OOXML hex with no '#'; emitting stroke="FF0000" is an
+        // invalid SVG paint so the curve renders as stroke:none (invisible). The
+        // series-color fallback is already '#'-prefixed. CssHexColor is idempotent
+        // on '#'-prefixed input, so route both through it. (Affects every chart
+        // type's explicit-color trendline, not just area.)
+        lineColor = CssHexColor(lineColor);
         var dashArr = tl.Dash != "solid" ? $" stroke-dasharray=\"{RefLineDashArray(tl.Dash)}\"" : "";
 
         Func<double, double>? trendFn = null;
@@ -804,7 +1286,12 @@ internal partial class ChartSvgRenderer
         string? dropLineColor = null, double dropLineWidth = 0.7, string? dropLineDash = null,
         string? highLowLineColor = null, double highLowLineWidth = 1,
         List<TrendlineInfo?>? trendlines = null, List<ErrorBarInfo?>? errorBars = null,
-        bool scatterMarkersOnly = false, bool stacked = false, bool percent = false)
+        bool scatterMarkersOnly = false, bool stacked = false, bool percent = false,
+        string? dataLabelNumFmt = null,
+        List<string?>? markerFillColors = null, List<string?>? markerLineColors = null,
+        bool showSerName = false, bool showCatName = false, bool showVal = true,
+        int? catLabelRotationDeg = null, int? valLabelRotationDeg = null,
+        List<bool>? lineHide = null)
     {
         bool isLog = logBase.HasValue && logBase.Value > 1;
 
@@ -812,6 +1299,12 @@ internal partial class ChartSvgRenderer
         // cumulative sum of itself and all series below it. Percent normalizes
         // each category's stack to 100. Transform the series up-front so axis
         // scaling, markers, and labels all reflect the stacked geometry.
+        // R44: preserve the pre-stack series so data-label TEXT shows the
+        // original per-series value, while geometry/markers/axis use the
+        // stacked (cumulative) values. Mirrors the bar path's `rawVal` split:
+        // the bar renderer labels the original value (or percentage when
+        // showPercent), never the cumulative stack height.
+        var originalSeries = series;
         if (stacked || percent)
             series = StackSeries(series, percent);
 
@@ -848,7 +1341,15 @@ internal partial class ChartSvgRenderer
         else
         {
             var computeMax = axisMax ?? dataMax;
-            (niceMax, tickStep, nTicks) = ComputeNiceAxis(computeMax);
+            // Min-aware nice axis: when an explicit non-zero axis min is set and
+            // no explicit axis max, derive step/top from the VISIBLE range
+            // [axisMin, dataMax] so the top doesn't overshoot (e.g. min=50,
+            // dataMax=200 → step 20, top 210, not a 0-based 0..300). When
+            // axisMin is 0/absent this falls through to the unchanged path.
+            if (axisMin.HasValue && axisMin.Value > 0 && !axisMax.HasValue && !majorUnit.HasValue)
+                (niceMax, tickStep, nTicks) = ComputeNiceAxisFromMin(axisMin.Value, dataMax);
+            else
+                (niceMax, tickStep, nTicks) = ComputeNiceAxis(computeMax);
             if (axisMax.HasValue) niceMax = axisMax.Value;
             // R12b: floor the axis at a nice value ≤ 0 when data has negatives,
             // instead of hard-coding 0 (which clamped negative points to the
@@ -868,6 +1369,11 @@ internal partial class ChartSvgRenderer
             if (majorUnit.HasValue && majorUnit.Value > 0)
             {
                 tickStep = majorUnit.Value;
+                // Round the top up to a multiple of majorUnit (headroom above the
+                // data), matching PowerPoint — parity with the bar/column path.
+                // Skip when an explicit max pins the top or the floor is negative.
+                if (!axisMax.HasValue && niceMin >= 0)
+                    niceMax = Math.Ceiling(ComputeNiceAxis(dataMax).niceMax / tickStep) * tickStep;
                 nTicks = (int)Math.Ceiling((niceMax - niceMin) / tickStep);
             }
             else if (niceMin < 0)
@@ -902,8 +1408,26 @@ internal partial class ChartSvgRenderer
         for (int t = 1; t <= nTicks; t++)
         {
             double tickVal = isLog ? niceMin + t : niceMin + tickStep * t;
+            if (!isLog && tickVal > niceMax + 1e-9) continue; // no gridline past axisMax
             var gy = MapY(isLog ? Math.Pow(logBase!.Value, tickVal) : tickVal);
-            sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.5\" stroke-dasharray=\"none\"/>");
+            var lineGridDash = !string.IsNullOrEmpty(GridlineDash) && GridlineDash != "solid" ? RefLineDashArray(GridlineDash) : "none";
+            sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"{GridlineWidthPx:0.##}\" stroke-dasharray=\"{lineGridDash}\"/>");
+        }
+        // Category-axis major gridlines (vertical) — at the category-slot
+        // boundaries, only when <c:catAx><c:majorGridlines/> was declared and
+        // the category axis is visible (PowerPoint draws none otherwise).
+        if (ShowCatGridlines && CatAxisVisible)
+        for (int i = 0; i <= catCount; i++)
+        {
+            var gx = ox + (double)pw * i / Math.Max(catCount, 1);
+            sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+        }
+        // Category-axis minor gridlines (vertical, at slot boundaries).
+        if (ShowCatMinorGridlines && CatAxisVisible)
+        for (int i = 0; i <= catCount; i++)
+        {
+            var gx = ox + (double)pw * i / Math.Max(catCount, 1);
+            sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.25\" opacity=\"0.5\"/>");
         }
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy}\" x2=\"{ox}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy + ph}\" x2=\"{ox + pw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -968,8 +1492,9 @@ internal partial class ChartSvgRenderer
             var lw = lineWidths != null && s < lineWidths.Count ? lineWidths[s] : 2;
 
             // R16c: scatterStyle=marker draws dots only — skip the connecting
-            // line/path entirely. Markers are still emitted below.
-            if (scatterMarkersOnly)
+            // line/path entirely. Markers are still emitted below. Also skip when this
+            // SERIES has a:ln/a:noFill (PowerPoint "No line" — markers only for that series).
+            if (scatterMarkersOnly || (lineHide != null && s < lineHide.Count && lineHide[s]))
             {
                 // no line
             }
@@ -996,14 +1521,53 @@ internal partial class ChartSvgRenderer
 
             var shape = markerShapes != null && s < markerShapes.Count ? markerShapes[s] : "circle";
             var mSize = markerSizes != null && s < markerSizes.Count ? markerSizes[s] * 0.6 : 3;
+            var mFill = markerFillColors != null && s < markerFillColors.Count ? markerFillColors[s] : null;
+            var mStroke = markerLineColors != null && s < markerLineColors.Count ? markerLineColors[s] : null;
             for (int p = 0; p < pts.Count; p++)
             {
-                sb.AppendLine($"        {RenderMarkerSvg(shape, pts[p].x, pts[p].y, mSize, lineColor)}");
-                if (showDataLabels)
+                sb.AppendLine($"        {RenderMarkerSvg(shape, pts[p].x, pts[p].y, mSize, mFill ?? lineColor, mStroke ?? lineColor)}");
+                if (showDataLabels && !LabelDeleted(s, p))
                 {
-                    var val = pts[p].val;
-                    var vlabel = val % 1 == 0 ? $"{(int)val}" : $"{val:0.#}";
-                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{pts[p].x:0.#}\" y=\"{pts[p].y - 6:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\">{vlabel}</text>");
+                    // R44: label TEXT uses the original (pre-stack) per-series
+                    // value; the label POSITION stays at the stacked vertex
+                    // (pts[p]). For non-stacked charts originalSeries == series,
+                    // so pts[p].val and the original value are identical.
+                    var val = (stacked || percent) && s < originalSeries.Count
+                              && p < originalSeries[s].values.Length
+                        ? originalSeries[s].values[p]
+                        : pts[p].val;
+                    // BUG5(R25): honor <c:dLbls><c:numFmt> on the data labels
+                    // (e.g. "$#,##0"); fall back to the value-axis numFmt (mirrors
+                    // the bar LabelText path) then the bare-integer shortcut.
+                    var valuePart = !string.IsNullOrEmpty(dataLabelNumFmt) ? FormatAxisValue(val, dataLabelNumFmt)
+                        : !string.IsNullOrEmpty(valNumFmt) ? FormatAxisValue(val, valNumFmt)
+                        : val % 1 == 0 ? $"{(int)val}" : $"{val:0.#}";
+                    // Compose enabled label parts (series name, category name,
+                    // value) in PowerPoint's order. Default (showVal only) keeps
+                    // the legacy value-only label.
+                    var lparts = new List<string>();
+                    if (showSerName && s < series.Count) lparts.Add(series[s].name);
+                    if (showCatName && p >= 0 && p < categories.Length) lparts.Add(categories[p]);
+                    if (showVal) lparts.Add(valuePart);
+                    var vlabel = string.Join(", ", lparts);
+                    // Honor <c:dLblPos> for line markers (ctr|l|r|t|b). Default is above
+                    // the point (PowerPoint's line default); previously the y-6 above
+                    // offset was hardcoded, so an explicit dLblPos=b/l/r/ctr was ignored
+                    // (bar/pie already honor DataLabelPos).
+                    double lblX = pts[p].x, lblY = pts[p].y - 6;
+                    var lblAnchor = "middle";
+                    if (HasExplicitDataLabelPos)
+                    {
+                        switch (DataLabelPos)
+                        {
+                            case "b": lblY = pts[p].y + DataLabelFontPx + 4; break;
+                            case "ctr": lblY = pts[p].y + DataLabelFontPx / 3.0; break;
+                            case "l": lblX = pts[p].x - 6; lblY = pts[p].y + DataLabelFontPx / 3.0; lblAnchor = "end"; break;
+                            case "r": lblX = pts[p].x + 6; lblY = pts[p].y + DataLabelFontPx / 3.0; lblAnchor = "start"; break;
+                            default: break; // t / above (legacy)
+                        }
+                    }
+                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{lblX:0.#}\" y=\"{lblY:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"{lblAnchor}\">{vlabel}</text>");
                 }
             }
         }
@@ -1050,14 +1614,22 @@ internal partial class ChartSvgRenderer
             }
         }
 
-        // Category labels
+        // Category labels (+ major tick marks below the bottom axis)
         for (int c = 0; c < catCount; c++)
         {
             var label = c < categories.Length ? categories[c] : "";
-            sb.AppendLine($"        <text x=\"{MapX(c):0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\" text-anchor=\"middle\">{HtmlEncode(label)}</text>");
+            if (CatAxisVisible && TickMarkVisible(CatMajorTickMark))
+                EmitHAxisTick(sb, MapX(c), oy + ph, CatMajorTickMark!);
+            // Honor <c:catAx><c:txPr><a:bodyPr rot> via EmitBottomAxisLabel (mirrors
+            // the bar renderer). Previously the line/area renderers emitted a raw
+            // horizontal <text>, dropping the category-axis label rotation that the
+            // bar chart already applied (the bottom-margin reservation already fired
+            // for all chart types, leaving the labels un-rotated in the gap).
+            if (!CatTickLabelsHidden && (CatTickLabelSkip <= 1 || c % CatTickLabelSkip == 0))
+                EmitBottomAxisLabel(sb, MapX(c), oy + ph + 16, CatColor, CatFontPx, label, catLabelRotationDeg, CatTickWeightAttr);
         }
 
-        // Value axis labels
+        // Value axis labels (+ major tick marks left of the value axis)
         for (int t = 0; t <= nTicks; t++)
         {
             double tickVal;
@@ -1066,26 +1638,37 @@ internal partial class ChartSvgRenderer
             {
                 var exp = niceMin + t;
                 tickVal = Math.Pow(logBase!.Value, exp);
-                label = FormatAxisValue(tickVal, valNumFmt);
+                label = FmtValAxis(tickVal, valNumFmt);
             }
             else
             {
                 tickVal = niceMin + tickStep * t;
-                label = FormatAxisValue(tickVal, valNumFmt);
+                if (tickVal > niceMax + 1e-9) continue; // no label past axisMax
+                label = FmtValAxis(tickVal, valNumFmt);
             }
             var ty = MapY(tickVal);
-            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{ty:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\" text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
+            if (ValAxisVisible && TickMarkVisible(ValMajorTickMark))
+                EmitVAxisTick(sb, ox, ty, ValMajorTickMark!);
+            if (!ValTickLabelsHidden)
+                EmitLeftAxisLabel(sb, ox - 4, ty, AxisColor, ValFontPx, label, valLabelRotationDeg, ValTickWeightAttr);
         }
     }
 
     public void RenderPieChartSvg(StringBuilder sb, List<(string name, double[] values)> series,
         string[] categories, List<string> colors, int svgW, int svgH, double holeRatio = 0.0, bool showDataLabels = false,
-        bool showVal = false, bool showPercent = false, bool showCatName = false, List<double>? explosions = null)
+        bool showVal = false, bool showPercent = false, bool showCatName = false, List<double>? explosions = null,
+        bool showSerName = false)
     {
         var values = series.FirstOrDefault().values ?? [];
         if (values.Length == 0) return;
         var total = values.Sum();
         if (total <= 0) return;
+
+        // PowerPoint draws a thin separator (the chart-area background, white by
+        // default) between adjacent pie/doughnut slices. Without it slices touch
+        // edge-to-edge — invisible for monochrome (varyColors=false) pies. Emit a
+        // default white slice stroke to match.
+        const string sliceStroke = " stroke=\"#FFFFFF\" stroke-width=\"2\"";
 
         var cx = svgW / 2.0;
         var cy = svgH / 2.0;
@@ -1096,6 +1679,19 @@ internal partial class ChartSvgRenderer
         var maxExpl = explosions != null && explosions.Count > 0 ? explosions.Max() : 0.0;
         if (maxExpl > 0) r /= (1 + maxExpl);
         var innerR = r * holeRatio;
+
+        // Multi-series DOUGHNUT: PowerPoint draws one concentric ring per series,
+        // sharing the center hole, each ring an equal-width band of the annulus
+        // [innerR, r]. Series 0 is OUTERMOST. Each ring colors its slices by
+        // category index (the same per-category palette as a single ring).
+        // Single-series doughnut and all pie charts (holeRatio == 0) fall through
+        // to the original single-ring path below, unchanged.
+        if (holeRatio > 0 && series.Count > 1)
+        {
+            RenderMultiRingDoughnut(sb, series, categories, colors, cx, cy, r, innerR,
+                showDataLabels, showVal, showPercent, showCatName);
+            return;
+        }
         // firstSliceAng rotates the start edge clockwise from 12 o'clock. SVG y
         // grows downward, so a clockwise rotation adds to the angle directly.
         var firstSliceOffset = FirstSliceAngle * Math.PI / 180.0;
@@ -1126,7 +1722,7 @@ internal partial class ChartSvgRenderer
                 // to catch float rounding.
                 if (sliceAngle >= 2 * Math.PI - 1e-6)
                 {
-                    sb.AppendLine($"        <path d=\"M {cx0 - r:0.#},{cy0:0.#} A {r:0.#},{r:0.#} 0 1,1 {cx0 + r:0.#},{cy0:0.#} A {r:0.#},{r:0.#} 0 1,1 {cx0 - r:0.#},{cy0:0.#} Z M {cx0 - innerR:0.#},{cy0:0.#} A {innerR:0.#},{innerR:0.#} 0 1,1 {cx0 + innerR:0.#},{cy0:0.#} A {innerR:0.#},{innerR:0.#} 0 1,1 {cx0 - innerR:0.#},{cy0:0.#} Z\" fill=\"{color}\" fill-rule=\"evenodd\" opacity=\"{sliceOpacity}\"/>");
+                    sb.AppendLine($"        <path d=\"M {cx0 - r:0.#},{cy0:0.#} A {r:0.#},{r:0.#} 0 1,1 {cx0 + r:0.#},{cy0:0.#} A {r:0.#},{r:0.#} 0 1,1 {cx0 - r:0.#},{cy0:0.#} Z M {cx0 - innerR:0.#},{cy0:0.#} A {innerR:0.#},{innerR:0.#} 0 1,1 {cx0 + innerR:0.#},{cy0:0.#} A {innerR:0.#},{innerR:0.#} 0 1,1 {cx0 - innerR:0.#},{cy0:0.#} Z\" fill=\"{color}\" fill-rule=\"evenodd\" opacity=\"{sliceOpacity}\"{sliceStroke}/>");
                 }
                 else
                 {
@@ -1135,7 +1731,7 @@ internal partial class ChartSvgRenderer
                     var ix1 = cx0 + innerR * Math.Cos(endAngle); var iy1 = cy0 + innerR * Math.Sin(endAngle);
                     var ix2 = cx0 + innerR * Math.Cos(startAngle); var iy2 = cy0 + innerR * Math.Sin(startAngle);
                     var largeArc = sliceAngle > Math.PI ? 1 : 0;
-                    sb.AppendLine($"        <path d=\"M {ox1:0.#},{oy1:0.#} A {r:0.#},{r:0.#} 0 {largeArc},1 {ox2:0.#},{oy2:0.#} L {ix1:0.#},{iy1:0.#} A {innerR:0.#},{innerR:0.#} 0 {largeArc},0 {ix2:0.#},{iy2:0.#} Z\" fill=\"{color}\" opacity=\"{sliceOpacity}\"/>");
+                    sb.AppendLine($"        <path d=\"M {ox1:0.#},{oy1:0.#} A {r:0.#},{r:0.#} 0 {largeArc},1 {ox2:0.#},{oy2:0.#} L {ix1:0.#},{iy1:0.#} A {innerR:0.#},{innerR:0.#} 0 {largeArc},0 {ix2:0.#},{iy2:0.#} Z\" fill=\"{color}\" opacity=\"{sliceOpacity}\"{sliceStroke}/>");
                 }
             }
             else
@@ -1143,7 +1739,7 @@ internal partial class ChartSvgRenderer
                 var x1 = cx0 + r * Math.Cos(startAngle); var y1 = cy0 + r * Math.Sin(startAngle);
                 var x2 = cx0 + r * Math.Cos(endAngle); var y2 = cy0 + r * Math.Sin(endAngle);
                 var largeArc = sliceAngle > Math.PI ? 1 : 0;
-                sb.AppendLine($"        <path d=\"M {cx0:0.#},{cy0:0.#} L {x1:0.#},{y1:0.#} A {r:0.#},{r:0.#} 0 {largeArc},1 {x2:0.#},{y2:0.#} Z\" fill=\"{color}\" opacity=\"{sliceOpacity}\"/>");
+                sb.AppendLine($"        <path d=\"M {cx0:0.#},{cy0:0.#} L {x1:0.#},{y1:0.#} A {r:0.#},{r:0.#} 0 {largeArc},1 {x2:0.#},{y2:0.#} Z\" fill=\"{color}\" opacity=\"{sliceOpacity}\"{sliceStroke}/>");
             }
             startAngle = endAngle;
         }
@@ -1152,7 +1748,13 @@ internal partial class ChartSvgRenderer
             var labelAngle = -Math.PI / 2 + firstSliceOffset;
             // <c:dLblPos val="outEnd"> places labels just beyond the pie edge along
             // each slice bisector; inEnd/ctr/bestFit keep them inside the slice.
-            var labelOutside = DataLabelPos == "outEnd";
+            // OOXML's default pie/doughnut label position is bestFit (ON the
+            // segment), NOT outEnd. The "outEnd" default is bar/column-appropriate,
+            // so only treat outEnd as "outside" for pie/doughnut when the XML
+            // explicitly declared <c:dLblPos val="outEnd"/>. This matches PowerPoint,
+            // which draws default labels on the colored slices (readable even on a
+            // dark chart background) rather than outside in dark text.
+            var labelOutside = HasExplicitDataLabelPos && DataLabelPos == "outEnd";
             var labelR = labelOutside ? r * 1.12
                 : holeRatio > 0 ? r * (1 + holeRatio) / 2 : r * 0.65;
             for (int i = 0; i < values.Length; i++)
@@ -1172,19 +1774,106 @@ internal partial class ChartSvgRenderer
                     label = pct >= 5 ? $"{pct:0}%" : "";
                 else if (showVal && showPercent)
                     label = pct >= 5 ? $"{values[i]:0.##} ({pct:0}%)" : "";
-                else if (showCatName && !showVal && !showPercent)
-                    label = ""; // category-name only — value text intentionally empty (prepended below)
+                else if ((showCatName || showSerName) && !showVal && !showPercent)
+                    label = ""; // name-only — value text intentionally empty (name parts prepended below)
                 else
                     label = pct >= 5 ? $"{pct:0}%" : ""; // default to percent for pie
-                // showCatName: prepend the category name (PowerPoint style:
-                // "Category, value, pct"). Honored independently of val/percent.
+                // showCatName / showSerName: prepend the category and/or series
+                // name (PowerPoint style: "Series, Category, value, pct").
+                // Honored independently of val/percent.
                 if (showCatName && pct >= 5 && i < categories.Length && !string.IsNullOrEmpty(categories[i]))
                     label = string.IsNullOrEmpty(label) ? categories[i] : $"{categories[i]}, {label}";
+                if (showSerName && pct >= 5 && series.Count > 0 && !string.IsNullOrEmpty(series[0].name))
+                    label = string.IsNullOrEmpty(label) ? series[0].name : $"{series[0].name}, {label}";
                 // Outside labels sit on the plot background, not on a colored
                 // slice — use a dark fill (white is invisible there).
                 var labelFill = labelOutside ? "#444" : "#fff";
                 if (!string.IsNullOrEmpty(label))
                     sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{lx:0.#}\" y=\"{ly:0.#}\" fill=\"{labelFill}\" font-size=\"{DataLabelFontPx}\" font-weight=\"bold\" text-anchor=\"middle\" dominant-baseline=\"central\">{label}</text>");
+                labelAngle += sliceAngle;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Multi-series doughnut: one concentric ring per series. The annulus
+    /// [innerR, r] is split into N equal-width bands; series[0] occupies the
+    /// OUTERMOST band, series[N-1] the innermost (nearest the hole), matching
+    /// PowerPoint. Each ring colors its slices by category index using the
+    /// shared per-category palette. Data labels are drawn on the outer ring
+    /// only (PowerPoint labels every ring, but the outer ring keeps single-ring
+    /// label behavior intact and avoids label crowding in the thin inner bands).
+    /// </summary>
+    private void RenderMultiRingDoughnut(StringBuilder sb, List<(string name, double[] values)> series,
+        string[] categories, List<string> colors, double cx, double cy, double r, double innerR,
+        bool showDataLabels, bool showVal, bool showPercent, bool showCatName)
+    {
+        var firstSliceOffset = FirstSliceAngle * Math.PI / 180.0;
+        var bandWidth = (r - innerR) / series.Count;
+        // Default white separator between adjacent slices (see RenderPieChartSvg).
+        const string sliceStroke = " stroke=\"#FFFFFF\" stroke-width=\"2\"";
+
+        for (int s = 0; s < series.Count; s++)
+        {
+            var values = series[s].values ?? [];
+            if (values.Length == 0) continue;
+            var total = values.Sum();
+            if (total <= 0) continue;
+
+            // Series 0 = outermost band. Band s spans [bandInner, bandOuter].
+            var bandOuter = r - s * bandWidth;
+            var bandInner = bandOuter - bandWidth;
+            var startAngle = -Math.PI / 2 + firstSliceOffset;
+
+            for (int i = 0; i < values.Length; i++)
+            {
+                var sliceAngle = 2 * Math.PI * values[i] / total;
+                var endAngle = startAngle + sliceAngle;
+                var color = i < colors.Count ? colors[i] : DefaultColors[i % DefaultColors.Length];
+                var sliceOpacity = FillOpacity(i);
+
+                if (sliceAngle >= 2 * Math.PI - 1e-6)
+                {
+                    sb.AppendLine($"        <path d=\"M {cx - bandOuter:0.#},{cy:0.#} A {bandOuter:0.#},{bandOuter:0.#} 0 1,1 {cx + bandOuter:0.#},{cy:0.#} A {bandOuter:0.#},{bandOuter:0.#} 0 1,1 {cx - bandOuter:0.#},{cy:0.#} Z M {cx - bandInner:0.#},{cy:0.#} A {bandInner:0.#},{bandInner:0.#} 0 1,1 {cx + bandInner:0.#},{cy:0.#} A {bandInner:0.#},{bandInner:0.#} 0 1,1 {cx - bandInner:0.#},{cy:0.#} Z\" fill=\"{color}\" fill-rule=\"evenodd\" opacity=\"{sliceOpacity}\"{sliceStroke}/>");
+                }
+                else
+                {
+                    var ox1 = cx + bandOuter * Math.Cos(startAngle); var oy1 = cy + bandOuter * Math.Sin(startAngle);
+                    var ox2 = cx + bandOuter * Math.Cos(endAngle); var oy2 = cy + bandOuter * Math.Sin(endAngle);
+                    var ix1 = cx + bandInner * Math.Cos(endAngle); var iy1 = cy + bandInner * Math.Sin(endAngle);
+                    var ix2 = cx + bandInner * Math.Cos(startAngle); var iy2 = cy + bandInner * Math.Sin(startAngle);
+                    var largeArc = sliceAngle > Math.PI ? 1 : 0;
+                    sb.AppendLine($"        <path d=\"M {ox1:0.#},{oy1:0.#} A {bandOuter:0.#},{bandOuter:0.#} 0 {largeArc},1 {ox2:0.#},{oy2:0.#} L {ix1:0.#},{iy1:0.#} A {bandInner:0.#},{bandInner:0.#} 0 {largeArc},0 {ix2:0.#},{iy2:0.#} Z\" fill=\"{color}\" opacity=\"{sliceOpacity}\"{sliceStroke}/>");
+                }
+                startAngle = endAngle;
+            }
+        }
+
+        // Labels on the outermost ring only (series 0).
+        if (showDataLabels)
+        {
+            var outerVals = series[0].values ?? [];
+            var outerTotal = outerVals.Sum();
+            if (outerTotal <= 0) return;
+            var labelR = r - bandWidth / 2;
+            var labelAngle = -Math.PI / 2 + firstSliceOffset;
+            for (int i = 0; i < outerVals.Length; i++)
+            {
+                var sliceAngle = 2 * Math.PI * outerVals[i] / outerTotal;
+                var midAngle = labelAngle + sliceAngle / 2;
+                var lx = cx + labelR * Math.Cos(midAngle);
+                var ly = cy + labelR * Math.Sin(midAngle);
+                var pct = outerVals[i] / outerTotal * 100;
+                string label;
+                if (showVal && !showPercent) label = pct >= 5 ? $"{outerVals[i]:0.##}" : "";
+                else if (showPercent && !showVal) label = pct >= 5 ? $"{pct:0}%" : "";
+                else if (showVal && showPercent) label = pct >= 5 ? $"{outerVals[i]:0.##} ({pct:0}%)" : "";
+                else if (showCatName && !showVal && !showPercent) label = "";
+                else label = pct >= 5 ? $"{pct:0}%" : "";
+                if (showCatName && pct >= 5 && i < categories.Length && !string.IsNullOrEmpty(categories[i]))
+                    label = string.IsNullOrEmpty(label) ? categories[i] : $"{categories[i]}, {label}";
+                if (!string.IsNullOrEmpty(label))
+                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{lx:0.#}\" y=\"{ly:0.#}\" fill=\"#fff\" font-size=\"{DataLabelFontPx}\" font-weight=\"bold\" text-anchor=\"middle\" dominant-baseline=\"central\">{label}</text>");
                 labelAngle += sliceAngle;
             }
         }
@@ -1199,12 +1888,25 @@ internal partial class ChartSvgRenderer
     /// bar stack (barOfPie), joined to the aggregate slice by connector lines.
     /// </summary>
     public void RenderOfPieChartSvg(StringBuilder sb, List<(string name, double[] values)> series,
-        string[] categories, List<string> colors, int ox, int oy, int pw, int ph, bool isBar)
+        string[] categories, List<string> colors, int ox, int oy, int pw, int ph, bool isBar,
+        bool showDataLabels = false, bool showVal = true, bool showPercent = false,
+        string? dataLabelNumFmt = null)
     {
         var values = series.FirstOrDefault().values ?? [];
         if (values.Length == 0) return;
         var total = values.Sum();
         if (total <= 0) return;
+
+        // Format a single slice value as a data label, honoring showVal/showPercent
+        // and the dLbls numFmt (mirrors the standard pie renderer's label content).
+        string SliceLabel(double v, double tot)
+        {
+            var pct = tot > 0 ? v / tot * 100 : 0;
+            var valTxt = !string.IsNullOrEmpty(dataLabelNumFmt) ? FormatAxisValue(v, dataLabelNumFmt) : $"{v:0.##}";
+            if (showVal && showPercent) return $"{valTxt} ({pct:0}%)";
+            if (showPercent) return $"{pct:0}%";
+            return valTxt;
+        }
 
         // Split: trailing `secCount` points go to the secondary plot.
         int secCount = Math.Min(3, Math.Max(1, values.Length - 1));
@@ -1231,6 +1933,13 @@ internal partial class ChartSvgRenderer
             var x2 = mcx + mr * Math.Cos(endAngle); var y2 = mcy + mr * Math.Sin(endAngle);
             var largeArc = sliceAngle > Math.PI ? 1 : 0;
             sb.AppendLine($"        <path d=\"M {mcx:0.#},{mcy:0.#} L {x1:0.#},{y1:0.#} A {mr:0.#},{mr:0.#} 0 {largeArc},1 {x2:0.#},{y2:0.#} Z\" fill=\"{color}\" opacity=\"{FillOpacity(i)}\"/>");
+            if (showDataLabels)
+            {
+                var midAngle = startAngle + sliceAngle / 2;
+                var lx = mcx + mr * 0.65 * Math.Cos(midAngle);
+                var ly = mcy + mr * 0.65 * Math.Sin(midAngle);
+                sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{lx:0.#}\" y=\"{ly:0.#}\" fill=\"#fff\" font-size=\"{DataLabelFontPx}\" font-weight=\"bold\" text-anchor=\"middle\" dominant-baseline=\"central\">{HtmlEncode(SliceLabel(mainSlices[i], total))}</text>");
+            }
             if (i == mainSlices.Count - 1) aggMidAngle = startAngle + sliceAngle / 2;
             startAngle = endAngle;
         }
@@ -1259,6 +1968,8 @@ internal partial class ChartSvgRenderer
                 var color = (mainCount + i) < colors.Count ? colors[mainCount + i]
                     : DefaultColors[(mainCount + i) % DefaultColors.Length];
                 sb.AppendLine($"        <rect x=\"{barX:0.#}\" y=\"{yCursor - h:0.#}\" width=\"{barW:0.#}\" height=\"{h:0.#}\" fill=\"{color}\" opacity=\"{FillOpacity(mainCount + i)}\"/>");
+                if (showDataLabels)
+                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{barX + barW / 2:0.#}\" y=\"{yCursor - h / 2:0.#}\" fill=\"#fff\" font-size=\"{DataLabelFontPx}\" font-weight=\"bold\" text-anchor=\"middle\" dominant-baseline=\"central\">{HtmlEncode(SliceLabel(secVals[i], secSum))}</text>");
                 yCursor -= h;
             }
         }
@@ -1279,6 +1990,13 @@ internal partial class ChartSvgRenderer
                 var x2 = scx + sr * Math.Cos(endAngle); var y2 = scy + sr * Math.Sin(endAngle);
                 var largeArc = sliceAngle > Math.PI ? 1 : 0;
                 sb.AppendLine($"        <path d=\"M {scx:0.#},{scy:0.#} L {x1:0.#},{y1:0.#} A {sr:0.#},{sr:0.#} 0 {largeArc},1 {x2:0.#},{y2:0.#} Z\" fill=\"{color}\" opacity=\"{FillOpacity(mainCount + i)}\"/>");
+                if (showDataLabels)
+                {
+                    var midAngle = sStart + sliceAngle / 2;
+                    var lx = scx + sr * 0.65 * Math.Cos(midAngle);
+                    var ly = scy + sr * 0.65 * Math.Sin(midAngle);
+                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{lx:0.#}\" y=\"{ly:0.#}\" fill=\"#fff\" font-size=\"{DataLabelFontPx}\" font-weight=\"bold\" text-anchor=\"middle\" dominant-baseline=\"central\">{HtmlEncode(SliceLabel(secVals[i], secSum))}</text>");
+                }
                 sStart = endAngle;
             }
         }
@@ -1286,7 +2004,12 @@ internal partial class ChartSvgRenderer
 
     public void RenderAreaChartSvg(StringBuilder sb, List<(string name, double[] values)> series,
         string[] categories, List<string> colors, int ox, int oy, int pw, int ph, bool stacked = false,
-        bool percent = false)
+        bool percent = false,
+        double? axisMin = null, double? axisMax = null, double? majorUnit = null, string? valNumFmt = null,
+        bool showDataLabels = false, bool showVal = true, bool showSerName = false,
+        bool showCatName = false, string? dataLabelNumFmt = null,
+        int? catLabelRotationDeg = null, int? valLabelRotationDeg = null,
+        bool isReversed = false, List<TrendlineInfo?>? trendlines = null)
     {
         if (series.Count == 0) return;
         var catCount = Math.Max(categories.Length, series.Max(s => s.values.Length));
@@ -1326,6 +2049,18 @@ internal partial class ChartSvgRenderer
         // areas fill below it — same domain rule as the bar/column path
         // (R12b parity: dataMin = Math.Min(0, allValues.Min())).
         var niceMin = minVal < 0 ? -ComputeNiceAxis(-minVal).niceMax : 0.0;
+        // BUG2(R25): honor explicit axis scaling (axisMin/axisMax/majorUnit) like
+        // the column renderer, so an area chart with set axisMax=… isn't ignored.
+        if (!percent)
+        {
+            if (axisMax.HasValue) niceMax = axisMax.Value;
+            if (axisMin.HasValue) niceMin = axisMin.Value;
+            if (majorUnit.HasValue && majorUnit.Value > 0)
+            {
+                tickInterval = majorUnit.Value;
+                tickCount = (int)Math.Ceiling((niceMax - niceMin) / tickInterval);
+            }
+        }
         var axisRange = niceMax - niceMin;
         // Ticks/gridlines must span the whole niceMin..niceMax range, not just the
         // positive 0..niceMax portion. nTicks counts steps across the full domain so
@@ -1333,15 +2068,58 @@ internal partial class ChartSvgRenderer
         var nTicks = percent ? tickCount : (int)Math.Round((niceMax - niceMin) / tickInterval);
         if (nTicks < 1) nTicks = 1;
 
-        // Helper: map a data value to a y-coordinate within [oy, oy+ph]
-        double DataToY(double v) => oy + ph - (v - niceMin) / axisRange * ph;
+        // Helper: map a data value to a y-coordinate within [oy, oy+ph]. When the value
+        // axis is reversed (<c:scaling><c:orientation val="maxMin"/>), the mapping flips
+        // so max sits at the bottom — mirrors RenderLineChartSvg's isReversed MapY.
+        // Previously area ignored isReversed (no param) and rendered upside-down vs
+        // PowerPoint. Gridlines and value-axis tick labels route through DataToY so they
+        // flip consistently. (Category labels stay at the bottom, matching the line/bar
+        // renderers' reversed behavior.)
+        double DataToY(double v) => isReversed
+            ? oy + (v - niceMin) / axisRange * ph
+            : oy + ph - (v - niceMin) / axisRange * ph;
         double ZeroY() => DataToY(0.0);
+        // Like DataToY but clamped to the plot rect — for stacked-area polygons whose
+        // baseline (data value 0) can fall below an explicit axisMin (PowerPoint clips
+        // the fill to the axis bottom rather than letting it run off-plot).
+        double ClampY(double v) => Math.Clamp(DataToY(v), oy, oy + ph);
 
-        if (ShowValGridlines)
-        for (int t = 0; t <= nTicks; t++)
+        // Gridlines at tick VALUES (niceMin + tickInterval*t), matching the value-axis
+        // LABELS below (which use the same expression) and the area fills. Previously the
+        // gridlines stepped by axisRange/nTicks, which diverges from tickInterval*t when an
+        // explicit axisMax isn't a multiple of tickInterval. No-op when they coincide.
+        if (ShowValGridlines && ValAxisVisible)
+        for (int t = 1; t <= nTicks; t++)
         {
-            var gy = oy + ph - (double)ph * t / nTicks;
-            sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+            var gridVal = niceMin + tickInterval * t;
+            if (gridVal > niceMax + 1e-9) continue;
+            var gy = DataToY(gridVal);
+            sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"{GridlineWidthPx:0.##}\"{ValGridDashAttr}/>");
+        }
+        if (ShowValMinorGridlines && ValAxisVisible)
+        for (int t = 0; t < nTicks; t++)
+            for (int m = 1; m < MinorGridlineCount; m++)
+            {
+                var minorVal = niceMin + tickInterval * (t + (double)m / MinorGridlineCount);
+                if (minorVal > niceMax + 1e-9) continue;
+                var gy = DataToY(minorVal);
+                sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.25\" opacity=\"0.5\"/>");
+            }
+        // Category-axis major gridlines (vertical) — at the category-slot
+        // boundaries, gated on <c:catAx><c:majorGridlines/> + category-axis
+        // visibility (PowerPoint draws none by default).
+        if (ShowCatGridlines && CatAxisVisible)
+        for (int i = 0; i <= catCount; i++)
+        {
+            var gx = ox + (double)pw * i / Math.Max(catCount, 1);
+            sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+        }
+        // Category-axis minor gridlines (vertical, at slot boundaries).
+        if (ShowCatMinorGridlines && CatAxisVisible)
+        for (int i = 0; i <= catCount; i++)
+        {
+            var gx = ox + (double)pw * i / Math.Max(catCount, 1);
+            sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.25\" opacity=\"0.5\"/>");
         }
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy}\" x2=\"{ox}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy + ph}\" x2=\"{ox + pw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -1359,9 +2137,9 @@ internal partial class ChartSvgRenderer
                 for (int c = 0; c < catCount; c++)
                 {
                     var px = ox + (catCount > 1 ? (double)pw * c / (catCount - 1) : pw / 2.0);
-                    topPoints.Add($"{px:0.#},{oy + ph - (cumulative[s, c] / niceMax) * ph:0.#}");
+                    topPoints.Add($"{px:0.#},{ClampY(cumulative[s, c]):0.#}");
                     var bottomVal = s > 0 ? cumulative[s - 1, c] : 0;
-                    bottomPoints.Add($"{px:0.#},{oy + ph - (bottomVal / niceMax) * ph:0.#}");
+                    bottomPoints.Add($"{px:0.#},{ClampY(bottomVal):0.#}");
                 }
                 bottomPoints.Reverse();
                 sb.AppendLine($"        <polygon points=\"{string.Join(" ", topPoints)} {string.Join(" ", bottomPoints)}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
@@ -1387,24 +2165,87 @@ internal partial class ChartSvgRenderer
                 sb.AppendLine($"        <polygon points=\"{firstX:0.#},{baseY:0.#} {string.Join(" ", topPoints)} {lastX:0.#},{baseY:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
             }
         }
+        if (CatAxisVisible)
         for (int c = 0; c < catCount; c++)
         {
             var label = c < categories.Length ? categories[c] : "";
             var lx = ox + (catCount > 1 ? (double)pw * c / (catCount - 1) : pw / 2.0);
-            sb.AppendLine($"        <text x=\"{lx:0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\" text-anchor=\"middle\">{HtmlEncode(label)}</text>");
+            if (TickMarkVisible(CatMajorTickMark))
+                EmitHAxisTick(sb, lx, oy + ph, CatMajorTickMark!);
+            // Honor the category-axis label rotation (mirrors bar/line via EmitBottomAxisLabel).
+            if (!CatTickLabelsHidden && (CatTickLabelSkip <= 1 || c % CatTickLabelSkip == 0))
+                EmitBottomAxisLabel(sb, lx, oy + ph + 16, CatColor, CatFontPx, label, catLabelRotationDeg, CatTickWeightAttr);
         }
+        if (ValAxisVisible)
         for (int t = 0; t <= nTicks; t++)
         {
+            // BUG2(R25): start at niceMin and format with the value-axis numFmt
+            // (e.g. "$#,##0") instead of hardcoded integer text.
             var val = niceMin + tickInterval * t;
-            var label = val % 1 == 0 ? $"{(int)val}" : $"{val:0.#}";
-            var ty = oy + ph - (double)ph * t / nTicks;
-            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{ty:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\" text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
+            if (val > niceMax + 1e-9) continue; // BUG1(R25): no label past axisMax
+            var label = percent ? (val % 1 == 0 ? $"{(int)val}" : $"{val:0.#}")
+                : FmtValAxis(val, valNumFmt);
+            var ty = DataToY(val);
+            if (TickMarkVisible(ValMajorTickMark))
+                EmitVAxisTick(sb, ox, ty, ValMajorTickMark!);
+            if (!ValTickLabelsHidden)
+                EmitLeftAxisLabel(sb, ox - 4, ty, AxisColor, ValFontPx, label, valLabelRotationDeg, ValTickWeightAttr);
         }
+
+        // Data labels at each vertex (parity with bar/line/pie). The label TEXT is
+        // the original per-series value; the label POSITION sits at the plotted
+        // vertex — for stacked/percent that is the cumulative top, for non-stacked
+        // the raw value. Emitted last so labels sit above fills and gridlines.
+        if (showDataLabels)
+        for (int s = 0; s < series.Count; s++)
+            for (int c = 0; c < catCount; c++)
+            {
+                if (LabelDeleted(s, c)) continue;
+                var rawVal = c < series[s].values.Length ? series[s].values[c] : 0;
+                var plotVal = stacked ? cumulative[s, c] : rawVal;
+                // For percentStacked the displayed value is the original datum,
+                // not the normalized 0..100 stack height.
+                var textVal = rawVal;
+                var px = ox + (catCount > 1 ? (double)pw * c / (catCount - 1) : pw / 2.0);
+                var py = stacked ? ClampY(plotVal) : DataToY(plotVal);
+                var valuePart = !string.IsNullOrEmpty(dataLabelNumFmt) ? FormatAxisValue(textVal, dataLabelNumFmt)
+                    : !string.IsNullOrEmpty(valNumFmt) ? FormatAxisValue(textVal, valNumFmt)
+                    : textVal % 1 == 0 ? $"{(int)textVal}" : $"{textVal:0.#}";
+                var lparts = new List<string>();
+                if (showSerName && s < series.Count) lparts.Add(series[s].name);
+                if (showCatName && c < categories.Length) lparts.Add(categories[c]);
+                if (showVal) lparts.Add(valuePart);
+                var vlabel = string.Join(", ", lparts);
+                sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{px:0.#}\" y=\"{py - 6:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"middle\">{HtmlEncode(vlabel)}</text>");
+            }
+
+        // Trendlines (parity with bar/line; area previously dropped them — it had
+        // no `trendlines` parameter, so a <c:trendline> on an area series was
+        // extracted into ChartInfo.Trendlines and then silently discarded. Real
+        // PowerPoint overlays the fitted curve on the area fills). Each series is
+        // regressed over its 1-based category index; tlMapX converts that index
+        // back to the vertex pixel, matching the line renderer.
+        if (trendlines != null)
+            for (int s = 0; s < series.Count; s++)
+            {
+                var tl = s < trendlines.Count ? trendlines[s] : null;
+                if (tl == null) continue;
+                var vals = series[s].values;
+                if (vals.Length < 2) continue;
+                var lineColor = tl.Color ?? colors[s % colors.Count];
+                var xData = new double[vals.Length];
+                var yData = new double[vals.Length];
+                for (int i = 0; i < vals.Length; i++) { xData[i] = i + 1; yData[i] = vals[i]; }
+                Func<double, double> tlMapX = xv => ox + (catCount > 1 ? pw * (xv - 1) / (catCount - 1) : pw / 2.0);
+                AppendTrendline(sb, tl, xData, yData, tlMapX, DataToY, lineColor, ox + pw, oy + 12);
+            }
     }
 
     public void RenderRadarChartSvg(StringBuilder sb, List<(string name, double[] values)> series,
         string[] categories, List<string> colors, int svgW, int svgH, int catLabelFontSize = 0,
-        string radarStyle = "filled")
+        string radarStyle = "filled",
+        bool showDataLabels = false, bool showVal = true, bool showSerName = false,
+        bool showCatName = false, string? dataLabelNumFmt = null)
     {
         var catCount = Math.Max(categories.Length, series.Max(s => s.values.Length));
         if (catCount < 3) return;
@@ -1462,13 +2303,33 @@ internal partial class ChartSvgRenderer
                         sb.AppendLine($"        <circle cx=\"{parts[0]}\" cy=\"{parts[1]}\" r=\"{markerR}\" fill=\"{serColor}\"/>");
                     }
                 }
+                // Data labels at each vertex (parity with bar/line/area/pie). Placed
+                // just outside the vertex along its radial direction so they clear the
+                // marker and polygon edge.
+                if (showDataLabels)
+                for (int c = 0; c < series[s].values.Length && c < catCount; c++)
+                {
+                    var angle = -Math.PI / 2 + 2 * Math.PI * c / catCount;
+                    var rawVal = series[s].values[c];
+                    var rad = rawVal / maxVal * r;
+                    var lx = cx + (rad + 10) * Math.Cos(angle);
+                    var ly = cy + (rad + 10) * Math.Sin(angle);
+                    var valuePart = !string.IsNullOrEmpty(dataLabelNumFmt) ? FormatAxisValue(rawVal, dataLabelNumFmt)
+                        : rawVal % 1 == 0 ? $"{(int)rawVal}" : $"{rawVal:0.#}";
+                    var lparts = new List<string>();
+                    if (showSerName) lparts.Add(series[s].name);
+                    if (showCatName && c < categories.Length) lparts.Add(categories[c]);
+                    if (showVal) lparts.Add(valuePart);
+                    var vlabel = string.Join(", ", lparts);
+                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{lx:0.#}\" y=\"{ly:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"middle\" dominant-baseline=\"middle\">{HtmlEncode(vlabel)}</text>");
+                }
             }
         }
         foreach (var frac in new[] { 0.2, 0.4, 0.6, 0.8, 1.0 })
         {
             var val = maxVal * frac;
             var tickLabel = val % 1 == 0 ? $"{(int)val}" : $"{val:0.#}";
-            sb.AppendLine($"        <text x=\"{cx + 2:0.#}\" y=\"{cy - r * frac:0.#}\" fill=\"{AxisColor}\" font-size=\"8\" dominant-baseline=\"middle\">{tickLabel}</text>");
+            sb.AppendLine($"        <text x=\"{cx + 2:0.#}\" y=\"{cy - r * frac:0.#}\" fill=\"{AxisColor}\" font-size=\"8\"{ValTickWeightAttr} dominant-baseline=\"middle\">{tickLabel}</text>");
         }
         var labelOffset = Math.Max(18, r * 0.15);
         for (int c = 0; c < catCount; c++)
@@ -1478,13 +2339,15 @@ internal partial class ChartSvgRenderer
             var lx = cx + (r + labelOffset) * Math.Cos(angle);
             var ly = cy + (r + labelOffset) * Math.Sin(angle);
             var anchor = Math.Abs(Math.Cos(angle)) < 0.1 ? "middle" : (Math.Cos(angle) > 0 ? "start" : "end");
-            sb.AppendLine($"        <text x=\"{lx:0.#}\" y=\"{ly:0.#}\" fill=\"{CatColor}\" font-size=\"{labelSize}\" text-anchor=\"{anchor}\" dominant-baseline=\"middle\">{HtmlEncode(label)}</text>");
+            sb.AppendLine($"        <text x=\"{lx:0.#}\" y=\"{ly:0.#}\" fill=\"{CatColor}\" font-size=\"{labelSize}\"{CatTickWeightAttr} text-anchor=\"{anchor}\" dominant-baseline=\"middle\">{HtmlEncode(label)}</text>");
         }
     }
 
     public void RenderBubbleChartSvg(StringBuilder sb, PlotArea plotArea,
         List<(string name, double[] values)> series, string[] categories, List<string> colors,
-        int ox, int oy, int pw, int ph)
+        int ox, int oy, int pw, int ph,
+        bool showDataLabels = false, bool showVal = true, bool showSerName = false,
+        bool showCatName = false, string? dataLabelNumFmt = null)
     {
         var bubbleSeries = plotArea.Descendants<OpenXmlCompositeElement>()
             .Where(e => e.LocalName == "ser" && e.Parent?.LocalName == "bubbleChart").ToList();
@@ -1511,18 +2374,63 @@ internal partial class ChartSvgRenderer
             }
         }
         if (allY.Count == 0) return;
-        var minX = allX.Min(); var maxX = allX.Max(); if (maxX <= minX) maxX = minX + 1;
-        var minY = allY.Min(); var maxY = allY.Max(); if (maxY <= minY) maxY = minY + 1;
         var maxSz = allSize.Count > 0 ? allSize.Max() : 1; if (maxSz <= 0) maxSz = 1;
         var bubbleScaleEl = plotArea.Descendants<BubbleScale>().FirstOrDefault();
         var bubbleScale = bubbleScaleEl?.Val?.HasValue == true ? bubbleScaleEl.Val.Value / 100.0 : 1.0;
         var maxRadius = Math.Min(pw, ph) * 0.12 * bubbleScale;
+        // c:sizeRepresents — "area" (default): bubble AREA ∝ size (r ∝ √size);
+        // "w": bubble WIDTH/diameter ∝ size (r ∝ size, linear). PowerPoint renders the
+        // two very differently (in width mode the smallest bubble is a near-invisible
+        // dot); the renderer previously always used the area formula.
+        var sizeRepEl = plotArea.Descendants<SizeRepresents>().FirstOrDefault();
+        var widthMode = sizeRepEl?.Val?.HasValue == true && sizeRepEl.Val.InnerText == "w";
+
+        // Nice axes (round, evenly-spaced ticks) — same approach the scatter
+        // renderer uses, so the bubble axes match PowerPoint instead of a raw
+        // (max-min)/4 linear division producing fractional ticks. Both X and Y
+        // are numeric value axes. The bubble point positions below are mapped
+        // through the SAME min/max/step used for the ticks, so bubbles stay
+        // aligned with their gridlines.
+        double dataMinX = allX.Min(); double dataMaxX = allX.Max();
+        bool xIsSmallInteger = allX.All(v => v % 1 == 0) && dataMaxX - dataMinX <= 10;
+        double minX; double maxX; double xStep; int xTicks;
+        if (xIsSmallInteger && dataMinX > 0)
+        {
+            // X data is a small positive integer sequence (the common
+            // category-index case 1..n). PowerPoint draws integer ticks pinned to
+            // the data range with no headroom: 1,2,3,4 for a 1..4 domain.
+            minX = dataMinX; maxX = dataMaxX; xStep = 1;
+            xTicks = (int)Math.Round(maxX - minX);
+            if (xTicks < 1) xTicks = 1;
+        }
+        else if (dataMinX > 0)
+        {
+            // Positive non-trivial X: zero-free nice range so ticks stay round
+            // rather than spanning 0..max; mirror PowerPoint.
+            var (nMaxX, stepX, nX) = ComputeNiceAxisFromMin(Math.Floor(dataMinX), dataMaxX);
+            minX = Math.Floor(dataMinX); maxX = nMaxX; xStep = stepX; xTicks = nX;
+        }
+        else
+        {
+            var (nMaxX, stepX, nX) = ComputeNiceAxis(dataMaxX);
+            minX = 0; maxX = nMaxX; xStep = stepX; xTicks = nX;
+        }
+        if (maxX <= minX) { maxX = minX + 1; xStep = 1; xTicks = 1; }
+
+        double minY = Math.Min(0, allY.Min());
+        var (niceMaxY, tickStepY, nTicksY) = ComputeNiceAxis(allY.Max());
+        double maxY = minY >= 0 ? niceMaxY : niceMaxY;
+        if (minY >= 0) minY = 0;
+        if (maxY <= minY) maxY = minY + 1;
+
+        double MapX(double v) => ox + ((v - minX) / (maxX - minX)) * pw;
+        double MapY(double v) => oy + ph - ((v - minY) / (maxY - minY)) * ph;
 
         if (ShowValGridlines)
-        for (int t = 1; t <= 4; t++)
+        for (int t = 0; t <= nTicksY; t++)
         {
-            var gy = oy + ph - (double)ph * t / 4;
-            sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+            var gy = MapY(minY + tickStepY * t);
+            sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"{GridlineWidthPx:0.##}\"{ValGridDashAttr}/>");
         }
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy}\" x2=\"{ox}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy + ph}\" x2=\"{ox + pw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -1533,24 +2441,39 @@ internal partial class ChartSvgRenderer
             var count = Math.Min(xVals.Length, yVals.Length);
             for (int i = 0; i < count; i++)
             {
-                var bx = ox + ((xVals[i] - minX) / (maxX - minX)) * pw;
-                var by = oy + ph - ((yVals[i] - minY) / (maxY - minY)) * ph;
+                var bx = MapX(xVals[i]);
+                var by = MapY(yVals[i]);
                 var sz = i < sizeVals.Length ? sizeVals[i] : yVals[i];
-                var r = Math.Sqrt(Math.Max(0, sz) / maxSz) * maxRadius + maxRadius * 0.15;
+                var frac = Math.Max(0, sz) / maxSz;
+                var r = widthMode ? frac * maxRadius : Math.Sqrt(frac) * maxRadius + maxRadius * 0.15;
                 sb.AppendLine($"        <circle cx=\"{bx:0.#}\" cy=\"{by:0.#}\" r=\"{r:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"0.6\"/>");
+                // Data label — the Y value (same convention as the scatter renderer),
+                // placed just outside the bubble to the right so it clears the fill.
+                if (showDataLabels)
+                {
+                    var yv = yVals[i];
+                    var valuePart = !string.IsNullOrEmpty(dataLabelNumFmt) ? FormatAxisValue(yv, dataLabelNumFmt)
+                        : yv % 1 == 0 ? $"{(int)yv}" : $"{yv:0.#}";
+                    var lparts = new List<string>();
+                    if (showSerName && s < series.Count) lparts.Add(series[s].name);
+                    if (showCatName && i < categories.Length) lparts.Add(categories[i]);
+                    if (showVal) lparts.Add(valuePart);
+                    var vlabel = string.Join(", ", lparts);
+                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + r + 4:0.#}\" y=\"{by:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"start\" dominant-baseline=\"middle\">{HtmlEncode(vlabel)}</text>");
+                }
             }
         }
-        for (int t = 0; t <= 4; t++)
+        for (int t = 0; t <= xTicks; t++)
         {
-            var val = minX + (maxX - minX) * t / 4;
+            var val = minX + xStep * t;
             var label = val % 1 == 0 ? $"{(int)val}" : $"{val:0.#}";
-            sb.AppendLine($"        <text x=\"{ox + (double)pw * t / 4:0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\" text-anchor=\"middle\">{label}</text>");
+            sb.AppendLine($"        <text x=\"{MapX(val):0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\"{CatTickWeightAttr} text-anchor=\"middle\">{label}</text>");
         }
-        for (int t = 0; t <= 4; t++)
+        for (int t = 0; t <= nTicksY; t++)
         {
-            var val = minY + (maxY - minY) * t / 4;
+            var val = minY + tickStepY * t;
             var label = val % 1 == 0 ? $"{(int)val}" : $"{val:0.#}";
-            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{oy + ph - (double)ph * t / 4:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\" text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
+            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{MapY(val):0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\"{ValTickWeightAttr} text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
         }
     }
 
@@ -1568,7 +2491,11 @@ internal partial class ChartSvgRenderer
         int ox, int oy, int pw, int ph, List<string>? markerShapes, List<int>? markerSizes,
         List<double>? lineWidths, List<string>? lineDashes, bool markersOnly,
         bool showDataLabels, double? axisMin, double? axisMax, double? majorUnit, string? valNumFmt,
-        List<bool>? smooth = null, List<TrendlineInfo?>? trendlines = null, List<ErrorBarInfo?>? errorBars = null)
+        List<bool>? smooth = null, List<TrendlineInfo?>? trendlines = null, List<ErrorBarInfo?>? errorBars = null,
+        List<string?>? markerFillColors = null, List<string?>? markerLineColors = null,
+        string? dataLabelNumFmt = null,
+        bool showVal = true, bool showSerName = false, bool showCatName = false,
+        List<bool>? lineHide = null)
     {
         var scatterSeries = plotArea.Descendants<OpenXmlCompositeElement>()
             .Where(e => e.LocalName == "ser" && e.Parent?.LocalName == "scatterChart").ToList();
@@ -1625,7 +2552,16 @@ internal partial class ChartSvgRenderer
             for (int t = 0; t <= nTicksY; t++)
             {
                 var gy = MapY(minY + tickStepY * t);
-                sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+                sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"{GridlineWidthPx:0.##}\"{ValGridDashAttr}/>");
+            }
+        // Gridlines (vertical, on the X value axis). Scatter has no catAx, so the
+        // X-axis majorGridlines are routed into ShowCatGridlines by ExtractChartInfo.
+        // Draw at the same X tick positions used for the X labels below.
+        if (ShowCatGridlines)
+            for (int t = 0; t <= xTicks; t++)
+            {
+                var gx = MapX(minX + xStep * t);
+                sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
             }
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy}\" x2=\"{ox}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy + ph}\" x2=\"{ox + pw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -1641,9 +2577,10 @@ internal partial class ChartSvgRenderer
                 pts.Add((MapX(xVals[i]), MapY(yVals[i]), xVals[i], yVals[i]));
 
             // Connecting line — drawn for lineMarker/smoothMarker scatter styles,
-            // suppressed when scatterStyle is marker/none (markersOnly). A smooth
+            // suppressed when scatterStyle is marker/none (markersOnly) OR when this
+            // series has a:ln/a:noFill (PowerPoint "No line" — markers only). A smooth
             // series uses a Catmull-Rom path (same primitive as the line renderer).
-            if (!markersOnly && pts.Count >= 2)
+            if (!markersOnly && !(lineHide != null && s < lineHide.Count && lineHide[s]) && pts.Count >= 2)
             {
                 var lw = lineWidths != null && s < lineWidths.Count ? lineWidths[s] : 2;
                 var dashName = lineDashes != null && s < lineDashes.Count ? lineDashes[s] : "solid";
@@ -1678,13 +2615,33 @@ internal partial class ChartSvgRenderer
 
             var shape = markerShapes != null && s < markerShapes.Count ? markerShapes[s] : "circle";
             var mSize = markerSizes != null && s < markerSizes.Count ? markerSizes[s] * 0.6 : 3;
+            var mFill = markerFillColors != null && s < markerFillColors.Count ? markerFillColors[s] : null;
+            var mStroke = markerLineColors != null && s < markerLineColors.Count ? markerLineColors[s] : null;
             foreach (var p in pts)
             {
-                sb.AppendLine($"        {RenderMarkerSvg(shape, p.x, p.y, mSize, color)}");
+                sb.AppendLine($"        {RenderMarkerSvg(shape, p.x, p.y, mSize, mFill ?? color, mStroke ?? color)}");
                 if (showDataLabels)
                 {
-                    var vlabel = p.yv % 1 == 0 ? $"{(int)p.yv}" : $"{p.yv:0.#}";
-                    sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{p.x:0.#}\" y=\"{p.y - 6:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\">{vlabel}</text>");
+                    // Honor <c:dLbls><c:numFmt> on the data labels (e.g. "$#,##0");
+                    // fall back to the value-axis numFmt, then the bare shortcut —
+                    // mirrors the line/bubble renderers. Previously hardcoded, so a
+                    // currency/percent data label rendered as a bare number.
+                    string Fmt(double v) => !string.IsNullOrEmpty(dataLabelNumFmt) ? FormatAxisValue(v, dataLabelNumFmt)
+                        : !string.IsNullOrEmpty(valNumFmt) ? FormatAxisValue(v, valNumFmt)
+                        : v % 1 == 0 ? $"{(int)v}" : $"{v:0.#}";
+                    // Assemble the enabled label parts in PowerPoint's order
+                    // (series name, category = X value, value = Y). Previously only
+                    // the Y value was emitted, ignoring showSerName/showCatName and
+                    // an explicit showVal=0. Mirrors the bubble renderer's lparts.
+                    var lparts = new List<string>();
+                    if (showSerName && s < series.Count) lparts.Add(series[s].name);
+                    if (showCatName) lparts.Add(Fmt(p.xv));
+                    if (showVal) lparts.Add(Fmt(p.yv));
+                    if (lparts.Count > 0)
+                    {
+                        var vlabel = string.Join(", ", lparts);
+                        sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{p.x:0.#}\" y=\"{p.y - 6:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"middle\">{HtmlEncode(vlabel)}</text>");
+                    }
                 }
             }
         }
@@ -1693,20 +2650,26 @@ internal partial class ChartSvgRenderer
         for (int t = 0; t <= xTicks; t++)
         {
             var val = minX + xStep * t;
-            sb.AppendLine($"        <text x=\"{MapX(val):0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\" text-anchor=\"middle\">{FormatAxisValue(val, valNumFmt)}</text>");
+            sb.AppendLine($"        <text x=\"{MapX(val):0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\"{CatTickWeightAttr} text-anchor=\"middle\">{FormatAxisValue(val, valNumFmt)}</text>");
         }
         // Numeric Y axis labels
         for (int t = 0; t <= nTicksY; t++)
         {
             var val = minY + tickStepY * t;
-            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{MapY(val):0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\" text-anchor=\"end\" dominant-baseline=\"middle\">{FormatAxisValue(val, valNumFmt)}</text>");
+            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{MapY(val):0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\"{ValTickWeightAttr} text-anchor=\"end\" dominant-baseline=\"middle\">{FormatAxisValue(val, valNumFmt)}</text>");
         }
     }
 
     public void RenderComboChartSvg(StringBuilder sb, PlotArea plotArea,
         List<(string name, double[] values)> seriesList, string[] categories, List<string> colors,
-        int ox, int oy, int pw, int ph)
+        int ox, int oy, int pw, int ph,
+        bool showDataLabels = false, string? dataLabelNumFmt = null,
+        double? ooxmlMax = null)
     {
+        // Value-label formatter (honors <c:dLbls><c:numFmt>; falls back to a bare value),
+        // mirroring the bar/line renderers' data-label formatting.
+        string FmtLabel(double v) => !string.IsNullOrEmpty(dataLabelNumFmt) ? FormatAxisValue(v, dataLabelNumFmt)
+            : v % 1 == 0 ? $"{(int)v}" : $"{v:0.#}";
         var barIndices = new HashSet<int>();
         var lineIndices = new HashSet<int>();
         var areaIndices = new HashSet<int>();
@@ -1771,6 +2734,11 @@ internal partial class ChartSvgRenderer
 
         var priMax = primaryValues.Length > 0 ? primaryValues.Max() : 0; if (priMax <= 0) priMax = 1;
         var (priNiceMax, _, _) = ComputeNiceAxis(priMax);
+        // Honor an explicit primary value-axis max (<c:valAx><c:scaling><c:max>): the
+        // bar/line renderers pin the top to the entered value (R25); the combo renderer
+        // dropped it entirely and always auto-scaled. priNiceMax feeds both the series
+        // scaling (axMax) and the tick labels, so overriding it fixes both.
+        if (ooxmlMax.HasValue && ooxmlMax.Value > 0) priNiceMax = ooxmlMax.Value;
         var hasSecondary = secondaryValues.Length > 0;
         double secNiceMax = 1;
         if (hasSecondary)
@@ -1780,6 +2748,18 @@ internal partial class ChartSvgRenderer
         }
 
         var catCount = Math.Max(categories.Length, seriesList.Max(s => s.values.Length));
+
+        // Primary value-axis horizontal gridlines (<c:valAx><c:majorGridlines/>). The
+        // bar/line renderers draw these but the combo path never did, so a combo chart
+        // rendered with a blank plot area (PowerPoint shows the major gridlines).
+        // Positions match the primary Y-axis labels below; drawn before the series so
+        // they sit behind. Gated on ShowValGridlines (synced from info.ValMajorGridlines).
+        if (ShowValGridlines)
+            for (int t = 0; t <= AxisTickCount; t++)
+            {
+                var gy = oy + ph - (double)ph * t / AxisTickCount;
+                sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"{GridlineWidthPx:0.##}\"{ValGridDashAttr}/>");
+            }
 
         // Axes
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy}\" x2=\"{ox}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -1800,7 +2780,10 @@ internal partial class ChartSvgRenderer
                 {
                     var val = seriesList[s].values[c];
                     var barH = (val / axMax) * ph;
-                    sb.AppendLine($"        <rect x=\"{ox + c * groupW + gap + bi * barW:0.#}\" y=\"{oy + ph - barH:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
+                    var bx = ox + c * groupW + gap + bi * barW;
+                    sb.AppendLine($"        <rect x=\"{bx:0.#}\" y=\"{oy + ph - barH:0.#}\" width=\"{barW:0.#}\" height=\"{barH:0.#}\" fill=\"{colors[s % colors.Count]}\" opacity=\"{FillOpacity(s)}\"/>");
+                    if (showDataLabels)
+                        sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2:0.#}\" y=\"{oy + ph - barH - 3:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"middle\">{HtmlEncode(FmtLabel(val))}</text>");
                 }
             }
         }
@@ -1835,10 +2818,12 @@ internal partial class ChartSvgRenderer
             if (points.Count > 0)
             {
                 sb.AppendLine($"        <polyline points=\"{string.Join(" ", points)}\" fill=\"none\" stroke=\"{colors[s % colors.Count]}\" stroke-width=\"2.5\"/>");
-                foreach (var pt in points)
+                for (int pi = 0; pi < points.Count; pi++)
                 {
-                    var parts = pt.Split(',');
+                    var parts = points[pi].Split(',');
                     sb.AppendLine($"        <circle cx=\"{parts[0]}\" cy=\"{parts[1]}\" r=\"3\" fill=\"{colors[s % colors.Count]}\"/>");
+                    if (showDataLabels && pi < seriesList[s].values.Length)
+                        sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{parts[0]}\" y=\"{double.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture) - 6:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"middle\">{HtmlEncode(FmtLabel(seriesList[s].values[pi]))}</text>");
                 }
             }
         }
@@ -1847,14 +2832,14 @@ internal partial class ChartSvgRenderer
         {
             var label = c < categories.Length ? categories[c] : "";
             var lx = ox + (double)pw * c / Math.Max(catCount, 1) + (double)pw / Math.Max(catCount, 1) / 2;
-            sb.AppendLine($"        <text x=\"{lx:0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\" text-anchor=\"middle\">{HtmlEncode(label)}</text>");
+            sb.AppendLine($"        <text x=\"{lx:0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\"{CatTickWeightAttr} text-anchor=\"middle\">{HtmlEncode(label)}</text>");
         }
         // Primary Y-axis labels (left)
         for (int t = 0; t <= AxisTickCount; t++)
         {
             var val = priNiceMax * t / AxisTickCount;
-            var label = FormatAxisValue(val);
-            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{oy + ph - (double)ph * t / AxisTickCount:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\" text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
+            var label = FmtValAxis(val);
+            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{oy + ph - (double)ph * t / AxisTickCount:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\"{ValTickWeightAttr} text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
         }
         // Secondary Y-axis labels (right side, lighter color). R16-5: these used
         // to overlay the primary labels on the left (x=ox+2); placing them at the
@@ -1870,6 +2855,13 @@ internal partial class ChartSvgRenderer
             }
         }
     }
+
+    /// <summary>Format a VALUE-AXIS tick label, applying the display-units divisor
+    /// (<c:dispUnits>) before formatting so a "millions" axis shows 1,2,3 instead
+    /// of 1M,2M,3M. Data-label / category-label sites keep calling FormatAxisValue
+    /// with the raw value (display units affect the axis only).</summary>
+    private string FmtValAxis(double val, string? numFmt = null)
+        => FormatAxisValue(ValAxisUnitDivisor != 1.0 ? val / ValAxisUnitDivisor : val, numFmt);
 
     private static string FormatAxisValue(double val, string? numFmt = null)
     {
@@ -1917,7 +2909,7 @@ internal partial class ChartSvgRenderer
         if (useThousands)
             formatted = decimals > 0
                 ? val.ToString($"N{decimals}")
-                : ((long)val).ToString("N0");
+                : val.ToString("N0");  // round, don't truncate ((long) cast truncated 1234.6 -> 1234)
         else
             formatted = decimals > 0
                 ? val.ToString($"F{decimals}")
@@ -1928,7 +2920,7 @@ internal partial class ChartSvgRenderer
 
     public void RenderStockChartSvg(StringBuilder sb, PlotArea plotArea,
         List<(string name, double[] values)> series, string[] categories, List<string> colors,
-        int ox, int oy, int pw, int ph)
+        int ox, int oy, int pw, int ph, string? upBarColor = null, string? downBarColor = null)
     {
         var allValues = series.SelectMany(s => s.values).ToArray();
         if (allValues.Length == 0) return;
@@ -1937,17 +2929,14 @@ internal partial class ChartSvgRenderer
         var range = maxVal - minVal;
         var catCount = Math.Max(categories.Length, series.Max(s => s.values.Length));
 
-        var upColor = "#FFFFFF"; var downColor = "#000000"; // OOXML spec defaults
-        var stockChart = plotArea.GetFirstChild<StockChart>();
-        if (stockChart != null)
-        {
-            var upFill = stockChart.Descendants<OpenXmlCompositeElement>().FirstOrDefault(e => e.LocalName == "upBars")
-                ?.Descendants<Drawing.SolidFill>().FirstOrDefault()?.GetFirstChild<Drawing.RgbColorModelHex>()?.Val?.Value;
-            if (upFill != null) upColor = $"#{upFill}";
-            var downFill = stockChart.Descendants<OpenXmlCompositeElement>().FirstOrDefault(e => e.LocalName == "downBars")
-                ?.Descendants<Drawing.SolidFill>().FirstOrDefault()?.GetFirstChild<Drawing.RgbColorModelHex>()?.Val?.Value;
-            if (downFill != null) downColor = $"#{downFill}";
-        }
+        // Use the already-resolved up/down bar colors (ExtractFillColor + themeColors, so
+        // schemeClr/sysClr/prstClr all resolve), falling back to the OOXML stock-candlestick
+        // defaults (white up / black down) when the bars carry no fill. The previous inline
+        // read only handled srgbClr, so a themed candlestick rendered white/black.
+        string Hashed(string? c, string fallback)
+            => string.IsNullOrEmpty(c) ? fallback : (c.StartsWith('#') ? c : "#" + c);
+        var upColor = Hashed(upBarColor, "#FFFFFF");
+        var downColor = Hashed(downBarColor, "#000000");
 
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy}\" x2=\"{ox}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy + ph}\" x2=\"{ox + pw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -1998,13 +2987,13 @@ internal partial class ChartSvgRenderer
         for (int c = 0; c < catCount; c++)
         {
             var label = c < categories.Length ? categories[c] : "";
-            sb.AppendLine($"        <text x=\"{ox + c * groupW + groupW / 2:0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\" text-anchor=\"middle\">{HtmlEncode(label)}</text>");
+            sb.AppendLine($"        <text x=\"{ox + c * groupW + groupW / 2:0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\"{CatTickWeightAttr} text-anchor=\"middle\">{HtmlEncode(label)}</text>");
         }
         for (int t = 0; t <= 4; t++)
         {
             var val = minVal + range * t / 4;
             var label = val % 1 == 0 ? $"{(int)val}" : $"{val:0.#}";
-            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{oy + ph - (double)ph * t / 4:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\" text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
+            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{oy + ph - (double)ph * t / 4:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\"{ValTickWeightAttr} text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
         }
     }
 
@@ -2024,6 +3013,32 @@ internal partial class ChartSvgRenderer
         return (niceMax, tickStep, nTicks);
     }
 
+    // Min-aware nice axis: used only when an explicit non-zero axis min is set
+    // and no explicit axis max. PowerPoint derives the tick step from the
+    // VISIBLE range [niceMin, dataMax] (not [0, dataMax]) and snaps the top to
+    // the smallest niceMin + k*step >= dataMax. e.g. min=50, dataMax=200 →
+    // step 20, top 210 (ticks 50,70,...,210). Falls back to the zero-based
+    // ComputeNiceAxis when niceMin <= 0 so the common case is byte-identical.
+    public static (double niceMax, double tickStep, int nTicks) ComputeNiceAxisFromMin(double niceMin, double dataMax)
+    {
+        if (niceMin <= 0) return ComputeNiceAxis(dataMax);
+        var range = dataMax - niceMin;
+        if (range <= 0 || !double.IsFinite(range)) return ComputeNiceAxis(dataMax);
+        var mag = Math.Pow(10, Math.Floor(Math.Log10(range)));
+        if (!double.IsFinite(mag) || mag == 0) mag = 1;
+        var res = range / mag;
+        var tickStep = res <= 1.5 ? 0.2 * mag : res <= 4 ? 0.5 * mag : res <= 8 ? 1.0 * mag : 2.0 * mag;
+        // smallest tick >= dataMax above the min; add a step of headroom only
+        // when dataMax lands exactly on a tick (PowerPoint keeps a gap above the
+        // top data point).
+        var steps = Math.Ceiling((dataMax - niceMin) / tickStep);
+        if (Math.Abs(niceMin + steps * tickStep - dataMax) < 1e-9) steps += 1;
+        var niceMax = niceMin + steps * tickStep;
+        var nTicks = (int)Math.Round(steps);
+        if (nTicks < 2) nTicks = 2;
+        return (niceMax, tickStep, nTicks);
+    }
+
     // ==================== Shared Chart Info & Rendering ====================
 
     /// <summary>All metadata extracted from an OOXML chart, used by the shared rendering pipeline.</summary>
@@ -2035,16 +3050,36 @@ internal partial class ChartSvgRenderer
         public string[] Categories { get; set; } = [];
         public List<(string name, double[] values)> Series { get; set; } = [];
         public List<string> Colors { get; set; } = [];
+        // Per-data-point fill overrides for non-pie charts (bar/column). Index =
+        // series index; inner dict maps zero-based category idx -> '#'-prefixed
+        // hex. Populated from each series' <c:dPt> children. Empty/absent series
+        // dicts fall back to the per-series Colors entry (regression-safe).
+        public List<Dictionary<int, string>> PerPointColors { get; set; } = [];
+        // Per-series set of data-point indices whose label was explicitly deleted
+        // (<c:dLbls><c:dLbl><c:idx><c:delete/>); those points show no label even when
+        // the series has showVal on. One set per series, aligned to series order.
+        public List<HashSet<int>> PerPointDeletedLabels { get; set; } = [];
         public string? Title { get; set; }
         public string TitleFontSize { get; set; } = "10pt";
+        public bool TitleBold { get; set; } = true;   // chart titles default to bold
+        // Per-run title formatting. PowerPoint renders a chart title with mixed
+        // per-run bold/color/size (e.g. one bold-red word + a normal-black word);
+        // the single Title/TitleBold/TitleFontColor fields only capture the first
+        // run. When the title has runs with differing formatting, TitleRuns holds
+        // each run so the render sites can emit styled <span>s. Null/single-run =
+        // fall back to the uniform Title string.
+        public List<TitleRunInfo>? TitleRuns { get; set; }
         public bool ShowDataLabels { get; set; }
         public bool ShowDataLabelVal { get; set; }
         public bool ShowDataLabelPercent { get; set; }
         public bool ShowDataLabelCatName { get; set; }
+        public bool ShowDataLabelSerName { get; set; }
         // <c:dLblPos val="inEnd|outEnd|ctr|inBase"/> — drives where the label sits
         // relative to the bar end. Default "outEnd" matches Office's grouped-bar
         // default; "inEnd" places it inside the bar near its end.
         public string DataLabelPos { get; set; } = "outEnd";
+        // True only when <c:dLblPos> is present in the XML (see renderer field).
+        public bool HasExplicitDataLabelPos { get; set; }
         public double HoleRatio { get; set; }
         // Pie/doughnut slice explosion as a fraction of radius per data point
         // (index = data point). Empty list = no explosion. Populated from the
@@ -2057,6 +3092,10 @@ internal partial class ChartSvgRenderer
         // Per-series fill opacity parsed from the series spPr <a:alpha>. Index =
         // series index (pie/doughnut: per data point). null = no explicit alpha.
         public List<double?> SeriesFillOpacities { get; set; } = [];
+        // Per-series <c:invertIfNegative> (bar/column). Defaults to TRUE when the
+        // element is absent (PowerPoint renders negative bars hollow by default);
+        // FALSE only when explicitly <c:invertIfNegative val="0"/>. Index = series.
+        public List<bool> InvertIfNegative { get; set; } = [];
         public bool IsStacked { get; set; }
         public bool IsPercent { get; set; }
         public bool IsWaterfall { get; set; }
@@ -2067,43 +3106,115 @@ internal partial class ChartSvgRenderer
         public double? AxisMax { get; set; }
         public double? AxisMin { get; set; }
         public double? MajorUnit { get; set; }
+        /// <summary>Value-axis &lt;c:minorUnit&gt;. Drives the minor-gridline count
+        /// (majorUnit / minorUnit sub-intervals); null = renderer default.</summary>
+        public double? MinorUnit { get; set; }
         public int? GapWidth { get; set; }
+        public int? Overlap { get; set; }
         public string? ValAxisTitle { get; set; }
         public int ValAxisTitleFontPx { get; set; } = 9;
         public bool ValAxisTitleBold { get; set; }
+        public bool ValAxisTitleItalic { get; set; }
+        // Explicit axis-title run color ('#'-prefixed CSS, or null = use AxisColor).
+        // PowerPoint honors a solidFill on the axis-title run; previously dropped.
+        public string? ValAxisTitleColor { get; set; }
         public string? CatAxisTitle { get; set; }
         public int CatAxisTitleFontPx { get; set; } = 9;
         public bool CatAxisTitleBold { get; set; }
+        public bool CatAxisTitleItalic { get; set; }
+        public string? CatAxisTitleColor { get; set; }
         // Secondary value axis title (combo right-side axis; also the bubble/scatter
         // Y axis, which is the 2nd valAx rather than a catAx).
         public string? SecondaryValAxisTitle { get; set; }
         public int SecondaryValAxisTitleFontPx { get; set; } = 9;
         public bool SecondaryValAxisTitleBold { get; set; }
+        public bool SecondaryValAxisTitleItalic { get; set; }
+        public string? SecondaryValAxisTitleColor { get; set; }
         public string? PlotFillColor { get; set; }
         public string? ChartFillColor { get; set; }
+        /// <summary>Plot-area &lt;c:spPr&gt;&lt;a:ln&gt; outline color (hex, no #). Null = no border.</summary>
+        public string? PlotBorderColor { get; set; }
+        /// <summary>Plot-area outline width in EMU (a:ln/@w). Null defaults to PowerPoint's ~0.75pt.</summary>
+        public long? PlotBorderWidthEmu { get; set; }
+        /// <summary>Chart-area &lt;c:spPr&gt;&lt;a:ln&gt; outline color (hex, no #). Null = no border.</summary>
+        public string? ChartBorderColor { get; set; }
+        /// <summary>Chart-area outline width in EMU. Null defaults to PowerPoint's ~0.75pt.</summary>
+        public long? ChartBorderWidthEmu { get; set; }
         public bool HasLegend { get; set; }
-        /// <summary>#7f: OOXML c:legendPos InnerText — "b" (bottom, default),
-        /// "t" (top), "r" (right), "l" (left), "tr" (top-right). Rendering
+        /// <summary>Series indices whose &lt;c:legendEntry&gt;&lt;c:delete val="1"/&gt;
+        /// hides the legend swatch+label while the series still plots. Empty
+        /// for charts with no deleted entries (the common case).</summary>
+        public HashSet<int> DeletedLegendEntries { get; set; } = new();
+        /// <summary>#7f: OOXML c:legendPos InnerText — "r" (right, ECMA-376
+        /// CT_LegendPos default), "b" (bottom), "t" (top), "l" (left),
+        /// "tr" (top-right). Default is "r" to match the schema default that
+        /// real PowerPoint applies when &lt;c:legendPos&gt; is absent. Rendering
         /// adapts the wrapper layout to each position.</summary>
-        public string LegendPos { get; set; } = "b";
+        public string LegendPos { get; set; } = "r";
         public string LegendFontSize { get; set; } = "8pt";
         public string? LegendFontColor { get; set; }
+        public bool LegendFontBold { get; set; }
         public int ValFontPx { get; set; } = 9;
         public string? ValFontColor { get; set; }
+        public bool ValFontBold { get; set; }
+        public bool ValFontItalic { get; set; }
         public int CatFontPx { get; set; } = 9;
         public string? CatFontColor { get; set; }
+        public bool CatFontBold { get; set; }
+        public bool CatFontItalic { get; set; }
+        /// <summary>Category-axis tick-label rotation in degrees, read from
+        /// &lt;c:catAx&gt;&lt;c:txPr&gt;&lt;a:bodyPr rot="..."/&gt; (OOXML rot is
+        /// 1/60000 degree). Null = no rotation (labels horizontal, default).</summary>
+        public int? CatAxisLabelRotationDeg { get; set; }
+        /// <summary>Value-axis tick-label rotation in degrees (analogous to
+        /// CatAxisLabelRotationDeg). Null = no rotation.</summary>
+        public int? ValAxisLabelRotationDeg { get; set; }
         public string? ValNumFmt { get; set; }
+        /// <summary>Value-axis display units (&lt;c:dispUnits&gt;&lt;c:builtInUnit&gt;):
+        /// the divisor PowerPoint applies to every value-axis tick label (e.g.
+        /// millions → 1e6, so 1,000,000 shows as "1"). 1.0 = no scaling.</summary>
+        public double ValueAxisUnitDivisor { get; set; } = 1.0;
+        /// <summary>The rotated annotation drawn beside the value axis when display
+        /// units are set and &lt;c:dispUnitsLbl&gt; is present (e.g. "Millions").
+        /// Null = no label.</summary>
+        public string? ValueAxisUnitLabel { get; set; }
         /// <summary>Format code from &lt;c:dLbls&gt;&lt;c:numFmt&gt; — applied to data
         /// labels (overrides the value-axis ValNumFmt for label text).</summary>
         public string? DataLabelsNumFmt { get; set; }
         public string? TitleFontColor { get; set; }
         public string? GridlineColor { get; set; }
+        /// <summary>Value-axis major-gridline OOXML dash name (&lt;a:prstDash val="..."/&gt;,
+        /// e.g. "dash"). Null when absent or "solid".</summary>
+        public string? GridlineDash { get; set; }
+        /// <summary>Value-axis major-gridline line width (&lt;a:ln w="..."/&gt; EMU).
+        /// Null = use the renderer's default thin gridline.</summary>
+        public long? GridlineWidthEmu { get; set; }
         /// <summary>True when the value axis has &lt;c:majorGridlines&gt; (horizontal gridlines).</summary>
         public bool ValMajorGridlines { get; set; }
         /// <summary>True when the category axis has &lt;c:majorGridlines&gt; (vertical gridlines).</summary>
         public bool CatMajorGridlines { get; set; }
+        /// <summary>True when the value axis has &lt;c:minorGridlines&gt; (fainter sub-interval gridlines).</summary>
+        public bool ValMinorGridlines { get; set; }
+        /// <summary>True when the category axis has &lt;c:minorGridlines&gt;.</summary>
+        public bool CatMinorGridlines { get; set; }
+        /// <summary>False when the value axis is deleted (&lt;c:delete val="1"/&gt;). Default true.</summary>
+        public bool ValAxisVisible { get; set; } = true;
+        public bool ValTickLabelsHidden { get; set; }
+        public bool CatTickLabelsHidden { get; set; }
+        /// <summary>False when the category axis is deleted (&lt;c:delete val="1"/&gt;). Default true.</summary>
+        public bool CatAxisVisible { get; set; } = true;
         public string? AxisLineColor { get; set; }
+        /// <summary>Value axis &lt;c:majorTickMark val="..."/&gt; ("out"/"in"/"cross"/"none"). Null when absent.</summary>
+        public string? ValMajorTickMark { get; set; }
+        /// <summary>Category axis &lt;c:majorTickMark val="..."/&gt; ("out"/"in"/"cross"/"none"). Null when absent.</summary>
+        public string? CatMajorTickMark { get; set; }
+        public int CatTickLabelSkip { get; set; } = 1;
         public int DataLabelFontPx { get; set; } = 8;
+        /// <summary>Explicit data-label text color from &lt;c:dLbls&gt;&lt;c:txPr&gt;
+        /// (bare-hex resolved via theme), or null to use the theme text color.</summary>
+        public string? DataLabelFontColor { get; set; }
+        public bool DataLabelBold { get; set; }
+        public bool DataLabelItalic { get; set; }
         /// <summary>Reference-line overlays (horizontal dashed lines at constant values).
         /// Filled by ExtractChartInfo from any ref-line-only LineChart in the plot area.</summary>
         public List<(string Name, double Value, string Color, double WidthPt, string Dash)> ReferenceLines { get; set; } = [];
@@ -2111,6 +3222,10 @@ internal partial class ChartSvgRenderer
         // --- Marker shapes per series (circle, diamond, square, triangle, star, x, plus, dash, dot, none) ---
         public List<string> MarkerShapes { get; set; } = [];
         public List<int> MarkerSizes { get; set; } = [];
+        // Per-series marker fill / border (from <c:marker><c:spPr>). null => use
+        // the series color (PowerPoint's default: solid series-colored marker).
+        public List<string?> MarkerFillColors { get; set; } = [];
+        public List<string?> MarkerLineColors { get; set; } = [];
 
         // --- Smooth line (cubic spline) per series ---
         public List<bool> Smooth { get; set; } = [];
@@ -2121,9 +3236,15 @@ internal partial class ChartSvgRenderer
         // --- Line width per series (in points, from a:ln w="...") ---
         public List<double> LineWidths { get; set; } = [];
 
+        // --- Per-series "no connecting line" flag (a:ln/a:noFill on the series spPr) ---
+        // PowerPoint's "Format Data Series -> Line -> No line": the series shows markers
+        // only, no polyline. Distinct from the chart-wide scatterStyle=marker.
+        public List<bool> SeriesLineHide { get; set; } = [];
+
         // --- Axis features ---
         public double? LogBase { get; set; }
-        public bool IsReversed { get; set; }
+        public bool IsReversed { get; set; }       // value axis maxMin
+        public bool IsCatReversed { get; set; }    // category axis maxMin
 
         // --- Line elements ---
         public bool HasDropLines { get; set; }
@@ -2152,6 +3273,18 @@ internal partial class ChartSvgRenderer
 
         // --- Error bars per series ---
         public List<ErrorBarInfo?> ErrorBars { get; set; } = [];
+    }
+
+    /// <summary>One run of a chart title's rich text, for per-run styled rendering.</summary>
+    public class TitleRunInfo
+    {
+        public string Text { get; set; } = "";
+        public bool? Bold { get; set; }
+        public bool Italic { get; set; }
+        public bool Underline { get; set; }
+        /// <summary>'#'-prefixed CSS color, or null to inherit the title default.</summary>
+        public string? Color { get; set; }
+        public double? FontSizePt { get; set; }
     }
 
     /// <summary>Trendline metadata extracted from OOXML for SVG rendering.</summary>
@@ -2210,7 +3343,7 @@ internal partial class ChartSvgRenderer
         info.ChartType = ChartHelper.DetectChartType(info.PlotArea) ?? "column";
         info.Categories = ChartHelper.ReadCategories(info.PlotArea) ?? [];
         info.Series = ChartHelper.ReadAllSeries(info.PlotArea);
-        info.ReferenceLines = ChartHelper.ReadReferenceLines(info.PlotArea);
+        info.ReferenceLines = ChartHelper.ReadReferenceLines(info.PlotArea, themeColors);
 
         // Filter reference-line series out of the renderer's data series list. They
         // are drawn as overlays via info.ReferenceLines so they must not contribute to
@@ -2249,21 +3382,93 @@ internal partial class ChartSvgRenderer
 
         // Colors
         var isPieType = info.ChartType.Contains("pie") || info.ChartType.Contains("doughnut");
-        var serElements = chartTypeEl?.Elements().Where(e => e.LocalName == "ser").ToList() ?? [];
-        info.Colors = ExtractColors(serElements, info.Series, isPieType, info.ChartType, themeColors);
+        // Gather ser elements across ALL chart-type groups (in the same document order
+        // ReadAllSeries uses to build info.Series), not just the first group. A combo
+        // chart has a barChart AND a lineChart group; taking only chartTypeEl's (first
+        // group's) ser dropped the line-group series, so they fell through to fallback
+        // colors. Each series' color is then resolved per-series by its parent group's
+        // type (line/scatter → stroke color, others → fill) inside ExtractColors.
+        var serElements = plotArea.Descendants<OpenXmlCompositeElement>()
+            .Where(e => e.LocalName == "ser" && e.Parent != null
+                && (e.Parent.LocalName.Contains("Chart") || e.Parent.LocalName.Contains("chart")))
+            .Cast<OpenXmlElement>()
+            .ToList();
+        // Pie/doughnut varyColors: default true (vary by point) when the element is
+        // absent; explicit val="0"/"false" makes the pie monochrome (series color).
+        var pieVcEl = isPieType ? chartTypeEl?.Elements().FirstOrDefault(e => e.LocalName == "varyColors") : null;
+        var pieVcVal = pieVcEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+        var pieVaryColors = !(pieVcVal is "0" or "false");
+        info.Colors = ExtractColors(serElements, info.Series, isPieType, info.ChartType, themeColors, pieVaryColors);
+        // Per-data-point fill overrides (c:dPt) for non-pie charts. Pie/doughnut
+        // already fold dPt into per-point Colors above, so only collect these for
+        // the non-pie case where Colors is per-series.
+        if (!isPieType)
+            info.PerPointColors = ExtractPerPointColors(serElements, themeColors);
+        // Per-point deleted-label overrides (read for all chart types, pie included).
+        info.PerPointDeletedLabels = ExtractDeletedLabels(serElements);
+
+        // <c:varyColors val="1"/> on a single-series NON-pie chart colors each data
+        // point from the theme accent palette (PowerPoint "vary colors by point") —
+        // but ONLY when the series has no explicit fill (an explicit series fill wins,
+        // keeping the bars monochrome). Seed PerPointColors, which BarFill consults;
+        // explicit dPt entries already present are preserved (not overwritten).
+        if (!isPieType && info.Series.Count == 1 && serElements.Count == 1)
+        {
+            var vcEl = chartTypeEl?.Elements().FirstOrDefault(e => e.LocalName == "varyColors");
+            var vcVal = vcEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            var varyOn = vcEl != null && vcVal is null or "1" or "true";
+            var serSpPr = serElements[0].Elements().FirstOrDefault(e => e.LocalName == "spPr");
+            var hasExplicitFill = ExtractFillColor(serSpPr, themeColors) != null;
+            if (varyOn && !hasExplicitFill)
+            {
+                var palette = new[] { "accent1", "accent2", "accent3", "accent4", "accent5", "accent6" }
+                    .Where(k => themeColors.ContainsKey(k)).Select(k => $"#{themeColors[k]}").ToArray();
+                if (palette.Length == 0) palette = FallbackColors;
+                while (info.PerPointColors.Count < 1) info.PerPointColors.Add([]);
+                var catN = info.Categories.Count();
+                for (int c = 0; c < catN; c++)
+                    if (!info.PerPointColors[0].ContainsKey(c))
+                        info.PerPointColors[0][c] = palette[c % palette.Length];
+            }
+        }
 
         // Title
         var titleEl = chart?.Elements().FirstOrDefault(e => e.LocalName == "title");
         if (titleEl != null)
         {
-            var titleRuns = titleEl.Descendants<Drawing.Run>()
-                .Select(r => r.GetFirstChild<Drawing.Text>()?.Text)
-                .Where(t => t != null);
-            info.Title = string.Join("", titleRuns);
+            var runEls = titleEl.Descendants<Drawing.Run>().ToList();
+            info.Title = string.Join("", runEls.Select(r => r.GetFirstChild<Drawing.Text>()?.Text).Where(t => t != null));
+            // Capture per-run formatting so a mixed-format title (e.g. a bold word
+            // + a normal word) renders with per-run <span>s instead of collapsing
+            // to the first run's style. Only kept when >1 run carries text.
+            var perRun = new List<TitleRunInfo>();
+            foreach (var r in runEls)
+            {
+                var txt = r.GetFirstChild<Drawing.Text>()?.Text;
+                if (txt == null) continue;
+                var rp = r.GetFirstChild<Drawing.RunProperties>();
+                var c = ExtractFontColor(rp, themeColors);
+                perRun.Add(new TitleRunInfo
+                {
+                    Text = txt,
+                    Bold = rp?.Bold?.HasValue == true ? rp.Bold.Value : null,
+                    Italic = rp?.Italic?.Value == true,
+                    Underline = rp?.Underline?.HasValue == true && rp.Underline.Value != Drawing.TextUnderlineValues.None,
+                    Color = c != null ? CssHexColor(c) : null,
+                    FontSizePt = rp?.FontSize?.HasValue == true ? rp.FontSize.Value / 100.0 : null,
+                });
+            }
+            if (perRun.Count > 1) info.TitleRuns = perRun;
             var titleRPr = titleEl.Descendants<Drawing.RunProperties>().FirstOrDefault();
             if (titleRPr?.FontSize?.HasValue == true)
                 info.TitleFontSize = $"{titleRPr.FontSize.Value / 100.0:0.##}pt";
-            info.TitleFontColor = ExtractFontColor(titleRPr);
+            info.TitleFontColor = ExtractFontColor(titleRPr, themeColors);
+            // Chart title bold: default true, but honor an explicit b="0" (run rPr or the
+            // paragraph defRPr). The renderer previously hardcoded font-weight:bold, so a
+            // title set to non-bold still rendered bold. Mirrors the axis-title bold path.
+            var titleDefRPr = titleEl.Descendants<Drawing.DefaultRunProperties>().FirstOrDefault();
+            if (titleRPr?.Bold?.HasValue == true) info.TitleBold = titleRPr.Bold.Value;
+            else if (titleDefRPr?.Bold?.HasValue == true) info.TitleBold = titleDefRPr.Bold.Value;
         }
 
         // Data labels
@@ -2271,18 +3476,26 @@ internal partial class ChartSvgRenderer
             ?? plotArea.Descendants().FirstOrDefault(e => e.LocalName == "dLbls");
         if (dLbls != null)
         {
+            // CT_Boolean's val attribute defaults to true, so a bare <c:showVal/> (no val)
+            // means ON — PowerPoint emits this form when labels are enabled via the UI.
+            // The old `== "1"` check treated bare/`true` as OFF, suppressing all labels.
             bool IsOn(string name) => dLbls.Elements().Any(e =>
-                e.LocalName == name && e.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value == "1");
+            {
+                if (e.LocalName != name) return false;
+                var v = e.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+                return v is null or "" or "1" or "true";
+            });
             info.ShowDataLabelVal = IsOn("showVal");
             info.ShowDataLabelPercent = IsOn("showPercent");
             info.ShowDataLabelCatName = IsOn("showCatName");
-            info.ShowDataLabels = info.ShowDataLabelVal || info.ShowDataLabelPercent || info.ShowDataLabelCatName;
+            info.ShowDataLabelSerName = IsOn("showSerName");
+            info.ShowDataLabels = info.ShowDataLabelVal || info.ShowDataLabelPercent || info.ShowDataLabelCatName || info.ShowDataLabelSerName;
             // <c:dLblPos> — inEnd (inside, near end) vs outEnd (beyond end) etc.
             // Office places insideEnd labels within the bar and outsideEnd just
             // past the bar tip; ignoring it made both positions identical.
             var dLblPosEl = dLbls.Elements().FirstOrDefault(e => e.LocalName == "dLblPos");
             var dLblPosVal = dLblPosEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
-            if (!string.IsNullOrEmpty(dLblPosVal)) info.DataLabelPos = dLblPosVal!;
+            if (!string.IsNullOrEmpty(dLblPosVal)) { info.DataLabelPos = dLblPosVal!; info.HasExplicitDataLabelPos = true; }
             // <c:numFmt formatCode="#,##0"> inside dLbls formats the label text
             // (e.g. grouping separators). Independent of the value-axis numFmt.
             var dLblNumFmtEl = dLbls.Elements().FirstOrDefault(e => e.LocalName == "numFmt");
@@ -2341,6 +3554,11 @@ internal partial class ChartSvgRenderer
         // alpha lives on per-point dPt spPr; other charts on the series spPr.
         info.SeriesFillOpacities = ExtractFillOpacities(serElements, info.Series, isPieType);
 
+        // Per-series <c:invertIfNegative>. Default TRUE when the element is
+        // absent (PowerPoint renders negative bars hollow by default); FALSE
+        // only when explicitly val="0". Index aligns with info.Series order.
+        info.InvertIfNegative = ExtractInvertIfNegative(serElements, info.Series.Count);
+
         // Axis info
         var valAxes = plotArea.Elements().Where(e => e.LocalName == "valAx").ToList();
         var valAxis = valAxes.FirstOrDefault();
@@ -2359,6 +3577,10 @@ internal partial class ChartSvgRenderer
                 info.SecondaryValAxisTitleFontPx = (int)(secTitleRPr.FontSize.Value / 100.0);
             if (secTitleRPr?.Bold?.Value == true)
                 info.SecondaryValAxisTitleBold = true;
+            if (secTitleRPr?.Italic?.Value == true)
+                info.SecondaryValAxisTitleItalic = true;
+            var secTitleColor = ExtractFontColor(secTitleRPr, themeColors);
+            if (secTitleColor != null) info.SecondaryValAxisTitleColor = CssHexColor(secTitleColor);
         }
 
         if (valAxis != null)
@@ -2370,6 +3592,10 @@ internal partial class ChartSvgRenderer
                 info.ValAxisTitleFontPx = (int)(valTitleRPr.FontSize.Value / 100.0);
             if (valTitleRPr?.Bold?.Value == true)
                 info.ValAxisTitleBold = true;
+            if (valTitleRPr?.Italic?.Value == true)
+                info.ValAxisTitleItalic = true;
+            var valTitleColor = ExtractFontColor(valTitleRPr, themeColors);
+            if (valTitleColor != null) info.ValAxisTitleColor = CssHexColor(valTitleColor);
             var scaling = valAxis.Elements().FirstOrDefault(e => e.LocalName == "scaling");
             if (scaling != null)
             {
@@ -2383,6 +3609,40 @@ internal partial class ChartSvgRenderer
             var majorUnit = valAxis.Elements().FirstOrDefault(e => e.LocalName == "majorUnit");
             if (majorUnit != null && double.TryParse(majorUnit.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value, out var mu))
                 info.MajorUnit = mu;
+            var minorUnit = valAxis.Elements().FirstOrDefault(e => e.LocalName == "minorUnit");
+            if (minorUnit != null && double.TryParse(minorUnit.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value, out var mnu) && mnu > 0)
+                info.MinorUnit = mnu;
+
+            // Display units (<c:dispUnits><c:builtInUnit val="millions"/>): PowerPoint
+            // divides every value-axis tick by the unit and (when <c:dispUnitsLbl> is
+            // present) draws a rotated unit-name annotation beside the axis.
+            var dispUnits = valAxis.Elements().FirstOrDefault(e => e.LocalName == "dispUnits");
+            if (dispUnits != null)
+            {
+                var builtIn = dispUnits.Elements().FirstOrDefault(e => e.LocalName == "builtInUnit")?
+                    .GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+                var (div, name) = builtIn switch
+                {
+                    "hundreds" => (1e2, "Hundreds"),
+                    "thousands" => (1e3, "Thousands"),
+                    "tenThousands" => (1e4, "Ten Thousands"),
+                    "hundredThousands" => (1e5, "Hundred Thousands"),
+                    "millions" => (1e6, "Millions"),
+                    "tenMillions" => (1e7, "Ten Millions"),
+                    "hundredMillions" => (1e8, "Hundred Millions"),
+                    "billions" => (1e9, "Billions"),
+                    "trillions" => (1e12, "Trillions"),
+                    _ => (1.0, null as string),
+                };
+                if (div != 1.0)
+                {
+                    info.ValueAxisUnitDivisor = div;
+                    // The annotation is shown only when <c:dispUnitsLbl> is present
+                    // (PowerPoint's "Show display units label on chart" toggle).
+                    if (dispUnits.Elements().Any(e => e.LocalName == "dispUnitsLbl"))
+                        info.ValueAxisUnitLabel = name;
+                }
+            }
 
             // Log scale
             var logBaseEl = scaling?.Elements().FirstOrDefault(e => e.LocalName == "logBase");
@@ -2399,17 +3659,44 @@ internal partial class ChartSvgRenderer
             var valDefRPr = valTxPr?.Descendants<Drawing.DefaultRunProperties>().FirstOrDefault();
             if (valDefRPr?.FontSize?.HasValue == true)
                 info.ValFontPx = (int)(valDefRPr.FontSize.Value / 100.0);
-            info.ValFontColor = ExtractFontColor(valDefRPr);
+            info.ValFontColor = ExtractFontColor(valDefRPr, themeColors);
+            if (valDefRPr?.Bold?.HasValue == true) info.ValFontBold = valDefRPr.Bold.Value;
+            if (valDefRPr?.Italic?.HasValue == true) info.ValFontItalic = valDefRPr.Italic.Value;
+            info.ValAxisLabelRotationDeg = ExtractAxisLabelRotationDeg(valTxPr);
 
             // Gridline color
             var majorGridlines = valAxis.Elements().FirstOrDefault(e => e.LocalName == "majorGridlines");
             info.ValMajorGridlines = majorGridlines != null;
+            info.ValMinorGridlines = valAxis.Elements().Any(e => e.LocalName == "minorGridlines");
             var gridSpPr = majorGridlines?.Elements().FirstOrDefault(e => e.LocalName == "spPr");
-            info.GridlineColor = ExtractLineColor(gridSpPr);
+            info.GridlineColor = ExtractLineColor(gridSpPr, themeColors);
+            // Value-axis major-gridline dash style (<a:ln><a:prstDash val="dash"/>).
+            var gridLnEl = gridSpPr?.Elements().FirstOrDefault(e => e.LocalName == "ln");
+            var gridDashEl = gridLnEl?.Elements().FirstOrDefault(e => e.LocalName == "prstDash");
+            var gridDashVal = gridDashEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            if (!string.IsNullOrEmpty(gridDashVal) && gridDashVal != "solid")
+                info.GridlineDash = gridDashVal;
+            // Value-axis major-gridline width (<a:ln w="EMU"/>). Without this the
+            // gridline rendered at a fixed 0.5px regardless of an explicit thick width.
+            var gridWidthStr = gridLnEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "w").Value;
+            if (long.TryParse(gridWidthStr, out var gwEmu) && gwEmu > 0)
+                info.GridlineWidthEmu = gwEmu;
+
+            // BUG4(R25): <c:delete val="1"/> hides the axis (ticks + gridlines).
+            var valDeleteEl = valAxis.Elements().FirstOrDefault(e => e.LocalName == "delete");
+            var valDelVal = valDeleteEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            info.ValAxisVisible = valDelVal != "1";
+            // <c:tickLblPos val="none"/>: hide value-axis labels (keep line/gridlines).
+            var valTlpEl = valAxis.Elements().FirstOrDefault(e => e.LocalName == "tickLblPos");
+            info.ValTickLabelsHidden = valTlpEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value == "none";
 
             // Axis line color
             var valSpPr = valAxis.Elements().FirstOrDefault(e => e.LocalName == "spPr");
-            info.AxisLineColor = ExtractLineColor(valSpPr);
+            info.AxisLineColor = ExtractLineColor(valSpPr, themeColors);
+
+            // Major tick marks (short perpendicular lines at each major label)
+            var valTickEl = valAxis.Elements().FirstOrDefault(e => e.LocalName == "majorTickMark");
+            info.ValMajorTickMark = valTickEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
 
             // Value axis number format (e.g. "$#,##0")
             var numFmtEl = valAxis.Elements().FirstOrDefault(e => e.LocalName == "numFmt");
@@ -2417,9 +3704,50 @@ internal partial class ChartSvgRenderer
             if (!string.IsNullOrEmpty(fmtCode) && fmtCode != "General")
                 info.ValNumFmt = fmtCode;
         }
+        // Scatter/bubble charts have NO catAx — they use two valAx (axPos="b" = X
+        // axis, axPos="l" = Y axis). The bottom valAx carries the X-axis
+        // majorGridlines (vertical gridlines). PowerPoint draws them; mirror that
+        // by routing the bottom valAx's majorGridlines into CatMajorGridlines.
+        if (catAxis == null && valAxes.Count >= 2)
+        {
+            var bottomValAx = valAxes.FirstOrDefault(va =>
+                va.Elements().FirstOrDefault(e => e.LocalName == "axPos")
+                    ?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value == "b");
+            if (bottomValAx != null)
+            {
+                info.CatMajorGridlines = bottomValAx.Elements().Any(e => e.LocalName == "majorGridlines");
+                info.CatMinorGridlines = bottomValAx.Elements().Any(e => e.LocalName == "minorGridlines");
+                var bTickEl = bottomValAx.Elements().FirstOrDefault(e => e.LocalName == "majorTickMark");
+                info.CatMajorTickMark = bTickEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+                var bDeleteEl = bottomValAx.Elements().FirstOrDefault(e => e.LocalName == "delete");
+                info.CatAxisVisible = bDeleteEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value != "1";
+            }
+        }
         if (catAxis != null)
         {
+            // Category axis orientation (<c:catAx><c:scaling><c:orientation val="maxMin"/>):
+            // reverses the category order. The value-axis equivalent (IsReversed) was read
+            // above; the catAx one was dropped, so a reversed category axis rendered forward.
+            var catScaling = catAxis.Elements().FirstOrDefault(e => e.LocalName == "scaling");
+            var catOrientEl = catScaling?.Elements().FirstOrDefault(e => e.LocalName == "orientation");
+            var catOrientVal = catOrientEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            info.IsCatReversed = catOrientVal == "maxMin";
             info.CatMajorGridlines = catAxis.Elements().Any(e => e.LocalName == "majorGridlines");
+            info.CatMinorGridlines = catAxis.Elements().Any(e => e.LocalName == "minorGridlines");
+            var catTickEl = catAxis.Elements().FirstOrDefault(e => e.LocalName == "majorTickMark");
+            info.CatMajorTickMark = catTickEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            // tickLblSkip: thin category labels to every Nth (read but never rendered before).
+            var catLblSkipEl = catAxis.Elements().FirstOrDefault(e => e.LocalName == "tickLblSkip");
+            if (catLblSkipEl != null
+                && int.TryParse(catLblSkipEl.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value, out var catLblSkip)
+                && catLblSkip > 1)
+                info.CatTickLabelSkip = catLblSkip;
+            var catDeleteEl = catAxis.Elements().FirstOrDefault(e => e.LocalName == "delete");
+            var catDelVal = catDeleteEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            info.CatAxisVisible = catDelVal != "1";
+            // <c:tickLblPos val="none"/>: hide category-axis labels (keep line/gridlines).
+            var catTlpEl = catAxis.Elements().FirstOrDefault(e => e.LocalName == "tickLblPos");
+            info.CatTickLabelsHidden = catTlpEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value == "none";
             var catTitleEl = catAxis.Elements().FirstOrDefault(e => e.LocalName == "title");
             info.CatAxisTitle = catTitleEl?.Descendants<Drawing.Text>().FirstOrDefault()?.Text;
             var catTitleRPr = catTitleEl?.Descendants<Drawing.RunProperties>().FirstOrDefault();
@@ -2427,12 +3755,19 @@ internal partial class ChartSvgRenderer
                 info.CatAxisTitleFontPx = (int)(catTitleRPr.FontSize.Value / 100.0);
             if (catTitleRPr?.Bold?.Value == true)
                 info.CatAxisTitleBold = true;
+            if (catTitleRPr?.Italic?.Value == true)
+                info.CatAxisTitleItalic = true;
+            var catTitleColor = ExtractFontColor(catTitleRPr, themeColors);
+            if (catTitleColor != null) info.CatAxisTitleColor = CssHexColor(catTitleColor);
             // Use txPr > defRPr for tick label font (not title's RunProperties)
             var catTxPr = catAxis.Elements().FirstOrDefault(e => e.LocalName == "txPr");
             var catDefRPr = catTxPr?.Descendants<Drawing.DefaultRunProperties>().FirstOrDefault();
             if (catDefRPr?.FontSize?.HasValue == true)
                 info.CatFontPx = (int)(catDefRPr.FontSize.Value / 100.0);
-            info.CatFontColor = ExtractFontColor(catDefRPr);
+            info.CatFontColor = ExtractFontColor(catDefRPr, themeColors);
+            if (catDefRPr?.Bold?.HasValue == true) info.CatFontBold = catDefRPr.Bold.Value;
+            if (catDefRPr?.Italic?.HasValue == true) info.CatFontItalic = catDefRPr.Italic.Value;
+            info.CatAxisLabelRotationDeg = ExtractAxisLabelRotationDeg(catTxPr);
         }
 
         // Data label font size
@@ -2442,6 +3777,12 @@ internal partial class ChartSvgRenderer
             var dLblFontSize = dLblDefRPr?.FontSize ?? dLbls.Descendants<Drawing.RunProperties>().FirstOrDefault()?.FontSize;
             if (dLblFontSize?.HasValue == true)
                 info.DataLabelFontPx = (int)(dLblFontSize.Value / 100.0);
+            // Explicit data-label color (<c:txPr>…<a:solidFill>); resolves schemeClr
+            // through the theme. PowerPoint honors it; previously dropped → theme text.
+            var dLblColor = ExtractFontColor(dLblDefRPr, themeColors);
+            if (dLblColor != null) info.DataLabelFontColor = CssHexColor(dLblColor);
+            if (dLblDefRPr?.Bold?.HasValue == true) info.DataLabelBold = dLblDefRPr.Bold.Value;
+            if (dLblDefRPr?.Italic?.HasValue == true) info.DataLabelItalic = dLblDefRPr.Italic.Value;
         }
 
         // Gap width
@@ -2452,11 +3793,24 @@ internal partial class ChartSvgRenderer
             if (gv != null && int.TryParse(gv, out var gw)) info.GapWidth = gw;
         }
 
+        // Overlap (clustered bar/column: percentage two adjacent series bars
+        // overlap; 100 = fully overlapping, 0 = touching, negative = gap).
+        var overlapEl = plotArea.Descendants().FirstOrDefault(e => e.LocalName == "overlap");
+        if (overlapEl != null)
+        {
+            var ov = overlapEl.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            if (ov != null && int.TryParse(ov, out var ow)) info.Overlap = ow;
+        }
+
         // Plot / chart fill
         var plotSpPr = plotArea.Elements().FirstOrDefault(e => e.LocalName == "spPr");
-        info.PlotFillColor = ExtractFillColor(plotSpPr);
+        info.PlotFillColor = ExtractFillColor(plotSpPr, themeColors);
+        info.PlotBorderColor = ExtractLineColor(plotSpPr, themeColors);
+        info.PlotBorderWidthEmu = ExtractLineWidthEmu(plotSpPr);
         var chartSpPr = chart?.Parent?.Elements().FirstOrDefault(e => e.LocalName == "spPr");
-        info.ChartFillColor = ExtractFillColor(chartSpPr);
+        info.ChartFillColor = ExtractFillColor(chartSpPr, themeColors);
+        info.ChartBorderColor = ExtractLineColor(chartSpPr, themeColors);
+        info.ChartBorderWidthEmu = ExtractLineWidthEmu(chartSpPr);
 
         // Legend
         var legendEl = chart?.Elements().FirstOrDefault(e => e.LocalName == "legend");
@@ -2470,11 +3824,30 @@ internal partial class ChartSvgRenderer
             var legendFontSize = legendRPr?.GetAttributes().FirstOrDefault(a => a.LocalName == "sz").Value;
             if (legendFontSize != null && int.TryParse(legendFontSize, out var lfs))
                 info.LegendFontSize = $"{lfs / 100.0:0.##}pt";
-            info.LegendFontColor = ExtractFontColor(legendRPr);
+            info.LegendFontColor = ExtractFontColor(legendRPr, themeColors);
+            // Legend font bold (<c:legend><c:txPr>…<a:rPr b="1"/> or defRPr): the renderer
+            // emitted size+color but never font-weight, so a bold legend rendered normal.
+            // Mirrors the chart-title bold path. legendRPr is RunProperties|DefaultRunProperties;
+            // read the "b" attribute generically.
+            var legendBold = legendRPr?.GetAttributes().FirstOrDefault(a => a.LocalName == "b").Value;
+            info.LegendFontBold = legendBold == "1" || legendBold == "true";
             // #7f: honor <c:legendPos w:val="r|l|t|b|tr"/>.
             var posEl = legendEl.Elements().FirstOrDefault(e => e.LocalName == "legendPos");
             var posVal = posEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
             if (!string.IsNullOrEmpty(posVal)) info.LegendPos = posVal!;
+            // <c:legendEntry><c:idx val="N"/><c:delete val="1"/></c:legendEntry>
+            // hides the legend swatch+label for series N (idx = series index for
+            // bar/column/line/area). The series still plots; only its legend
+            // entry is suppressed. No entries → empty set → all series shown.
+            foreach (var entryEl in legendEl.Elements().Where(e => e.LocalName == "legendEntry"))
+            {
+                var entryDelEl = entryEl.Elements().FirstOrDefault(e => e.LocalName == "delete");
+                var entryDelVal = entryDelEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+                if (entryDelVal != "1" && entryDelVal != "true") continue;
+                var idxEl = entryEl.Elements().FirstOrDefault(e => e.LocalName == "idx");
+                var idxVal = idxEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+                if (int.TryParse(idxVal, out var idx)) info.DeletedLegendEntries.Add(idx);
+            }
         }
         else
         {
@@ -2492,7 +3865,11 @@ internal partial class ChartSvgRenderer
             // Chart-level smooth (lineChart > smooth val="1")
             var chartSmooth = chartTypeEl.Elements().FirstOrDefault(e => e.LocalName == "smooth");
             var chartSmoothVal = chartSmooth?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
-            var chartIsSmooth = chartSmoothVal == "1" || chartSmoothVal == "true";
+            // CT_Boolean defaults to true: a bare <c:smooth/> (no val attr) means ON.
+            // PowerPoint emits the bare form; the old `== "1"` read it as straight lines.
+            var chartIsSmooth = chartSmooth != null
+                && (string.IsNullOrEmpty(chartSmoothVal)
+                    || (chartSmoothVal != "0" && !chartSmoothVal.Equals("false", StringComparison.OrdinalIgnoreCase)));
 
             // PowerPoint's <c:lineChart>/<c:scatterChart> emit a chart-level
             // <c:marker val="1"/> after all <c:ser> to opt every series into
@@ -2507,7 +3884,9 @@ internal partial class ChartSvgRenderer
                 .LastOrDefault(); // chart-level <c:marker val="1"/> appears after series
             var chartMarkerVal = chartLevelMarker?.GetAttributes()
                 .FirstOrDefault(a => a.LocalName == "val").Value;
-            var chartMarkersOn = chartMarkerVal == "1" || chartMarkerVal == "true";
+            // CT_Boolean defaults to true: a bare <c:marker/> (no val attr) opts every series
+            // into the default marker cycle. The old `== "1"` read it as markers-off.
+            var chartMarkersOn = chartLevelMarker != null && (chartMarkerVal is null or "" or "1" or "true");
             // <c:scatterChart> uses <c:scatterStyle val="..."/> instead of a
             // chart-level <c:marker>. Values containing "marker" (lineMarker /
             // marker / smoothMarker) mean every series gets the default cycle.
@@ -2515,6 +3894,12 @@ internal partial class ChartSvgRenderer
             var scatterStyleVal = scatterStyleEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
             if (scatterStyleVal != null && scatterStyleVal.Contains("arker", StringComparison.OrdinalIgnoreCase))
                 chartMarkersOn = true;
+            // Scatter charts carry their smooth-curve signal in <c:scatterStyle>
+            // ("smooth"/"smoothMarker"), not in <c:smooth>. PowerPoint draws Bézier
+            // curves for these; the renderer previously read only <c:smooth> and so
+            // drew straight segments. Propagate it into the per-series smooth default.
+            if (scatterStyleVal != null && scatterStyleVal.StartsWith("smooth", StringComparison.OrdinalIgnoreCase))
+                chartIsSmooth = true;
             // R16c: scatterStyle exactly "marker" (or "none") = markers without a
             // connecting line. "lineMarker"/"smoothMarker"/"line"/"smooth" keep the
             // line. Suppress the polyline in that case.
@@ -2542,13 +3927,23 @@ internal partial class ChartSvgRenderer
                 var sizeEl = marker?.Elements().FirstOrDefault(e => e.LocalName == "size");
                 var sizeVal = sizeEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
                 info.MarkerSizes.Add(sizeVal != null && int.TryParse(sizeVal, out var ms) ? ms : 5);
+                // Marker fill + border (<c:marker><c:spPr>). PowerPoint paints a
+                // marker with an explicit fill AND a series-colored outline; we
+                // read the fill from solidFill and the border from <a:ln>. null
+                // (no spPr) defers to the series color at the call site.
+                var markerSpPr = marker?.Elements().FirstOrDefault(e => e.LocalName == "spPr");
+                var mFill = ExtractFillColor(markerSpPr, themeColors);
+                info.MarkerFillColors.Add(mFill != null ? $"#{mFill}" : null);
+                var mLine = ExtractLineColor(markerSpPr, themeColors);
+                info.MarkerLineColors.Add(mLine != null ? $"#{mLine}" : null);
                 serIdx++;
 
                 // Per-series smooth (overrides chart-level)
                 var serSmooth = ser.Elements().FirstOrDefault(e => e.LocalName == "smooth");
                 var serSmoothVal = serSmooth?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
                 info.Smooth.Add(serSmooth != null
-                    ? (serSmoothVal == "1" || serSmoothVal == "true")
+                    ? (string.IsNullOrEmpty(serSmoothVal)
+                        || (serSmoothVal != "0" && !serSmoothVal.Equals("false", StringComparison.OrdinalIgnoreCase)))
                     : chartIsSmooth);
 
                 // Per-series dash pattern and line width
@@ -2561,6 +3956,10 @@ internal partial class ChartSvgRenderer
                 // Per-series line width (a:ln w="..." in EMU, convert to pt: 1pt = 12700 EMU)
                 var lnWidth = ln?.GetAttributes().FirstOrDefault(a => a.LocalName == "w").Value;
                 info.LineWidths.Add(lnWidth != null && int.TryParse(lnWidth, out var lw) ? Math.Round(lw / EmuConverter.EmuPerPointF, 1) : 2);
+
+                // Per-series "no line" (a:ln/a:noFill): PowerPoint hides the connecting
+                // polyline (markers only). The renderer always drew the polyline, ignoring it.
+                info.SeriesLineHide.Add(ln?.Elements().Any(e => e.LocalName == "noFill") == true);
 
                 // Per-series trendline
                 var trendlineEl = ser.Elements().FirstOrDefault(e => e.LocalName == "trendline");
@@ -2594,7 +3993,7 @@ internal partial class ChartSvgRenderer
                     // Trendline styling
                     var tlSpPr = trendlineEl.Elements().FirstOrDefault(e => e.LocalName == "spPr");
                     var tlLn = tlSpPr?.Elements().FirstOrDefault(e => e.LocalName == "ln");
-                    tlInfo.Color = ExtractLineColor(tlSpPr);
+                    tlInfo.Color = ExtractLineColor(tlSpPr, themeColors);
                     if (tlLn?.GetAttributes().FirstOrDefault(a => a.LocalName == "w").Value is string tlw
                         && int.TryParse(tlw, out var tlwPt))
                         tlInfo.Width = Math.Round(tlwPt / EmuConverter.EmuPerPointF, 1);
@@ -2627,7 +4026,7 @@ internal partial class ChartSvgRenderer
                         ebInfo.Value = ebVal;
                     // Error bar styling
                     var ebSpPr = errBarsEl.Elements().FirstOrDefault(e => e.LocalName == "spPr");
-                    ebInfo.Color = ExtractLineColor(ebSpPr);
+                    ebInfo.Color = ExtractLineColor(ebSpPr, themeColors);
                     var ebLn = ebSpPr?.Elements().FirstOrDefault(e => e.LocalName == "ln");
                     if (ebLn?.GetAttributes().FirstOrDefault(a => a.LocalName == "w").Value is string ebw
                         && int.TryParse(ebw, out var ebwPt))
@@ -2645,7 +4044,7 @@ internal partial class ChartSvgRenderer
             {
                 var dlSpPr = dropLinesEl.Elements().FirstOrDefault(e => e.LocalName == "spPr");
                 var dlLn = dlSpPr?.Elements().FirstOrDefault(e => e.LocalName == "ln");
-                info.DropLineColor = ExtractLineColor(dlSpPr);
+                info.DropLineColor = ExtractLineColor(dlSpPr, themeColors);
                 if (dlLn?.GetAttributes().FirstOrDefault(a => a.LocalName == "w").Value is string dlw
                     && int.TryParse(dlw, out var dlwPt))
                     info.DropLineWidth = Math.Round(dlwPt / EmuConverter.EmuPerPointF, 1);
@@ -2658,7 +4057,7 @@ internal partial class ChartSvgRenderer
             {
                 var hlSpPr = hiLowEl.Elements().FirstOrDefault(e => e.LocalName == "spPr");
                 var hlLn = hlSpPr?.Elements().FirstOrDefault(e => e.LocalName == "ln");
-                info.HighLowLineColor = ExtractLineColor(hlSpPr);
+                info.HighLowLineColor = ExtractLineColor(hlSpPr, themeColors);
                 if (hlLn?.GetAttributes().FirstOrDefault(a => a.LocalName == "w").Value is string hlw
                     && int.TryParse(hlw, out var hlwPt))
                     info.HighLowLineWidth = Math.Round(hlwPt / EmuConverter.EmuPerPointF, 1);
@@ -2671,8 +4070,11 @@ internal partial class ChartSvgRenderer
                     ?.Elements().FirstOrDefault(e => e.LocalName == "spPr");
                 var dnSpPr = upDownBars.Elements().FirstOrDefault(e => e.LocalName == "downBars")
                     ?.Elements().FirstOrDefault(e => e.LocalName == "spPr");
-                info.UpBarColor = ExtractFillColor(upSpPr) ?? "4CAF50";
-                info.DownBarColor = ExtractFillColor(dnSpPr) ?? "F44336";
+                // Leave null when the up/down bars carry no fill: each renderer applies its
+                // own default (line chart → green/red; stock candlestick → white/black per the
+                // OOXML spec). ExtractFillColor resolves srgbClr/schemeClr/sysClr/prstClr.
+                info.UpBarColor = ExtractFillColor(upSpPr, themeColors);
+                info.DownBarColor = ExtractFillColor(dnSpPr, themeColors);
             }
         }
 
@@ -2689,21 +4091,53 @@ internal partial class ChartSvgRenderer
             info.RadarStyle = rsVal ?? "marker";
         }
 
+        // Reversed category axis (catAx maxMin): reverse the category order centrally so
+        // every chart type (column/bar/line/area) renders the flipped order forward —
+        // PowerPoint draws categories right-to-left (e.g. Mar,Feb,Jan). Reverse the
+        // category labels, each series' values, and the per-point color overrides (keyed
+        // by category index) in lockstep. Cat axis reversal doesn't apply to pie/doughnut
+        // (no catAx orientation), and the horizontal-bar renderer's existing
+        // first-category-at-bottom flip composes correctly (first category moves to top).
+        if (info.IsCatReversed && info.Categories.Length > 1)
+        {
+            int n = info.Categories.Length;
+            Array.Reverse(info.Categories);
+            for (int i = 0; i < info.Series.Count; i++)
+            {
+                var v = info.Series[i].values;
+                Array.Reverse(v);
+                if (i < info.PerPointColors.Count && info.PerPointColors[i].Count > 0)
+                    info.PerPointColors[i] = info.PerPointColors[i]
+                        .ToDictionary(kv => n - 1 - kv.Key, kv => kv.Value);
+            }
+        }
+
         return info;
     }
 
     /// <summary>Extract series colors (per-point for pie/doughnut, stroke for line/scatter, fill for others).</summary>
     private static List<string> ExtractColors(List<OpenXmlElement> serElements, List<(string name, double[] values)> series,
-        bool isPieType, string chartType, Dictionary<string, string>? themeColors = null)
+        bool isPieType, string chartType, Dictionary<string, string>? themeColors = null, bool varyColors = true)
     {
         var colors = new List<string>();
 
         if (isPieType && serElements.Count > 0)
         {
-            // Pie/doughnut: colors are per data point (dPt), not per series
+            // Pie/doughnut: colors are per data point (dPt), not per series.
             var ser = serElements[0];
             var dPts = ser.Elements().Where(e => e.LocalName == "dPt").ToList();
             var catCount = series.FirstOrDefault().values?.Length ?? 0;
+            // <c:varyColors val="0"/>: PowerPoint colors every non-overridden slice in
+            // the SINGLE series color (monochrome pie) instead of cycling the accent
+            // palette. Default (absent or val="1") varies by point. Explicit dPt fills
+            // still win in both modes.
+            string? serColorUniform = null;
+            if (!varyColors)
+            {
+                var serSpPr = ser.Elements().FirstOrDefault(e => e.LocalName == "spPr");
+                var serRgb = ExtractFillColor(serSpPr, themeColors);
+                serColorUniform = serRgb != null ? $"#{serRgb}" : FallbackColors[0];
+            }
             for (int i = 0; i < catCount; i++)
             {
                 var dPt = dPts.FirstOrDefault(d =>
@@ -2713,20 +4147,26 @@ internal partial class ChartSvgRenderer
                     return idxEl.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value == i.ToString();
                 });
                 var rgb = ExtractFillColor(dPt?.Elements().FirstOrDefault(e => e.LocalName == "spPr"), themeColors);
-                colors.Add(rgb != null ? $"#{rgb}" : FallbackColors[i % FallbackColors.Length]);
+                colors.Add(rgb != null ? $"#{rgb}"
+                    : serColorUniform ?? FallbackColors[i % FallbackColors.Length]);
             }
         }
         else
         {
-            // Detect line/scatter series for stroke color extraction
-            var isLineType = chartType.Contains("line") || chartType == "scatter";
+            // Detect line/scatter series PER-SERIES from the owning chart group, not a
+            // single chart-level flag: a combo chart mixes bar and line groups, so the
+            // line series' color lives in <a:ln><a:solidFill> (stroke) while the bar
+            // series' lives in <a:solidFill> (fill). A single chartType=="combo" flag
+            // matched neither, so line series rendered fallback colors.
             for (int i = 0; i < series.Count; i++)
             {
                 string? rgb = null;
                 if (i < serElements.Count)
                 {
+                    var parentName = (serElements[i].Parent?.LocalName ?? "").ToLowerInvariant();
+                    var serIsLine = parentName.Contains("line") || parentName.Contains("scatter");
                     var spPr = serElements[i].Elements().FirstOrDefault(e => e.LocalName == "spPr");
-                    if (isLineType)
+                    if (serIsLine)
                     {
                         // For line/scatter, prefer stroke color from a:ln > a:solidFill
                         var ln = spPr?.Elements().FirstOrDefault(e => e.LocalName == "ln");
@@ -2739,6 +4179,80 @@ internal partial class ChartSvgRenderer
             }
         }
         return colors;
+    }
+
+    /// <summary>Extract per-data-point fill overrides (<c:dPt>) for non-pie
+    /// charts (bar/column). Returns one dict per series mapping zero-based
+    /// category idx -> '#'-prefixed hex. Series with no dPt yield an empty dict,
+    /// so the renderer falls back to the per-series color (regression-safe).
+    /// Colors resolve through the same ExtractFillColor path used for series
+    /// fills (srgbClr/schemeClr/theme).</summary>
+    private static List<Dictionary<int, string>> ExtractPerPointColors(
+        List<OpenXmlElement> serElements, Dictionary<string, string>? themeColors = null)
+    {
+        var result = new List<Dictionary<int, string>>();
+        foreach (var ser in serElements)
+        {
+            var map = new Dictionary<int, string>();
+            foreach (var dPt in ser.Elements().Where(e => e.LocalName == "dPt"))
+            {
+                var idxEl = dPt.Elements().FirstOrDefault(e => e.LocalName == "idx");
+                var idxStr = idxEl?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+                if (!int.TryParse(idxStr, out var idx)) continue;
+                var rgb = ExtractFillColor(dPt.Elements().FirstOrDefault(e => e.LocalName == "spPr"), themeColors);
+                if (rgb != null) map[idx] = $"#{rgb}";
+            }
+            result.Add(map);
+        }
+        return result;
+    }
+
+    /// <summary>Per-series set of data-point indices whose data label was explicitly
+    /// deleted (&lt;c:dLbls&gt;&lt;c:dLbl&gt;&lt;c:idx&gt;&lt;c:delete/&gt;). PowerPoint hides
+    /// just those points' labels while keeping the rest of the series' labels.</summary>
+    private static List<HashSet<int>> ExtractDeletedLabels(List<OpenXmlElement> serElements)
+    {
+        var result = new List<HashSet<int>>();
+        foreach (var ser in serElements)
+        {
+            var set = new HashSet<int>();
+            var dLbls = ser.Elements().FirstOrDefault(e => e.LocalName == "dLbls");
+            if (dLbls != null)
+                foreach (var dLbl in dLbls.Elements().Where(e => e.LocalName == "dLbl"))
+                {
+                    var del = dLbl.Elements().FirstOrDefault(e => e.LocalName == "delete");
+                    if (del == null) continue;
+                    var dv = del.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+                    if (dv is not (null or "" or "1" or "true")) continue; // CT_Boolean default true
+                    var idxStr = dLbl.Elements().FirstOrDefault(e => e.LocalName == "idx")
+                        ?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+                    if (int.TryParse(idxStr, out var idx)) set.Add(idx);
+                }
+            result.Add(set);
+        }
+        return result;
+    }
+
+    /// <summary>Extract per-series <c:invertIfNegative>. PowerPoint's effective
+    /// default is TRUE (negative bars render hollow) when the element is absent;
+    /// FALSE only when explicitly val="0". Returns one bool per series, aligned
+    /// to series order.</summary>
+    private static List<bool> ExtractInvertIfNegative(List<OpenXmlElement> serElements, int seriesCount)
+    {
+        var result = new List<bool>();
+        for (int i = 0; i < seriesCount; i++)
+        {
+            // Default true when the element is absent. When present, honor its
+            // val (val="0"/false → keep negatives solid; val="1"/absent-attr → true).
+            var invEl = i < serElements.Count
+                ? serElements[i].Elements().FirstOrDefault(e => e.LocalName == "invertIfNegative")
+                : null;
+            if (invEl == null) { result.Add(true); continue; }
+            var valStr = invEl.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            // An <c:invertIfNegative/> with no val attribute defaults to true.
+            result.Add(string.IsNullOrEmpty(valStr) || (valStr != "0" && !valStr.Equals("false", StringComparison.OrdinalIgnoreCase)));
+        }
+        return result;
     }
 
     /// <summary>Extract per-series fill opacity from the series spPr
@@ -2820,6 +4334,45 @@ internal partial class ChartSvgRenderer
             var firstGs = gsLst?.Elements().FirstOrDefault(e => e.LocalName == "gs");
             var gsSrgb = firstGs?.Elements().FirstOrDefault(e => e.LocalName == "srgbClr");
             v = gsSrgb?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            // First stop may be a schemeClr (e.g. accent2): resolve through the theme map,
+            // mirroring the solidFill schemeClr branch above. Without this a gradient series
+            // whose first stop is a theme color dropped to the wrong fallback-palette accent.
+            if (v == null && themeColors != null && firstGs != null)
+            {
+                var gsScheme = firstGs.Elements().FirstOrDefault(e => e.LocalName == "schemeClr");
+                var gsName = gsScheme?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+                if (!string.IsNullOrEmpty(gsName))
+                {
+                    var canonical = ParseHelpers.NormalizeSchemeColorName(gsName) ?? gsName;
+                    if (themeColors.TryGetValue(canonical, out var themeHex)
+                        || themeColors.TryGetValue(gsName, out themeHex))
+                        v = themeHex;
+                }
+            }
+        }
+        // pattFill fallback: a pattern-filled series (Format Data Series -> Pattern Fill)
+        // has no solidFill. SVG bar fills are flat, so approximate with the pattern's
+        // FOREGROUND color (same flat-approximation as the gradFill case above) instead of
+        // dropping to the wrong fallback accent. The stripe texture itself is not rendered
+        // (would need SVG <pattern> defs) — surfacing the fg color is the consistent
+        // approximation. Resolve fg srgbClr, else schemeClr via the theme map.
+        if (v == null)
+        {
+            var pattFill = container.Elements().FirstOrDefault(e => e.LocalName == "pattFill");
+            var fgClr = pattFill?.Elements().FirstOrDefault(e => e.LocalName == "fgClr");
+            v = fgClr?.Elements().FirstOrDefault(e => e.LocalName == "srgbClr")?
+                .GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            if (v == null && fgClr != null && themeColors != null)
+            {
+                var sName = fgClr.Elements().FirstOrDefault(e => e.LocalName == "schemeClr")?
+                    .GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+                if (!string.IsNullOrEmpty(sName))
+                {
+                    var canon = ParseHelpers.NormalizeSchemeColorName(sName) ?? sName;
+                    if (themeColors.TryGetValue(canon, out var hx) || themeColors.TryGetValue(sName, out hx))
+                        v = hx;
+                }
+            }
         }
         // Reject non-hex values — the return flows into $"#{...}" inline SVG
         // fill/style attributes. Same XSS class as w:color / w:shd / border.
@@ -2830,18 +4383,49 @@ internal partial class ChartSvgRenderer
         return v;
     }
 
-    /// <summary>Extract font color from RunProperties or DefaultRunProperties (solidFill > srgbClr).</summary>
-    private static string? ExtractFontColor(OpenXmlElement? rPr)
+    /// <summary>Extract font color from RunProperties or DefaultRunProperties
+    /// (solidFill > srgbClr, or solidFill > schemeClr resolved through the theme).</summary>
+    private static string? ExtractFontColor(OpenXmlElement? rPr, Dictionary<string, string>? themeColors = null)
     {
         if (rPr == null) return null;
         var solidFill = rPr.Elements().FirstOrDefault(e => e.LocalName == "solidFill");
         var srgb = solidFill?.Elements().FirstOrDefault(e => e.LocalName == "srgbClr");
         var val = srgb?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+        // schemeClr (accent1.., tx1, bg1, ...): resolve through the theme color map
+        // so a chart title / axis / legend styled with a scheme color renders its
+        // actual theme hex instead of dropping to the global default text color.
+        // Mirrors ExtractFillColor's schemeClr branch.
+        if (val == null && themeColors != null)
+        {
+            var scheme = solidFill?.Elements().FirstOrDefault(e => e.LocalName == "schemeClr");
+            var schemeName = scheme?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            if (!string.IsNullOrEmpty(schemeName))
+            {
+                var canonical = ParseHelpers.NormalizeSchemeColorName(schemeName) ?? schemeName;
+                if (themeColors.TryGetValue(canonical, out var themeHex)
+                    || themeColors.TryGetValue(schemeName, out themeHex))
+                    val = themeHex;
+            }
+        }
         return HexOrNull(val);
     }
 
-    /// <summary>Extract line/outline color from spPr (ln > solidFill > srgbClr).</summary>
-    private static string? ExtractLineColor(OpenXmlElement? spPr)
+    /// <summary>Read an axis tick-label rotation (in degrees) from its
+    /// &lt;c:txPr&gt;&lt;a:bodyPr rot="..."/&gt;. OOXML rot is 1/60000 degree.
+    /// Returns null when txPr / bodyPr / rot is absent or rot is 0 (so plain
+    /// charts keep horizontal labels, regression-safe).</summary>
+    private static int? ExtractAxisLabelRotationDeg(OpenXmlElement? txPr)
+    {
+        if (txPr == null) return null;
+        var bodyPr = txPr.Elements().FirstOrDefault(e => e.LocalName == "bodyPr");
+        var rotVal = bodyPr?.GetAttributes().FirstOrDefault(a => a.LocalName == "rot").Value;
+        if (rotVal == null || !int.TryParse(rotVal, out var rot) || rot == 0) return null;
+        return rot / 60000;
+    }
+
+    /// <summary>Extract line/outline color from spPr (ln > solidFill > srgbClr, or
+    /// > schemeClr resolved through the theme).</summary>
+    private static string? ExtractLineColor(OpenXmlElement? spPr, Dictionary<string, string>? themeColors = null)
     {
         if (spPr == null) return null;
         var ln = spPr.Elements().FirstOrDefault(e => e.LocalName == "ln");
@@ -2849,7 +4433,41 @@ internal partial class ChartSvgRenderer
         var solidFill = ln.Elements().FirstOrDefault(e => e.LocalName == "solidFill");
         var srgb = solidFill?.Elements().FirstOrDefault(e => e.LocalName == "srgbClr");
         var val = srgb?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+        // schemeClr (accent1.., tx1, bg1, ...): resolve through the theme map so a
+        // gridline / axis line / trendline / error bar / drop line / hi-low line /
+        // marker line / plot or chart border styled with a scheme color renders its
+        // theme hex instead of falling back to a default or the series color.
+        // Mirrors ExtractFillColor / ExtractFontColor.
+        if (val == null && themeColors != null)
+        {
+            var scheme = solidFill?.Elements().FirstOrDefault(e => e.LocalName == "schemeClr");
+            var schemeName = scheme?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            if (!string.IsNullOrEmpty(schemeName))
+            {
+                var canonical = ParseHelpers.NormalizeSchemeColorName(schemeName) ?? schemeName;
+                if (themeColors.TryGetValue(canonical, out var themeHex)
+                    || themeColors.TryGetValue(schemeName, out themeHex))
+                    val = themeHex;
+            }
+        }
         return HexOrNull(val);
+    }
+
+    /// <summary>Read a:ln/@w (EMU) from an spPr. Null when no a:ln or no width
+    /// attribute (caller defaults to ~0.75pt for a present-but-widthless line).</summary>
+    private static long? ExtractLineWidthEmu(OpenXmlElement? spPr)
+    {
+        var ln = spPr?.Elements().FirstOrDefault(e => e.LocalName == "ln");
+        var w = ln?.GetAttributes().FirstOrDefault(a => a.LocalName == "w").Value;
+        return long.TryParse(w, out var emu) ? emu : (long?)null;
+    }
+
+    /// <summary>EMU outline width → SVG stroke px (1 EMU = 1/914400 in, pt = EMU/12700,
+    /// px ≈ pt * 4/3). Null width = PowerPoint's default ~0.75pt line.</summary>
+    private static double EmuToStrokePx(long? emu)
+    {
+        var pt = emu.HasValue ? emu.Value / 12700.0 : 0.75;
+        return pt * 4.0 / 3.0;
     }
 
     // Hex-only stripper: reject non-hex so these chart-color getters can't
@@ -2862,6 +4480,36 @@ internal partial class ChartSvgRenderer
         foreach (var c in v)
             if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'))) return null;
         return v;
+    }
+
+    /// <summary>True when a <c:majorTickMark val="..."/> value should draw ticks
+    /// (present and not "none"). PowerPoint draws short perpendicular lines at
+    /// each major label for "out"/"in"/"cross". Absent/"none" => no ticks.</summary>
+    private static bool TickMarkVisible(string? v)
+        => v != null && v != "none";
+
+    /// <summary>Emit a single major tick mark on a vertical axis (value axis on the
+    /// left, or horizontal-bar category axis): a short horizontal line at y.
+    /// "out" extends left of the axis (x=axisX), "in" right, "cross" straddles.</summary>
+    private void EmitVAxisTick(StringBuilder sb, double axisX, double y, string mode)
+    {
+        double x1 = axisX, x2 = axisX;
+        if (mode == "out") { x1 = axisX - MajorTickLen; x2 = axisX; }
+        else if (mode == "in") { x1 = axisX; x2 = axisX + MajorTickLen; }
+        else if (mode == "cross") { x1 = axisX - MajorTickLen; x2 = axisX + MajorTickLen; }
+        sb.AppendLine($"        <line x1=\"{x1:0.#}\" y1=\"{y:0.#}\" x2=\"{x2:0.#}\" y2=\"{y:0.#}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
+    }
+
+    /// <summary>Emit a single major tick mark on a horizontal axis (category axis at
+    /// bottom, or horizontal-bar value axis): a short vertical line at x.
+    /// "out" extends below the axis (y=axisY), "in" above, "cross" straddles.</summary>
+    private void EmitHAxisTick(StringBuilder sb, double x, double axisY, string mode)
+    {
+        double y1 = axisY, y2 = axisY;
+        if (mode == "out") { y1 = axisY; y2 = axisY + MajorTickLen; }
+        else if (mode == "in") { y1 = axisY - MajorTickLen; y2 = axisY; }
+        else if (mode == "cross") { y1 = axisY - MajorTickLen; y2 = axisY + MajorTickLen; }
+        sb.AppendLine($"        <line x1=\"{x:0.#}\" y1=\"{y1:0.#}\" x2=\"{x:0.#}\" y2=\"{y2:0.#}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
     }
 
     /// <summary>Normalize a chart color for direct emission into an SVG
@@ -2885,18 +4533,62 @@ internal partial class ChartSvgRenderer
         // "FF0000" becomes "#FF0000" while named/already-#'d values pass through.
         if (info.ValFontColor != null) AxisColor = CssHexColor(info.ValFontColor);
         if (info.CatFontColor != null) CatColor = CssHexColor(info.CatFontColor);
+        ValTickLabelsBold = info.ValFontBold;
+        CatTickLabelsBold = info.CatFontBold;
+        ValTickLabelsItalic = info.ValFontItalic;
+        CatTickLabelsItalic = info.CatFontItalic;
         if (info.GridlineColor != null) GridColor = CssHexColor(info.GridlineColor);
+        GridlineDash = info.GridlineDash;
+        GridlineWidthPx = info.GridlineWidthEmu.HasValue ? EmuToStrokePx(info.GridlineWidthEmu) : 0.5;
         ShowValGridlines = info.ValMajorGridlines;
         ShowCatGridlines = info.CatMajorGridlines;
+        ShowValMinorGridlines = info.ValMinorGridlines;
+        ShowCatMinorGridlines = info.CatMinorGridlines;
+        ValAxisVisible = info.ValAxisVisible;
+        CatAxisVisible = info.CatAxisVisible;
+        ValTickLabelsHidden = info.ValTickLabelsHidden;
+        CatTickLabelsHidden = info.CatTickLabelsHidden;
+        ValMajorTickMark = info.ValMajorTickMark;
+        CatMajorTickMark = info.CatMajorTickMark;
+        CatTickLabelSkip = info.CatTickLabelSkip;
+        PerPointDeletedLabels = info.PerPointDeletedLabels;
         if (info.AxisLineColor != null) AxisLineColor = CssHexColor(info.AxisLineColor);
         DataLabelFontPx = info.DataLabelFontPx;
+        // Minor-gridline count from <c:minorUnit> / <c:majorUnit> (sub-intervals
+        // per major band). PowerPoint draws (majorUnit/minorUnit - 1) lines per
+        // band; the renderer's loops divide the band into MinorGridlineCount parts.
+        if (info.MinorUnit is > 0 && info.MajorUnit is > 0)
+            MinorGridlineCount = Math.Max(1, (int)Math.Round(info.MajorUnit.Value / info.MinorUnit.Value));
+        if (info.DataLabelFontColor != null) DataLabelColor = CssHexColor(info.DataLabelFontColor);
+        DataLabelBold = info.DataLabelBold;
+        DataLabelItalic = info.DataLabelItalic;
         DataLabelPos = info.DataLabelPos;
+        HasExplicitDataLabelPos = info.HasExplicitDataLabelPos;
         FirstSliceAngle = info.FirstSliceAngle;
         SeriesFillOpacities = info.SeriesFillOpacities;
+        InvertIfNegative = info.InvertIfNegative;
+        ValAxisUnitDivisor = info.ValueAxisUnitDivisor;
 
         // Increase right margin for long axis labels (e.g. "$1,000,000")
         if (!string.IsNullOrEmpty(info.ValNumFmt) && marginRight < 30)
             marginRight = 30;
+
+        // Rotated category labels (catAx txPr bodyPr rot) hang diagonally below
+        // the axis and trail toward the side, so reserve extra bottom (and, for
+        // the leading label, left) space so they aren't clipped. Approximate the
+        // longest label's pixel length, then project it onto the rotation angle.
+        if (info.CatAxisLabelRotationDeg is int catRot && catRot != 0
+            && info.Categories.Length > 0)
+        {
+            var maxLen = info.Categories.Max(c => (c ?? "").Length);
+            var labelPx = maxLen * info.CatFontPx * 0.5;
+            var rad = Math.Abs(catRot) * Math.PI / 180.0;
+            var extraBottom = (int)(labelPx * Math.Sin(rad)) + 4;
+            marginBottom += extraBottom;
+            var extraSide = (int)(labelPx * Math.Cos(rad)) + 4;
+            if (catRot < 0 && marginLeft < extraSide) marginLeft = extraSide;
+            else if (catRot > 0 && marginRight < extraSide) marginRight = extraSide;
+        }
 
         var plotW = svgW - marginLeft - marginRight;
         var plotH = svgH - marginTop - marginBottom;
@@ -2925,7 +4617,9 @@ internal partial class ChartSvgRenderer
             // by connector lines. Must branch before the generic Contains("pie")
             // test, which would otherwise render a plain single pie.
             RenderOfPieChartSvg(sb, info.Series, info.Categories, info.Colors,
-                marginLeft, marginTop, plotW, plotH, chartType == "barOfPie");
+                marginLeft, marginTop, plotW, plotH, chartType == "barOfPie",
+                info.ShowDataLabels, info.ShowDataLabelVal, info.ShowDataLabelPercent,
+                info.DataLabelsNumFmt);
         }
         else if (chartType.Contains("pie") || chartType.Contains("doughnut"))
         {
@@ -2935,7 +4629,8 @@ internal partial class ChartSvgRenderer
                     info.RotateX > 0 ? info.RotateX : 30);
             else
                 RenderPieChartSvg(sb, info.Series, info.Categories, info.Colors, svgW, svgH, info.HoleRatio, info.ShowDataLabels,
-                    info.ShowDataLabelVal, info.ShowDataLabelPercent, info.ShowDataLabelCatName, info.Explosions);
+                    info.ShowDataLabelVal, info.ShowDataLabelPercent, info.ShowDataLabelCatName, info.Explosions,
+                    info.ShowDataLabelSerName);
         }
         else if (chartType.Contains("area"))
         {
@@ -2944,23 +4639,33 @@ internal partial class ChartSvgRenderer
                 RenderArea3DSvg(sb, info.Series, info.Categories, info.Colors, marginLeft, marginTop, areaW, plotH,
                     info.IsStacked, info.RotateX, info.RotateY);
             else
-                RenderAreaChartSvg(sb, info.Series, info.Categories, info.Colors, marginLeft, marginTop, areaW, plotH, info.IsStacked, info.IsPercent);
+                RenderAreaChartSvg(sb, info.Series, info.Categories, info.Colors, marginLeft, marginTop, areaW, plotH, info.IsStacked, info.IsPercent,
+                    info.AxisMin, info.AxisMax, info.MajorUnit, info.ValNumFmt,
+                    info.ShowDataLabels, info.ShowDataLabelVal, info.ShowDataLabelSerName,
+                    info.ShowDataLabelCatName, info.DataLabelsNumFmt,
+                    info.CatAxisLabelRotationDeg, info.ValAxisLabelRotationDeg,
+                    info.IsReversed, info.Trendlines);
         }
         else if (chartType == "combo")
         {
-            RenderComboChartSvg(sb, info.PlotArea!, info.Series, info.Categories, info.Colors, marginLeft, marginTop, plotW, plotH);
+            RenderComboChartSvg(sb, info.PlotArea!, info.Series, info.Categories, info.Colors, marginLeft, marginTop, plotW, plotH,
+                info.ShowDataLabels, info.DataLabelsNumFmt, info.AxisMax);
         }
         else if (chartType.Contains("radar"))
         {
-            RenderRadarChartSvg(sb, info.Series, info.Categories, info.Colors, svgW, svgH, CatFontPx, info.RadarStyle);
+            RenderRadarChartSvg(sb, info.Series, info.Categories, info.Colors, svgW, svgH, CatFontPx, info.RadarStyle,
+                info.ShowDataLabels, info.ShowDataLabelVal, info.ShowDataLabelSerName,
+                info.ShowDataLabelCatName, info.DataLabelsNumFmt);
         }
         else if (chartType == "bubble")
         {
-            RenderBubbleChartSvg(sb, info.PlotArea!, info.Series, info.Categories, info.Colors, marginLeft, marginTop, plotW, plotH);
+            RenderBubbleChartSvg(sb, info.PlotArea!, info.Series, info.Categories, info.Colors, marginLeft, marginTop, plotW, plotH,
+                info.ShowDataLabels, info.ShowDataLabelVal, info.ShowDataLabelSerName,
+                info.ShowDataLabelCatName, info.DataLabelsNumFmt);
         }
         else if (chartType == "stock")
         {
-            RenderStockChartSvg(sb, info.PlotArea!, info.Series, info.Categories, info.Colors, marginLeft, marginTop, plotW, plotH);
+            RenderStockChartSvg(sb, info.PlotArea!, info.Series, info.Categories, info.Colors, marginLeft, marginTop, plotW, plotH, info.UpBarColor, info.DownBarColor);
         }
         else if (chartType == "scatter" && info.PlotArea != null)
         {
@@ -2971,7 +4676,11 @@ internal partial class ChartSvgRenderer
                 info.MarkerShapes, info.MarkerSizes, info.LineWidths, info.LineDashes,
                 info.ScatterMarkersOnly, info.ShowDataLabels,
                 info.AxisMin, info.AxisMax, info.MajorUnit, info.ValNumFmt,
-                info.Smooth, info.Trendlines, info.ErrorBars);
+                info.Smooth, info.Trendlines, info.ErrorBars,
+                info.MarkerFillColors, info.MarkerLineColors,
+                info.DataLabelsNumFmt,
+                info.ShowDataLabelVal, info.ShowDataLabelSerName, info.ShowDataLabelCatName,
+                info.SeriesLineHide);
         }
         else if (chartType.Contains("line") || chartType == "scatter")
         {
@@ -2986,12 +4695,24 @@ internal partial class ChartSvgRenderer
                     info.DropLineColor, info.DropLineWidth, info.DropLineDash,
                     info.HighLowLineColor, info.HighLowLineWidth,
                     info.Trendlines, info.ErrorBars, info.ScatterMarkersOnly,
-                    info.IsStacked, info.IsPercent);
+                    info.IsStacked, info.IsPercent, info.DataLabelsNumFmt,
+                    info.MarkerFillColors, info.MarkerLineColors,
+                    info.ShowDataLabelSerName, info.ShowDataLabelCatName,
+                    info.ShowDataLabelVal || info.ShowDataLabelPercent,
+                    info.CatAxisLabelRotationDeg, info.ValAxisLabelRotationDeg,
+                    info.SeriesLineHide);
         }
         else
         {
             // Column/bar variants
             var isHorizontal = chartType.Contains("bar") && !chartType.Contains("column");
+            // Structural signal that <c:overlap> was read and applied to the
+            // clustered bar geometry. Emitted only when the element is present
+            // in the chart XML (info.Overlap.HasValue) so a default chart does
+            // not gain a spurious attribute. The geometry change lives in
+            // RenderBarChartSvg; this is the inspectable marker.
+            if (info.Overlap.HasValue)
+                sb.AppendLine($"    <g data-overlap=\"{info.Overlap.Value}\"></g>");
             // Horizontal bars have their own hLabelMargin inside, so reduce outer marginLeft
             var barMarginLeft = isHorizontal ? 5 : marginLeft;
             var barPlotW = isHorizontal ? svgW - barMarginLeft - marginRight : plotW;
@@ -3007,7 +4728,21 @@ internal partial class ChartSvgRenderer
                     isHorizontal ? info.PlotFillColor : null, info.ReferenceLines,
                     info.IsWaterfall, info.ErrorBars,
                     info.IsPercent && info.ShowDataLabelPercent && !info.ShowDataLabelVal,
-                    info.DataLabelsNumFmt);
+                    info.DataLabelsNumFmt, info.Overlap, info.IsReversed, info.PerPointColors,
+                    info.CatAxisLabelRotationDeg, info.ValAxisLabelRotationDeg, info.Trendlines,
+                    info.ShowDataLabelSerName, info.ShowDataLabelCatName,
+                    info.ShowDataLabelVal || info.ShowDataLabelPercent, info.LogBase);
+        }
+
+        // Plot-area border (<c:plotArea><c:spPr><a:ln>). Drawn AFTER the plot
+        // fill, gridlines, and series so the outline sits on top — matching how
+        // PowerPoint traces the plot rectangle. No a:ln => no border (default).
+        // Horizontal bar plots use a different geometry (handled inside
+        // RenderBarChartSvg) so skip them here, same as the plot fill.
+        if (info.PlotBorderColor != null && !isHorizBarType)
+        {
+            var pw = EmuToStrokePx(info.PlotBorderWidthEmu);
+            sb.AppendLine($"    <rect x=\"{marginLeft}\" y=\"{marginTop}\" width=\"{plotW}\" height=\"{plotH}\" fill=\"none\" stroke=\"{CssHexColor(info.PlotBorderColor)}\" stroke-width=\"{pw:0.##}\"/>");
         }
 
         // Axis titles inside SVG — for horizontal bar charts, value axis is on bottom and category axis is on left
@@ -3015,29 +4750,51 @@ internal partial class ChartSvgRenderer
         // Bubble/scatter have no category axis: the X axis is the primary value
         // axis and the Y axis is the secondary value axis.
         var isXY = chartType == "bubble" || chartType == "scatter";
-        string? bottomTitle; int bottomTitleFont; bool bottomTitleBold;
-        string? leftTitle; int leftTitleFont; bool leftTitleBold;
+        string? bottomTitle; int bottomTitleFont; bool bottomTitleBold; string? bottomTitleColor; bool bottomTitleItalic;
+        string? leftTitle; int leftTitleFont; bool leftTitleBold; string? leftTitleColor; bool leftTitleItalic;
         if (isXY)
         {
-            bottomTitle = info.ValAxisTitle; bottomTitleFont = info.ValAxisTitleFontPx; bottomTitleBold = info.ValAxisTitleBold;
-            leftTitle = info.SecondaryValAxisTitle; leftTitleFont = info.SecondaryValAxisTitleFontPx; leftTitleBold = info.SecondaryValAxisTitleBold;
+            bottomTitle = info.ValAxisTitle; bottomTitleFont = info.ValAxisTitleFontPx; bottomTitleBold = info.ValAxisTitleBold; bottomTitleColor = info.ValAxisTitleColor; bottomTitleItalic = info.ValAxisTitleItalic;
+            leftTitle = info.SecondaryValAxisTitle; leftTitleFont = info.SecondaryValAxisTitleFontPx; leftTitleBold = info.SecondaryValAxisTitleBold; leftTitleColor = info.SecondaryValAxisTitleColor; leftTitleItalic = info.SecondaryValAxisTitleItalic;
         }
         else
         {
             bottomTitle = isHorizBar ? info.ValAxisTitle : info.CatAxisTitle;
             bottomTitleFont = isHorizBar ? info.ValAxisTitleFontPx : info.CatAxisTitleFontPx;
             bottomTitleBold = isHorizBar ? info.ValAxisTitleBold : info.CatAxisTitleBold;
+            bottomTitleColor = isHorizBar ? info.ValAxisTitleColor : info.CatAxisTitleColor;
+            bottomTitleItalic = isHorizBar ? info.ValAxisTitleItalic : info.CatAxisTitleItalic;
             leftTitle = isHorizBar ? info.CatAxisTitle : info.ValAxisTitle;
             leftTitleFont = isHorizBar ? info.CatAxisTitleFontPx : info.ValAxisTitleFontPx;
             leftTitleBold = isHorizBar ? info.CatAxisTitleBold : info.ValAxisTitleBold;
+            leftTitleColor = isHorizBar ? info.CatAxisTitleColor : info.ValAxisTitleColor;
+            leftTitleItalic = isHorizBar ? info.CatAxisTitleItalic : info.ValAxisTitleItalic;
         }
         if (!string.IsNullOrEmpty(leftTitle))
-            sb.AppendLine($"    <text x=\"10\" y=\"{svgH / 2}\" fill=\"{AxisColor}\" font-size=\"{leftTitleFont}\"{(leftTitleBold ? " font-weight=\"bold\"" : "")} text-anchor=\"middle\" dominant-baseline=\"middle\" transform=\"rotate(-90,10,{svgH / 2})\">{HtmlEncode(leftTitle)}</text>");
+            sb.AppendLine($"    <text x=\"10\" y=\"{svgH / 2}\" fill=\"{(leftTitleColor != null ? CssHexColor(leftTitleColor) : AxisColor)}\" font-size=\"{leftTitleFont}\"{(leftTitleBold ? " font-weight=\"bold\"" : "")}{(leftTitleItalic ? " font-style=\"italic\"" : "")} text-anchor=\"middle\" dominant-baseline=\"middle\" transform=\"rotate(-90,10,{svgH / 2})\">{HtmlEncode(leftTitle)}</text>");
         if (!string.IsNullOrEmpty(bottomTitle))
-            sb.AppendLine($"    <text x=\"{svgW / 2}\" y=\"{svgH - 2}\" fill=\"{AxisColor}\" font-size=\"{bottomTitleFont}\"{(bottomTitleBold ? " font-weight=\"bold\"" : "")} text-anchor=\"middle\">{HtmlEncode(bottomTitle)}</text>");
+            sb.AppendLine($"    <text x=\"{svgW / 2}\" y=\"{svgH - 2}\" fill=\"{(bottomTitleColor != null ? CssHexColor(bottomTitleColor) : AxisColor)}\" font-size=\"{bottomTitleFont}\"{(bottomTitleBold ? " font-weight=\"bold\"" : "")}{(bottomTitleItalic ? " font-style=\"italic\"" : "")} text-anchor=\"middle\">{HtmlEncode(bottomTitle)}</text>");
         // Combo charts (non-XY): the secondary value axis title sits on the right.
         if (!isXY && !string.IsNullOrEmpty(info.SecondaryValAxisTitle))
-            sb.AppendLine($"    <text x=\"{svgW - 10}\" y=\"{svgH / 2}\" fill=\"{SecondaryAxisColor}\" font-size=\"{info.SecondaryValAxisTitleFontPx}\"{(info.SecondaryValAxisTitleBold ? " font-weight=\"bold\"" : "")} text-anchor=\"middle\" dominant-baseline=\"middle\" transform=\"rotate(90,{svgW - 10},{svgH / 2})\">{HtmlEncode(info.SecondaryValAxisTitle)}</text>");
+            sb.AppendLine($"    <text x=\"{svgW - 10}\" y=\"{svgH / 2}\" fill=\"{(info.SecondaryValAxisTitleColor != null ? CssHexColor(info.SecondaryValAxisTitleColor) : SecondaryAxisColor)}\" font-size=\"{info.SecondaryValAxisTitleFontPx}\"{(info.SecondaryValAxisTitleBold ? " font-weight=\"bold\"" : "")}{(info.SecondaryValAxisTitleItalic ? " font-style=\"italic\"" : "")} text-anchor=\"middle\" dominant-baseline=\"middle\" transform=\"rotate(90,{svgW - 10},{svgH / 2})\">{HtmlEncode(info.SecondaryValAxisTitle)}</text>");
+
+        // Display-units annotation (<c:dispUnits><c:dispUnitsLbl>, e.g. "Millions").
+        // PowerPoint draws it beside the value axis. For a vertical value axis it
+        // sits rotated -90° just inboard of the axis title; for a horizontal-bar /
+        // XY value axis (which runs along the bottom) it sits centered below.
+        if (!string.IsNullOrEmpty(info.ValueAxisUnitLabel))
+        {
+            if (isHorizBar || isXY)
+            {
+                var uy = svgH - (string.IsNullOrEmpty(bottomTitle) ? 4 : 14);
+                sb.AppendLine($"    <text x=\"{svgW / 2}\" y=\"{uy}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\"{ValTickWeightAttr} text-anchor=\"middle\">{HtmlEncode(info.ValueAxisUnitLabel)}</text>");
+            }
+            else
+            {
+                var ux = string.IsNullOrEmpty(leftTitle) ? 12 : 26;
+                sb.AppendLine($"    <text x=\"{ux}\" y=\"{svgH / 2}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\"{ValTickWeightAttr} text-anchor=\"middle\" dominant-baseline=\"middle\" transform=\"rotate(-90,{ux},{svgH / 2})\">{HtmlEncode(info.ValueAxisUnitLabel)}</text>");
+            }
+        }
     }
 
     /// <summary>Render chart legend HTML (outside the svg tag).</summary>
@@ -3057,7 +4814,7 @@ internal partial class ChartSvgRenderer
         // reject anything outside the schema to stop an adversarial
         // <c:legendPos val='x" onclick=..."'/> from escaping the attr.
         var safePos = info.LegendPos is "r" or "l" or "t" or "b" or "tr" or "ctr" ? info.LegendPos : "";
-        sb.Append($"<div class=\"chart-legend\" data-legend-pos=\"{safePos}\" style=\"{layoutCss};font-size:{info.LegendFontSize};color:{legendColor}\">");
+        sb.Append($"<div class=\"chart-legend\" data-legend-pos=\"{safePos}\" style=\"{layoutCss};font-size:{info.LegendFontSize};color:{legendColor}{(info.LegendFontBold ? ";font-weight:bold" : "")}\">");
         if (isPieType && info.Categories.Length > 0)
         {
             for (int i = 0; i < info.Categories.Length; i++)
@@ -3076,8 +4833,33 @@ internal partial class ChartSvgRenderer
             for (int k = 0; k < info.Series.Count; k++)
             {
                 int i = isHorizBarLegend ? info.Series.Count - 1 - k : k;
+                // <c:legendEntry> delete: hide this series' swatch+label (it still plots).
+                if (info.DeletedLegendEntries.Contains(i)) continue;
                 var color = i < info.Colors.Count ? info.Colors[i] : DefaultColors[i % DefaultColors.Length];
-                sb.Append($"<span style=\"display:inline-flex;align-items:center;gap:4px\"><span style=\"display:inline-block;width:12px;height:12px;background:{color};border-radius:1px\"></span>{HtmlEncode(info.Series[i].name)}</span>");
+                // Line/scatter legend keys are a short line segment (matching the
+                // series stroke width + dash) plus the series marker, not a filled
+                // square — PowerPoint keys the legend by chart type. The marker is
+                // overlaid only when the series genuinely carries one (faithful to
+                // OOXML; no default markers added).
+                var isLineLegend = info.ChartType.Contains("line") || info.ChartType.Contains("scatter");
+                string swatch;
+                if (isLineLegend)
+                {
+                    var lw = i < info.LineWidths.Count && info.LineWidths[i] > 0 ? info.LineWidths[i] : 2.0;
+                    var dash = i < info.LineDashes.Count ? info.LineDashes[i] : "solid";
+                    var dashAttr = !string.IsNullOrEmpty(dash) && dash != "solid" ? $" stroke-dasharray=\"{RefLineDashArray(dash)}\"" : "";
+                    var mShape = i < info.MarkerShapes.Count ? info.MarkerShapes[i] : "none";
+                    var markerSvg = !string.IsNullOrEmpty(mShape) && mShape != "none"
+                        ? RenderMarkerSvg(mShape, 8, 5, 3, color, color) : "";
+                    var lineSvg = info.ScatterMarkersOnly
+                        ? "" : $"<line x1=\"0\" y1=\"5\" x2=\"16\" y2=\"5\" stroke=\"{color}\" stroke-width=\"{lw:0.##}\"{dashAttr}/>";
+                    swatch = $"<svg width=\"16\" height=\"10\" style=\"vertical-align:middle\">{lineSvg}{markerSvg}</svg>";
+                }
+                else
+                {
+                    swatch = $"<span style=\"display:inline-block;width:12px;height:12px;background:{color};border-radius:1px\"></span>";
+                }
+                sb.Append($"<span style=\"display:inline-flex;align-items:center;gap:4px\">{swatch}{HtmlEncode(info.Series[i].name)}</span>");
             }
             // Reference-line entries render as a dashed swatch beside the regular series.
             foreach (var rl in info.ReferenceLines)
@@ -3134,27 +4916,42 @@ internal partial class ChartSvgRenderer
         _ => "5,3"
     };
 
+    /// <summary>SVG attribute fragment (with leading space) for the value-axis
+    /// major-gridline dash, or "" when solid/absent. Driven by &lt;c:valAx&gt;
+    /// &lt;c:majorGridlines&gt;&lt;c:spPr&gt;&lt;a:ln&gt;&lt;a:prstDash&gt;.</summary>
+    private string ValGridDashAttr =>
+        !string.IsNullOrEmpty(GridlineDash) && GridlineDash != "solid"
+            ? $" stroke-dasharray=\"{RefLineDashArray(GridlineDash)}\""
+            : "";
+
     // ==================== 3D Chart Helpers ====================
 
     /// <summary>Darken or lighten a hex color by a factor (0.0-2.0, 1.0=unchanged)</summary>
-    private static string RenderMarkerSvg(string shape, double cx, double cy, double r, string color)
+    // fill = marker interior (from <c:marker><c:spPr> solidFill, or series color),
+    // stroke = marker outline (from <c:marker><c:spPr><a:ln>, or series color).
+    // PowerPoint always draws a series-colored outline, so a white-filled marker
+    // stays visible (hollow) on a white slide instead of vanishing.
+    private static string RenderMarkerSvg(string shape, double cx, double cy, double r, string fill, string stroke)
     {
+        // line-style glyphs (x/plus/dash/dot) have no interior — they are drawn
+        // in the stroke color only; the fill arg is meaningless for them.
+        const string sw = "1";
         return shape switch
         {
-            "diamond" => $"<polygon points=\"{cx},{cy - r} {cx + r},{cy} {cx},{cy + r} {cx - r},{cy}\" fill=\"{color}\"/>",
-            "square" => $"<rect x=\"{cx - r}\" y=\"{cy - r}\" width=\"{r * 2}\" height=\"{r * 2}\" fill=\"{color}\"/>",
-            "triangle" => $"<polygon points=\"{cx},{cy - r} {cx + r},{cy + r} {cx - r},{cy + r}\" fill=\"{color}\"/>",
-            "star" => BuildStarPath(cx, cy, r, color),
-            "x" => $"<g stroke=\"{color}\" stroke-width=\"1.5\"><line x1=\"{cx - r}\" y1=\"{cy - r}\" x2=\"{cx + r}\" y2=\"{cy + r}\"/><line x1=\"{cx + r}\" y1=\"{cy - r}\" x2=\"{cx - r}\" y2=\"{cy + r}\"/></g>",
-            "plus" => $"<g stroke=\"{color}\" stroke-width=\"1.5\"><line x1=\"{cx}\" y1=\"{cy - r}\" x2=\"{cx}\" y2=\"{cy + r}\"/><line x1=\"{cx - r}\" y1=\"{cy}\" x2=\"{cx + r}\" y2=\"{cy}\"/></g>",
-            "dash" => $"<line x1=\"{cx - r}\" y1=\"{cy}\" x2=\"{cx + r}\" y2=\"{cy}\" stroke=\"{color}\" stroke-width=\"2\"/>",
-            "dot" => $"<circle cx=\"{cx}\" cy=\"{cy}\" r=\"1.5\" fill=\"{color}\"/>",
+            "diamond" => $"<polygon points=\"{cx},{cy - r} {cx + r},{cy} {cx},{cy + r} {cx - r},{cy}\" fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw}\"/>",
+            "square" => $"<rect x=\"{cx - r}\" y=\"{cy - r}\" width=\"{r * 2}\" height=\"{r * 2}\" fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw}\"/>",
+            "triangle" => $"<polygon points=\"{cx},{cy - r} {cx + r},{cy + r} {cx - r},{cy + r}\" fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw}\"/>",
+            "star" => BuildStarPath(cx, cy, r, fill, stroke),
+            "x" => $"<g stroke=\"{stroke}\" stroke-width=\"1.5\"><line x1=\"{cx - r}\" y1=\"{cy - r}\" x2=\"{cx + r}\" y2=\"{cy + r}\"/><line x1=\"{cx + r}\" y1=\"{cy - r}\" x2=\"{cx - r}\" y2=\"{cy + r}\"/></g>",
+            "plus" => $"<g stroke=\"{stroke}\" stroke-width=\"1.5\"><line x1=\"{cx}\" y1=\"{cy - r}\" x2=\"{cx}\" y2=\"{cy + r}\"/><line x1=\"{cx - r}\" y1=\"{cy}\" x2=\"{cx + r}\" y2=\"{cy}\"/></g>",
+            "dash" => $"<line x1=\"{cx - r}\" y1=\"{cy}\" x2=\"{cx + r}\" y2=\"{cy}\" stroke=\"{stroke}\" stroke-width=\"2\"/>",
+            "dot" => $"<circle cx=\"{cx}\" cy=\"{cy}\" r=\"1.5\" fill=\"{stroke}\"/>",
             "none" => "",
-            _ => $"<circle cx=\"{cx}\" cy=\"{cy}\" r=\"{r}\" fill=\"{color}\"/>", // circle or auto
+            _ => $"<circle cx=\"{cx}\" cy=\"{cy}\" r=\"{r}\" fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw}\"/>", // circle or auto
         };
     }
 
-    private static string BuildStarPath(double cx, double cy, double r, string color)
+    private static string BuildStarPath(double cx, double cy, double r, string fill, string stroke)
     {
         var sb = new StringBuilder();
         sb.Append($"<polygon points=\"");
@@ -3164,7 +4961,7 @@ internal partial class ChartSvgRenderer
             var rad = i % 2 == 0 ? r : r * 0.4;
             sb.Append($"{cx + rad * Math.Cos(angle):0.#},{cy - rad * Math.Sin(angle):0.#} ");
         }
-        sb.Append($"\" fill=\"{color}\"/>");
+        sb.Append($"\" fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"1\"/>");
         return sb.ToString();
     }
 
@@ -3261,7 +5058,7 @@ internal partial class ChartSvgRenderer
             for (int t = 1; t <= tickCount; t++)
             {
                 var gx = plotOx + (double)plotPw * t / tickCount;
-                sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+                sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"{GridlineWidthPx:0.##}\"{ValGridDashAttr}/>");
             }
             sb.AppendLine($"        <line x1=\"{plotOx}\" y1=\"{oy}\" x2=\"{plotOx}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
             sb.AppendLine($"        <line x1=\"{plotOx}\" y1=\"{oy + ph}\" x2=\"{plotOx + plotPw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -3298,13 +5095,13 @@ internal partial class ChartSvgRenderer
             for (int c = 0; c < catCount; c++)
             {
                 var label = c < categories.Length ? categories[c] : "";
-                sb.AppendLine($"        <text x=\"{plotOx - 4}\" y=\"{oy + c * groupH + groupH / 2:0.#}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\" text-anchor=\"end\" dominant-baseline=\"middle\">{HtmlEncode(label)}</text>");
+                sb.AppendLine($"        <text x=\"{plotOx - 4}\" y=\"{oy + c * groupH + groupH / 2:0.#}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\"{CatTickWeightAttr} text-anchor=\"end\" dominant-baseline=\"middle\">{HtmlEncode(label)}</text>");
             }
             for (int t = 0; t <= tickCount; t++)
             {
                 var val = minVal + majorUnit * t;
-                var label = FormatAxisValue(val, valNumFmt);
-                sb.AppendLine($"        <text x=\"{plotOx + (double)plotPw * t / tickCount:0.#}\" y=\"{oy + ph + 16}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\" text-anchor=\"middle\">{label}</text>");
+                var label = FmtValAxis(val, valNumFmt);
+                sb.AppendLine($"        <text x=\"{plotOx + (double)plotPw * t / tickCount:0.#}\" y=\"{oy + ph + 16}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\"{ValTickWeightAttr} text-anchor=\"middle\">{label}</text>");
             }
         }
         else
@@ -3323,7 +5120,7 @@ internal partial class ChartSvgRenderer
             for (int t = 1; t <= tickCount; t++)
             {
                 var gy = oy + ph - (double)ph * t / tickCount;
-                sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+                sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + pw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"{GridlineWidthPx:0.##}\"{ValGridDashAttr}/>");
             }
             sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy}\" x2=\"{ox}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
             sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy + ph}\" x2=\"{ox + pw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -3374,7 +5171,7 @@ internal partial class ChartSvgRenderer
                         if (showDataLabels)
                         {
                             var vlabel = FormatAxisValue(val, valNumFmt);
-                            sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2 + dx3d / 2:0.#}\" y=\"{by + dy3d - 3:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\">{vlabel}</text>");
+                            sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2 + dx3d / 2:0.#}\" y=\"{by + dy3d - 3:0.#}\" fill=\"{DataLabelFill}\" font-size=\"{DataLabelFontPx}\"{DataLabelStyleAttr} text-anchor=\"middle\">{vlabel}</text>");
                         }
                     }
                 }
@@ -3383,15 +5180,15 @@ internal partial class ChartSvgRenderer
             for (int c = 0; c < catCount; c++)
             {
                 var label = c < categories.Length ? categories[c] : "";
-                sb.AppendLine($"        <text x=\"{ox + c * groupW + groupW / 2:0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\" text-anchor=\"middle\">{HtmlEncode(label)}</text>");
+                sb.AppendLine($"        <text x=\"{ox + c * groupW + groupW / 2:0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\"{CatTickWeightAttr} text-anchor=\"middle\">{HtmlEncode(label)}</text>");
             }
             // Value axis labels
             for (int t = 0; t <= tickCount; t++)
             {
                 var val = minVal + majorUnit * t;
-                var label = FormatAxisValue(val, valNumFmt);
+                var label = FmtValAxis(val, valNumFmt);
                 var ty = oy + ph - ((val - minVal) / range) * ph;
-                sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{ty:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\" text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
+                sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{ty:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\"{ValTickWeightAttr} text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
             }
         }
     }
@@ -3547,7 +5344,7 @@ internal partial class ChartSvgRenderer
         {
             var label = c < categories.Length ? categories[c] : "";
             var lx = ox + (catCount > 1 ? (double)pw * c / (catCount - 1) : pw / 2.0);
-            sb.AppendLine($"        <text x=\"{lx:0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\" text-anchor=\"middle\">{HtmlEncode(label)}</text>");
+            sb.AppendLine($"        <text x=\"{lx:0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\"{CatTickWeightAttr} text-anchor=\"middle\">{HtmlEncode(label)}</text>");
         }
 
         // Y-axis value labels
@@ -3556,7 +5353,7 @@ internal partial class ChartSvgRenderer
             var val = maxVal * t / 4;
             var label = val % 1 == 0 ? $"{(int)val}" : $"{val:0.#}";
             var ty = oy + ph - (double)ph * t / 4;
-            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{ty:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\" text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
+            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{ty:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\"{ValTickWeightAttr} text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
         }
     }
 
@@ -3600,7 +5397,7 @@ internal partial class ChartSvgRenderer
         for (int t = 1; t <= 4; t++)
         {
             var gy = oy + plotH - (double)plotH * t / 4;
-            sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + plotW}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+            sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{gy:0.#}\" x2=\"{ox + plotW}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"{GridlineWidthPx:0.##}\"{ValGridDashAttr}/>");
         }
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy + totalDepthY}\" x2=\"{ox}\" y2=\"{oy + plotH}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy + plotH}\" x2=\"{ox + pw}\" y2=\"{oy + plotH}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -3708,7 +5505,7 @@ internal partial class ChartSvgRenderer
         {
             var label = c < categories.Length ? categories[c] : "";
             var lx = ox + (catCount > 1 ? (double)plotW * c / (catCount - 1) : plotW / 2.0);
-            sb.AppendLine($"        <text x=\"{lx:0.#}\" y=\"{oy + plotH + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\" text-anchor=\"middle\">{HtmlEncode(label)}</text>");
+            sb.AppendLine($"        <text x=\"{lx:0.#}\" y=\"{oy + plotH + 16}\" fill=\"{CatColor}\" font-size=\"{CatFontPx}\"{CatTickWeightAttr} text-anchor=\"middle\">{HtmlEncode(label)}</text>");
         }
         // Value axis
         for (int t = 0; t <= 4; t++)
@@ -3716,7 +5513,7 @@ internal partial class ChartSvgRenderer
             var val = maxVal * t / 4;
             var label = val % 1 == 0 ? $"{(int)val}" : $"{val:0.#}";
             var ty = oy + plotH - (double)plotH * t / 4;
-            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{ty:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\" text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
+            sb.AppendLine($"        <text x=\"{ox - 4}\" y=\"{ty:0.#}\" fill=\"{AxisColor}\" font-size=\"{ValFontPx}\"{ValTickWeightAttr} text-anchor=\"end\" dominant-baseline=\"middle\">{label}</text>");
         }
     }
 

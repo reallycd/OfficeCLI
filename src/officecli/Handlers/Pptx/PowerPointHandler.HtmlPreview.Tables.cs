@@ -3,6 +3,7 @@
 
 using System.Text;
 using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Presentation;
 using OfficeCli.Core;
 using OfficeCli.Core.TableStyles;
@@ -15,7 +16,7 @@ public partial class PowerPointHandler
     // ==================== Table Rendering ====================
 
     private static void RenderTable(StringBuilder sb, GraphicFrame gf, Dictionary<string, string> themeColors, string? dataPath = null,
-        (long x, long y, long cx, long cy)? overridePos = null)
+        (long x, long y, long cx, long cy)? overridePos = null, OpenXmlPart? part = null)
     {
         var dataPathAttr = string.IsNullOrEmpty(dataPath) ? "" : $" data-path=\"{HtmlEncode(dataPath)}\"";
         var table = gf.Descendants<Drawing.Table>().FirstOrDefault();
@@ -67,8 +68,33 @@ public partial class PowerPointHandler
         int totalRows = table.Elements<Drawing.TableRow>().Count();
         int totalCols = gridCols?.Count ?? 0;
 
-        sb.AppendLine($"    <div class=\"table-container\"{dataPathAttr} style=\"left:{Units.EmuToPt(x)}pt;top:{Units.EmuToPt(y)}pt;width:{Units.EmuToPt(tableWidthEmu)}pt;height:{Units.EmuToPt(cy)}pt\">");
-        sb.AppendLine("      <table class=\"slide-table\">");
+        // Whole-table background fill (<a:tblPr><a:solidFill|gradFill>). PowerPoint
+        // renders this as the table-container background — visible through cell margins
+        // and any noFill cells (Format Table -> Fill). The renderer previously read
+        // tblPr only for the style id + banding flags and dropped this fill entirely.
+        var tblBgCss = "";
+        var tblSolid = tblPr?.GetFirstChild<Drawing.SolidFill>();
+        var tblGrad = tblPr?.GetFirstChild<Drawing.GradientFill>();
+        if (tblSolid != null)
+        {
+            var bg = ResolveFillColor(tblSolid, themeColors);
+            if (bg != null) tblBgCss = $";background:{bg}";
+        }
+        else if (tblGrad != null)
+        {
+            var gradCss = GradientToCss(tblGrad, themeColors);
+            if (!string.IsNullOrEmpty(gradCss)) tblBgCss = $";background:{gradCss}";
+        }
+
+        // Right-to-left table (<a:tblPr rtl="1">): PowerPoint reverses the visual column
+        // order (first column on the right). CSS direction:rtl on the <table> reverses the
+        // <td> order; cells then carry direction:ltr so their text stays laid out normally
+        // (matches PowerPoint, which reverses columns but keeps Latin cell text unchanged).
+        var tableRtl = tblPr?.RightToLeft?.Value == true;
+        var tableDirCss = tableRtl ? ";direction:rtl" : "";
+
+        sb.AppendLine($"    <div class=\"table-container\"{dataPathAttr} style=\"left:{Units.EmuToPt(x)}pt;top:{Units.EmuToPt(y)}pt;width:{Units.EmuToPt(tableWidthEmu)}pt;height:{Units.EmuToPt(cy)}pt{tblBgCss}\">");
+        sb.AppendLine($"      <table class=\"slide-table\" style=\"{(tableRtl ? "direction:rtl" : "")}\">");
 
         // Column widths — emit absolute pt per <a:gridCol w>, not percentages.
         // table-layout:fixed + width:100% on .slide-table then preserves these
@@ -96,7 +122,6 @@ public partial class PowerPointHandler
             var rowH = row.Height?.Value ?? 0;
             var rowStyle = rowH > 0 ? $" style=\"height:{Units.EmuToPt(rowH):0.##}pt\"" : "";
             sb.AppendLine($"        <tr{rowStyle}>");
-            int skipCols = 0;
             int colIndex = 0;  // Tracked for the new per-cell TableStyleResolver below.
             bool isHeaderRow = hasFirstRow && rowIndex == 0;
             bool isBandedOdd = hasBandRow && (!hasFirstRow ? rowIndex % 2 == 0 : rowIndex > 0 && (rowIndex - 1) % 2 == 0);
@@ -104,6 +129,10 @@ public partial class PowerPointHandler
             foreach (var cell in row.Elements<Drawing.TableCell>())
             {
                 var cellStyles = new List<string>();
+                // In an RTL table the <table> carries direction:rtl to reverse the column
+                // order; keep each cell's content laid out LTR so text/alignment is
+                // unchanged (PowerPoint reverses columns, not in-cell text flow).
+                if (tableRtl) cellStyles.Add("direction:ltr");
 
                 // Cell fill
                 var tcPr = cell.TableCellProperties ?? cell.GetFirstChild<Drawing.TableCellProperties>();
@@ -120,6 +149,48 @@ public partial class PowerPointHandler
                     hasExplicitFill = true;
                 }
 
+                // Pattern fill (<a:tcPr><a:pattFill>) — schema-valid on a table cell
+                // (CT_TableCellProperties) just like solid/grad/blip/noFill. The shape
+                // and slide-background fill paths already approximate it via
+                // PatternFillToCss (repeating-linear-gradient); the cell path dropped
+                // it, so a pattern-filled cell rendered with no fill. PatternFillToCss
+                // returns a full "background:..." declaration.
+                var cellPatt = tcPr?.GetFirstChild<Drawing.PatternFill>();
+                if (cellPatt != null)
+                {
+                    cellStyles.Add(PatternFillToCss(cellPatt, themeColors));
+                    hasExplicitFill = true;
+                }
+
+                // Picture fill (<a:tcPr><a:blipFill>): resolve the blip r:embed
+                // against the part the table lives in (same rels as the slide).
+                // PowerPoint stretches the image to fill the cell when <a:stretch>
+                // is present (the common authoring case); mirror with
+                // background-size:100% 100%. Without a part to resolve the rel,
+                // skip silently (no regression for blip-less cells).
+                var cellBlip = tcPr?.GetFirstChild<Drawing.BlipFill>();
+                if (cellBlip != null && part != null)
+                {
+                    var dataUri = BlipToDataUri(cellBlip, part);
+                    if (dataUri != null)
+                    {
+                        var sizeCss = cellBlip.GetFirstChild<Drawing.Stretch>() != null
+                            ? "100% 100%" : "cover";
+                        cellStyles.Add($"background-image:url('{dataUri}')");
+                        cellStyles.Add($"background-size:{sizeCss}");
+                        cellStyles.Add("background-position:center");
+                        hasExplicitFill = true;
+                    }
+                }
+
+                // Explicit <a:noFill/> is an intentional "transparent" declaration
+                // that overrides any table-style band/header fill. PowerPoint shows
+                // the slide background through such a cell. Mark hasExplicitFill so
+                // the TableStyleResolver fill below is suppressed; emit no
+                // background: declaration (transparent).
+                if (tcPr?.GetFirstChild<Drawing.NoFill>() != null)
+                    hasExplicitFill = true;
+
                 // Resolve fill / text color / borders for this cell through
                 // the Core/TableStyles catalogue. Returns null for unknown
                 // style ids (custom styles, no style at all); in that case
@@ -135,10 +206,18 @@ public partial class PowerPointHandler
                         HasBandedRows: hasBandRow, HasBandedCols: hasBandCol),
                     themeColors);
 
-                if (!hasExplicitFill && resolved != null)
+                // An explicit cell fill overrides only the table-style BACKGROUND.
+                // The style's text color must still apply (PowerPoint keeps the
+                // header row's white text when you override just the cell fill —
+                // verified against real PowerPoint). Splitting the gate: Fill stays
+                // suppressed by hasExplicitFill, TextColor does not. An explicit run
+                // color is emitted on the run span and still wins by specificity.
+                if (resolved != null)
                 {
-                    if (resolved.Fill != null) cellStyles.Add($"background:{resolved.Fill}");
-                    if (resolved.TextColor != null) cellStyles.Add($"color:{resolved.TextColor}");
+                    if (!hasExplicitFill && resolved.Fill != null)
+                        cellStyles.Add($"background:{resolved.Fill}");
+                    if (resolved.TextColor != null)
+                        cellStyles.Add($"color:{resolved.TextColor}");
                 }
 
                 // Vertical alignment
@@ -162,17 +241,23 @@ public partial class PowerPointHandler
                 //   eaVert  → East-Asian top-to-bottom, upright glyphs
                 //   wordArtVert → stacked upright (approximate with upright)
                 var vertDir = tcPr?.Vertical?.HasValue == true ? tcPr.Vertical.InnerText : null;
+                string? cellTextTransform = null;
                 if (vertDir != null)
                 {
                     var wm = vertDir switch
                     {
                         "vert" => "vertical-rl",
-                        "vert270" => "vertical-rl;transform:rotate(180deg)",
+                        "vert270" => "vertical-rl",
                         "eaVert" => "vertical-rl;text-orientation:upright",
                         "wordArtVert" or "wordArtVertRtl" => "vertical-rl;text-orientation:upright",
                         _ => null,
                     };
                     if (wm != null) cellStyles.Add($"writing-mode:{wm}");
+                    // vert270 = 90° CCW (bottom-to-top): vertical-rl gives 90° CW, so flip
+                    // 180°. CSS `transform` is IGNORED on a display:table-cell <td>, so the
+                    // rotation must go on an inner wrapper around the cell content, not the
+                    // <td>'s own style (which is why vert270 previously rendered like vert).
+                    if (vertDir == "vert270") cellTextTransform = "rotate(180deg)";
                 }
 
                 // Cell text formatting
@@ -183,8 +268,7 @@ public partial class PowerPointHandler
                     if (rp.FontSize?.HasValue == true)
                         cellStyles.Add($"font-size:{rp.FontSize.Value / 100.0:0.##}pt");
                     // else: inherit from table style / slideMaster (no hardcoded default)
-                    if (rp.Bold?.Value == true)
-                        cellStyles.Add("font-weight:bold");
+                    // (bold decided below — unified with the table-style emphasis bold)
                     // Italic / underline / strike — mirror RenderRun so cell text
                     // formatting matches shape text. Previously only bold was read,
                     // silently dropping <a:rPr i="1"/u="…"/strike="…"> on table cells.
@@ -205,6 +289,14 @@ public partial class PowerPointHandler
                     if (runColor != null)
                         cellStyles.Add($"color:{runColor}");
                 }
+
+                // Bold: an explicit run bold (b="1"/b="0") wins; otherwise the
+                // table style's emphasis-band bold (header/total/first-col/last-col)
+                // applies. Built-in PowerPoint styles render those bands bold, which
+                // the renderer previously dropped (only explicit run bold was read).
+                bool? explicitBold = firstRun?.RunProperties?.Bold?.Value;
+                if (explicitBold ?? (resolved?.Bold == true))
+                    cellStyles.Add("font-weight:bold");
 
                 // Cell borders (per-edge). Priority cascade:
                 //   1. Explicit <a:lnL/R/T/B> on this cell (per-cell override)
@@ -254,28 +346,23 @@ public partial class PowerPointHandler
                 var marR = tcPr?.RightMargin?.Value;
                 var marT = tcPr?.TopMargin?.Value;
                 var marB = tcPr?.BottomMargin?.Value;
-                if (marL.HasValue || marR.HasValue || marT.HasValue || marB.HasValue)
-                {
-                    var pT = Units.EmuToPt(marT ?? 45720);
-                    var pR = Units.EmuToPt(marR ?? 91440);
-                    var pB = Units.EmuToPt(marB ?? 45720);
-                    var pL = Units.EmuToPt(marL ?? 91440);
-                    cellStyles.Add($"padding:{pT}pt {pR}pt {pB}pt {pL}pt");
-                }
+                // Always emit padding from OOXML defaults for absent attrs
+                // (marL=marR=91440 EMU=7.2pt, marT=marB=45720 EMU=3.6pt). The
+                // preview.css fallback (4px 6px) under-pads L/R to ~60% of the
+                // correct value, so an all-default cell rendered text too far left.
+                var pT = Units.EmuToPt(marT ?? 45720);
+                var pR = Units.EmuToPt(marR ?? 91440);
+                var pB = Units.EmuToPt(marB ?? 45720);
+                var pL = Units.EmuToPt(marL ?? 91440);
+                cellStyles.Add($"padding:{pT}pt {pR}pt {pB}pt {pL}pt");
 
-                // Paragraph alignment
-                var firstPara = cell.TextBody?.Elements<Drawing.Paragraph>().FirstOrDefault();
-                if (firstPara?.ParagraphProperties?.Alignment?.HasValue == true)
-                {
-                    var align = firstPara.ParagraphProperties.Alignment.InnerText switch
-                    {
-                        "ctr" => "center",
-                        "r" => "right",
-                        "just" => "justify",
-                        _ => "left"
-                    };
-                    cellStyles.Add($"text-align:{align}");
-                }
+                // Paragraph alignment is emitted PER-PARAGRAPH by RenderTextBody
+                // (each <div class="para"> carries its own text-align). We must NOT
+                // set a cell-level text-align from the first paragraph: CSS
+                // text-align inherits, so a right-aligned first paragraph would
+                // bleed onto subsequent paragraphs that have no explicit alignment
+                // (PowerPoint renders those left/default). Leave the <td> without a
+                // text-align so unaligned paragraphs fall back to the default.
 
                 // Render the cell's paragraphs through the same path shape text
                 // bodies use (RenderTextBody → one <div class="para"> per
@@ -288,7 +375,13 @@ public partial class PowerPointHandler
                 // unchanged. Empty text body falls back to "" (renders nothing).
                 var cellBody = new StringBuilder();
                 if (cell.TextBody != null)
-                    RenderTextBody(cellBody, cell.TextBody, themeColors);
+                    // Forward `part` as placeholderPart so cell text resolves the deck's
+                    // theme font (RenderTextBody's themeFontFallback) and hyperlink
+                    // relationships — matching shape text. Without it, runs with no
+                    // explicit a:latin emitted no font-family and rendered in the page
+                    // default instead of the theme minor font.
+                    RenderTextBody(cellBody, cell.TextBody, themeColors,
+                        placeholderShape: null, placeholderPart: part, fontRefDefaultColor: null);
                 var cellHtml = cellBody.ToString();
                 var styleStr = cellStyles.Count > 0 ? $" style=\"{string.Join(";", cellStyles)}\"" : "";
 
@@ -299,16 +392,28 @@ public partial class PowerPointHandler
                 if (gridSpan > 1) spanAttrs += $" colspan=\"{gridSpan}\"";
                 if (rowSpan > 1) spanAttrs += $" rowspan=\"{rowSpan}\"";
 
-                // Skip merged continuation cells. hMerge cells consume one slot
-                // of the active skipCols counter; vMerge cells (vertical merge
-                // continuation) do not affect horizontal accounting. All three
-                // skip paths still advance colIndex by 1 — the continuation
-                // cells occupy a real column position in the grid, they just
-                // don't render their own <td>.
+                // Skip merged continuation cells. The colIndex advance for the
+                // whole horizontal span is done ONCE on the anchor's `colIndex +=
+                // gridSpan` at the end of the loop body; continuation cells must
+                // therefore NOT advance colIndex again (doing so over-counted the
+                // span by gridSpan-1 and shifted banding/firstCol/lastCol for every
+                // cell after a horizontal merge). hMerge continuation cells just
+                // `continue` without rendering their own <td>; the anchor already
+                // accounted for their columns. vMerge continuation cells are a
+                // single-column rowspan body, so they DO advance colIndex by 1.
+                //
+                // BUT a cell that is BOTH hMerge AND vMerge (the lower continuation
+                // rows of a 2-D merge block, e.g. the bottom-right of a 2x2 merge)
+                // lives in a row whose horizontal-span anchor is in a DIFFERENT row
+                // (the merge's top row), so THIS row never sees an anchor `colIndex
+                // += gridSpan` to account for it. Such a cell still occupies exactly
+                // one grid column in its own row and must advance colIndex by 1,
+                // mirroring the pure-vMerge body case. Failing to advance shifted
+                // the column-band fill of every cell after the merge by one column.
                 if (cell.HorizontalMerge?.Value == true)
                 {
-                    if (skipCols > 0) skipCols--;
-                    colIndex++;
+                    if (cell.VerticalMerge?.Value == true)
+                        colIndex++;
                     continue;
                 }
                 if (cell.VerticalMerge?.Value == true)
@@ -316,14 +421,6 @@ public partial class PowerPointHandler
                     colIndex++;
                     continue;
                 }
-                if (skipCols > 0)
-                {
-                    skipCols--;
-                    colIndex++;
-                    continue;
-                }
-
-                if (gridSpan > 1) skipCols = (int)gridSpan - 1;
 
                 var diagOverlay = "";
                 if (hasDiag)
@@ -332,16 +429,19 @@ public partial class PowerPointHandler
                     if (tlBrCss != null && tlBrCss != "none")
                     {
                         var (stroke, widthPt) = ParseBorderCssForSvg(tlBrCss);
-                        diagLines.Append($"<line x1=\"0\" y1=\"0\" x2=\"100%\" y2=\"100%\" stroke=\"{stroke}\" stroke-width=\"{widthPt:0.##}\"/>");
+                        diagLines.Append($"<line x1=\"0\" y1=\"0\" x2=\"100%\" y2=\"100%\" stroke=\"{stroke}\" stroke-width=\"{widthPt:0.##}pt\"/>");
                     }
                     if (blTrCss != null && blTrCss != "none")
                     {
                         var (stroke, widthPt) = ParseBorderCssForSvg(blTrCss);
-                        diagLines.Append($"<line x1=\"0\" y1=\"100%\" x2=\"100%\" y2=\"0\" stroke=\"{stroke}\" stroke-width=\"{widthPt:0.##}\"/>");
+                        diagLines.Append($"<line x1=\"0\" y1=\"100%\" x2=\"100%\" y2=\"0\" stroke=\"{stroke}\" stroke-width=\"{widthPt:0.##}pt\"/>");
                     }
                     diagOverlay = $"<svg class=\"cell-diag\" width=\"100%\" height=\"100%\" style=\"position:absolute;inset:0;pointer-events:none;overflow:visible\" preserveAspectRatio=\"none\">{diagLines}</svg>";
                 }
 
+                // vert270 rotation must wrap the content (transform is inert on the <td>).
+                if (cellTextTransform != null)
+                    cellHtml = $"<div style=\"transform:{cellTextTransform};display:inline-block\">{cellHtml}</div>";
                 sb.AppendLine($"          <td{spanAttrs}{styleStr}>{diagOverlay}{cellHtml}</td>");
                 colIndex += Math.Max((int)(gridSpan ?? 1), 1);
             }
@@ -398,6 +498,37 @@ public partial class PowerPointHandler
                     or "sysDashDot" or "sysDashDotDot" => "dashed",
                 _ => "solid"
             };
+        }
+        else if (borderProps.GetFirstChild<Drawing.CustomDash>() != null)
+        {
+            // CONSISTENCY(dash-pattern): <a:custDash> (mutually exclusive with prstDash)
+            // also makes the border dashed. A CSS border-style cannot express an
+            // arbitrary dash array, so approximate to "dashed" — same compromise the
+            // dashDot presets above take. Without this a custom-dashed border rendered
+            // SOLID (the shape/connector path emits a real stroke-dasharray; a CSS <td>
+            // border can't, so dashed is the faithful approximation).
+            style = "dashed";
+        }
+
+        // CONSISTENCY(compound-line): a border <a:ln cmpd="dbl"/thickThin/thinThick/tri>
+        // renders as parallel lines in PowerPoint. CSS border-style has only "double",
+        // so map any non-single compound type to "double" (mirrors the shape outline
+        // path, which emits border-style:double for cmpd != "sng"). Only applies to an
+        // otherwise-solid border — a dashed compound border keeps the dash approximation.
+        if (style == "solid")
+        {
+            var cmpd = borderProps switch
+            {
+                Drawing.LeftBorderLineProperties lb => lb.CompoundLineType?.InnerText,
+                Drawing.RightBorderLineProperties rb => rb.CompoundLineType?.InnerText,
+                Drawing.TopBorderLineProperties tb => tb.CompoundLineType?.InnerText,
+                Drawing.BottomBorderLineProperties bb => bb.CompoundLineType?.InnerText,
+                Drawing.TopLeftToBottomRightBorderLineProperties tlbr => tlbr.CompoundLineType?.InnerText,
+                Drawing.BottomLeftToTopRightBorderLineProperties bltr => bltr.CompoundLineType?.InnerText,
+                _ => null
+            };
+            if (!string.IsNullOrEmpty(cmpd) && cmpd != "sng")
+                style = "double";
         }
 
         return $"{widthPt:0.##}pt {style} {color}";

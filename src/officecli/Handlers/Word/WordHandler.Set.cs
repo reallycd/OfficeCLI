@@ -15,6 +15,8 @@ public partial class WordHandler
     {
         Modified = true;
         LastSetWarnings = new List<string>();
+        LastUnrecognizedLatex = new List<string>();
+        LastSetNewPath = null;
         var unsupported = new List<string>();
 
         // Bare `revision=` key was retired when the namespace split into
@@ -484,6 +486,7 @@ public partial class WordHandler
         if (element is Run run) return SetElementRun(run, properties);
         if (element is Hyperlink hl) return SetElementHyperlink(hl, properties);
         if (element is M.Paragraph mPara) return SetElementMPara(mPara, properties);
+        if (element is M.OfficeMath oMathEl) return SetElementOMath(oMathEl, properties);
         if (element is Paragraph para) return SetElementParagraph(para, properties);
         if (element is TableCell cell) return SetElementTableCell(cell, properties);
         if (element is TableRow row) return SetElementTableRow(row, properties);

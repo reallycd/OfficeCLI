@@ -11,8 +11,9 @@
 #   • Two num instances sharing one abstractNum → independent counters
 #   • style-borne numPr (Heading-style multi-level outline)
 #   • Set on /numbering/abstractNum[@id=N]/level[L] after creation
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 DOCX="$(dirname "$0")/numbering.docx"
 echo "Building $DOCX ..."
 rm -f "$DOCX"

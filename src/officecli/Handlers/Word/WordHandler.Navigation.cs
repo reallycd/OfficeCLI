@@ -1640,9 +1640,20 @@ public partial class WordHandler
         if (matchCount > 0)
             return $"Available at {parentPath}: {requestedType}[1]..{requestedType}[{matchCount}]";
 
-        // List distinct child types at this level
+        // List distinct child types at this level. R2-bt-1: a display equation
+        // is a w:p wrapping a single m:oMathPara. The path resolver (rule #6 in
+        // ResolvePath / WalkBodyChild) does NOT count such wrapper paragraphs
+        // under /body/p[N] — they are addressed as /body/oMathPara[N] instead.
+        // The raw LocalName grouping below counted the wrapper w:p as p(1),
+        // producing the self-contradictory "No p found … Available children:
+        // p(1)" message: the listing claimed a p the resolver refuses to index.
+        // Reclassify wrapper paragraphs as oMathPara here so the listing agrees
+        // with what /body/p[N] and /body/oMathPara[N] actually resolve.
+        bool atBody = parent is Body;
         var childTypes = parent.ChildElements
-            .GroupBy(c => c.LocalName)
+            .GroupBy(c => atBody && c is Paragraph wp && IsOMathParaWrapperParagraph(wp)
+                ? "oMathPara"
+                : c.LocalName)
             .Select(g => $"{g.Key}({g.Count()})")
             .Take(10)
             .ToList();
@@ -1650,6 +1661,113 @@ public partial class WordHandler
         return childTypes.Count > 0
             ? $"No {requestedType} found at {parentPath}. Available children: {string.Join(", ", childTypes)}"
             : $"No children at {parentPath}";
+    }
+
+    /// <summary>
+    /// R4-bt-1: compute the canonical, RESOLVABLE path of a math element
+    /// (m:oMath inline, or m:oMathPara display) that lives in a body-level
+    /// paragraph — used after an equation mode switch MOVES the element, so the
+    /// Set response can report the new path instead of the stale pre-move one.
+    /// Mirrors the body enumeration in ResolvePath exactly: a pure
+    /// oMathPara-wrapper paragraph is addressed as /body/oMathPara[N]; any other
+    /// paragraph is /body/p[N], and the math element hangs off it as
+    /// /oMath[K] or /oMathPara[K]. Returns null if the element is not under a
+    /// direct body paragraph (caller then keeps the original path).
+    /// </summary>
+    internal string? ComputeMathElementPath(OpenXmlElement mathEl)
+    {
+        var body = _doc.MainDocumentPart?.Document?.Body;
+        if (body == null) return null;
+        var hostPara = mathEl.Ancestors<Paragraph>().FirstOrDefault();
+        if (hostPara == null) return null;
+
+        bool isDisplay = mathEl is M.Paragraph || mathEl.LocalName == "oMathPara";
+
+        // Shared tail: given the resolved paragraph-path prefix, append the
+        // immediate container (/hyperlink[H] when the math sits in a hyperlink)
+        // and the math index (/oMathPara[K] display, /oMath[K] inline).
+        string? MathTail(string paraPrefix)
+        {
+            var container = mathEl.Parent!;
+            var prefix = paraPrefix;
+            if (container is Hyperlink hlC)
+            {
+                int hIdx = hostPara.Elements<Hyperlink>().ToList()
+                    .FindIndex(h => ReferenceEquals(h, hlC)) + 1;
+                if (hIdx <= 0) return null;
+                prefix += $"/hyperlink[{hIdx}]";
+            }
+            else if (!ReferenceEquals(container, hostPara)) return null;
+            if (isDisplay)
+            {
+                int k = container.Elements<M.Paragraph>().ToList()
+                    .FindIndex(e => ReferenceEquals(e, mathEl)) + 1;
+                return k > 0 ? $"{prefix}/oMathPara[{k}]" : null;
+            }
+            int kk = container.Elements<M.OfficeMath>().ToList()
+                .FindIndex(e => ReferenceEquals(e, mathEl)) + 1;
+            return kk > 0 ? $"{prefix}/oMath[{kk}]" : null;
+        }
+
+        // Footnote/endnote-hosted equations: build the note-scoped path
+        // (/footnotes/footnote[N]/p[@paraId=X]/…) so a mode switch inside a note
+        // reports a resolvable path instead of the stale pre-switch one. N
+        // enumerates user notes (Id>0), matching the resolver and Add.
+        if (hostPara.Parent is Footnote or Endnote)
+        {
+            var noteEl = hostPara.Parent!;
+            bool isFn = noteEl is Footnote;
+            var siblings = (isFn
+                ? (noteEl.Parent as Footnotes)?.Elements<Footnote>()
+                    .Where(f => f.Id?.Value > 0).Cast<OpenXmlElement>()
+                : (noteEl.Parent as Endnotes)?.Elements<Endnote>()
+                    .Where(e => e.Id?.Value > 0).Cast<OpenXmlElement>())?.ToList();
+            if (siblings == null) return null;
+            int nIdx = siblings.FindIndex(n => ReferenceEquals(n, noteEl)) + 1;
+            if (nIdx <= 0) return null;
+            int pIdx0 = noteEl.Elements<Paragraph>().ToList()
+                .FindIndex(p => ReferenceEquals(p, hostPara)) + 1;
+            var seg = BuildParaPathSegment(hostPara, pIdx0);
+            var notePrefix = isFn
+                ? $"/footnotes/footnote[{nIdx}]"
+                : $"/endnotes/endnote[{nIdx}]";
+            return MathTail($"{notePrefix}/{seg}");
+        }
+
+        if (!ReferenceEquals(hostPara.Parent, body)) return null;
+
+        // Pure oMathPara-wrapper paragraphs are addressed at body level as
+        // /body/oMathPara[N]; the wrapped m:oMathPara IS the target itself.
+        if (IsOMathParaWrapperParagraph(hostPara))
+        {
+            int n = 0;
+            foreach (var el in body.ChildElements)
+            {
+                if (el.LocalName == "oMathPara" || el is M.Paragraph) n++;
+                else if (el is Paragraph wp && IsOMathParaWrapperParagraph(wp))
+                {
+                    n++;
+                    if (ReferenceEquals(wp, hostPara)) return $"/body/oMathPara[{n}]";
+                }
+            }
+            return null;
+        }
+
+        // Otherwise the host is a regular /body/p[N] (skipping pure-wrapper
+        // paragraphs, matching GetBodyParagraphIndex), and the math element is a
+        // positional child of it.
+        int pIdx = 0;
+        foreach (var el in body.Elements<Paragraph>())
+        {
+            if (IsOMathParaWrapperParagraph(el)) continue; // counted under oMathPara[N]
+            pIdx++;
+            // The math element sits directly in the paragraph OR nested inside a
+            // w:hyperlink child (dump→batch round-trips equations in a hyperlink);
+            // MathTail handles both and returns the resolvable /body/p[N]/… path.
+            if (ReferenceEquals(el, hostPara))
+                return MathTail($"/body/p[{pIdx}]");
+        }
+        return null;
     }
 
     private DocumentNode BookmarkStartToNode(BookmarkStart bkStart, DocumentNode node)
@@ -1789,14 +1907,39 @@ public partial class WordHandler
                 node.Children.Add(symNode);
                 fnSymIdx++;
             }
-            int fnEqIdx = 0;
-            foreach (var fnEq in fnEl.Descendants<M.OfficeMath>())
-            {
-                node.Children.Add(ElementToNode(fnEq, $"{path}/equation[{fnEqIdx + 1}]", depth - 1));
-                fnEqIdx++;
-            }
+            AddNoteEquationChildren(fnEl, node, path, depth);
         }
         return node;
+    }
+
+    // Emit RESOLVABLE child paths for equations inside a footnote/endnote. The
+    // former flat `Descendants<M.OfficeMath>()` + `equation[N]` labelling produced
+    // paths (/footnotes/footnote[N]/equation[K]) that no element matches — the
+    // resolver keys off LocalName. Walk per host paragraph and emit the same
+    // resolvable segments AddEquation returns: p[@paraId=X]/oMath[K] (inline) and
+    // p[@paraId=X]/oMathPara[K] (display, wrapper w:p added by the R5 fix),
+    // including hyperlink-nested math.
+    private void AddNoteEquationChildren(OpenXmlElement noteEl, DocumentNode node, string path, int depth)
+    {
+        int pIdx = 0;
+        foreach (var p in noteEl.Elements<Paragraph>())
+        {
+            pIdx++;
+            var seg = BuildParaPathSegment(p, pIdx);
+            void EmitFrom(OpenXmlElement container, string cSeg)
+            {
+                int di = 0;
+                foreach (var disp in container.Elements<M.Paragraph>())
+                    node.Children.Add(ElementToNode(disp, $"{cSeg}/oMathPara[{++di}]", depth - 1));
+                int ii = 0;
+                foreach (var inl in container.Elements<M.OfficeMath>())
+                    node.Children.Add(ElementToNode(inl, $"{cSeg}/oMath[{++ii}]", depth - 1));
+            }
+            EmitFrom(p, $"{path}/{seg}");
+            var hyperlinks = p.Elements<Hyperlink>().ToList();
+            for (int h = 0; h < hyperlinks.Count; h++)
+                EmitFrom(hyperlinks[h], $"{path}/{seg}/hyperlink[{h + 1}]");
+        }
     }
 
     private DocumentNode EndnoteToNode(Endnote enEl, DocumentNode node, string path, int depth)
@@ -1843,12 +1986,7 @@ public partial class WordHandler
                 node.Children.Add(symNode);
                 enSymIdx++;
             }
-            int enEqIdx = 0;
-            foreach (var enEq in enEl.Descendants<M.OfficeMath>())
-            {
-                node.Children.Add(ElementToNode(enEq, $"{path}/equation[{enEqIdx + 1}]", depth - 1));
-                enEqIdx++;
-            }
+            AddNoteEquationChildren(enEl, node, path, depth);
         }
         return node;
     }
@@ -3394,13 +3532,20 @@ public partial class WordHandler
             // BUG-DUMP-R42-7/8: <w:group/> and <w:picture/> markers identify a
             // grouping / picture content control; without reading them the
             // control was reported (and later rebuilt) as a generic rich-text SDT.
+            var checkBoxEl = sdtProps.GetFirstChild<DocumentFormat.OpenXml.Office2010.Word.SdtContentCheckBox>();
             if (sdtProps.GetFirstChild<SdtContentGroup>() != null) node.Format["type"] = "group";
             else if (sdtProps.GetFirstChild<SdtContentPicture>() != null) node.Format["type"] = "picture";
+            else if (checkBoxEl != null) node.Format["type"] = "checkbox";
             else if (sdtProps.GetFirstChild<SdtContentDropDownList>() != null) node.Format["type"] = "dropdown";
             else if (sdtProps.GetFirstChild<SdtContentComboBox>() != null) node.Format["type"] = "combobox";
             else if (sdtProps.GetFirstChild<SdtContentDate>() != null) node.Format["type"] = "date";
             else if (sdtProps.GetFirstChild<SdtContentText>() != null) node.Format["type"] = "text";
             else node.Format["type"] = "richtext";
+
+            // Checkbox checked state (w14:checked val 1/0 → bool).
+            if (checkBoxEl != null)
+                node.Format["checked"] = checkBoxEl.Checked?.Val?.InnerText == "1"
+                    || string.Equals(checkBoxEl.Checked?.Val?.InnerText, "true", StringComparison.OrdinalIgnoreCase);
 
             // Read date format for date controls
             var dateContent = sdtProps.GetFirstChild<SdtContentDate>();
@@ -3444,13 +3589,19 @@ public partial class WordHandler
             if (sdtId?.Val?.Value != null) node.Format["id"] = sdtId.Val.Value;
 
             // BUG-DUMP-R42-7/8: surface group / picture content-control markers.
+            var checkBoxElRun = sdtProps.GetFirstChild<DocumentFormat.OpenXml.Office2010.Word.SdtContentCheckBox>();
             if (sdtProps.GetFirstChild<SdtContentGroup>() != null) node.Format["type"] = "group";
             else if (sdtProps.GetFirstChild<SdtContentPicture>() != null) node.Format["type"] = "picture";
+            else if (checkBoxElRun != null) node.Format["type"] = "checkbox";
             else if (sdtProps.GetFirstChild<SdtContentDropDownList>() != null) node.Format["type"] = "dropdown";
             else if (sdtProps.GetFirstChild<SdtContentComboBox>() != null) node.Format["type"] = "combobox";
             else if (sdtProps.GetFirstChild<SdtContentDate>() != null) node.Format["type"] = "date";
             else if (sdtProps.GetFirstChild<SdtContentText>() != null) node.Format["type"] = "text";
             else node.Format["type"] = "richtext";
+
+            if (checkBoxElRun != null)
+                node.Format["checked"] = checkBoxElRun.Checked?.Val?.InnerText == "1"
+                    || string.Equals(checkBoxElRun.Checked?.Val?.InnerText, "true", StringComparison.OrdinalIgnoreCase);
 
             // Read date format for date controls
             var dateContentRun = sdtProps.GetFirstChild<SdtContentDate>();
@@ -5212,17 +5363,25 @@ public partial class WordHandler
                     // <w:hyperlink> get a hyperlink-scoped path so the
                     // emitter can place the equation INSIDE the hyperlink
                     // on replay.
+                    // R3-bt-1: emit the RESOLVABLE child segment `oMath[N]`, not
+                    // `equation[N]`. An inline equation is a bare <m:oMath>
+                    // (LocalName "oMath") inside the w:p/w:hyperlink, so the path
+                    // resolver matches it via LocalName == "oMath" — `equation`
+                    // matched no element and get/set/remove on the listed
+                    // `…/equation[1]` failed ("No equation found … Available:
+                    // oMath(1)"). This now agrees with what `query equation`
+                    // already returns (…/oMath[N]).
                     string eqPath;
                     if (entry.el.Parent is Hyperlink eqHl)
                     {
                         int hlIdx = paraHyperlinks.IndexOf(eqHl);
                         int hlEqIdx = eqHl.Elements<M.OfficeMath>()
                             .ToList().IndexOf((M.OfficeMath)entry.el);
-                        eqPath = $"{path}/hyperlink[{hlIdx + 1}]/equation[{hlEqIdx + 1}]";
+                        eqPath = $"{path}/hyperlink[{hlIdx + 1}]/oMath[{hlEqIdx + 1}]";
                     }
                     else
                     {
-                        eqPath = $"{path}/equation[{inlineEqIdx + 1}]";
+                        eqPath = $"{path}/oMath[{inlineEqIdx + 1}]";
                         inlineEqIdx++;
                     }
                     var eqNode = ElementToNode(entry.el, eqPath, depth - 1);
@@ -5698,10 +5857,19 @@ public partial class WordHandler
             // /oMathPara[M] addressing.
             if (!IsOMathParaWrapperParagraph(para))
             {
+                // R4-bt-2: a display equation in a mixed-content paragraph is an
+                // m:oMathPara (M.Paragraph) child. Emit the RESOLVABLE
+                // oMathPara[N] segment — the resolver matches it by LocalName
+                // ("oMathPara"), so the old equation[N] segment listed here did
+                // not resolve via get/set/remove. Index among the paragraph's
+                // own oMathPara children (a separate counter from the inline
+                // oMath one) so the positional path matches what the resolver
+                // enumerates.
+                int mathParaIdx = 0;
                 foreach (var blockEq in para.Elements<M.Paragraph>())
                 {
-                    node.Children.Add(ElementToNode(blockEq, $"{path}/equation[{inlineEqIdx + 1}]", depth - 1));
-                    inlineEqIdx++;
+                    mathParaIdx++;
+                    node.Children.Add(ElementToNode(blockEq, $"{path}/oMathPara[{mathParaIdx}]", depth - 1));
                 }
             }
             // BUG-DUMP6-01: surface <w:fldSimple> children as typed `field`

@@ -206,10 +206,44 @@ internal static partial class ChartHelper
         var extSeries = ParseSeriesDataExtended(properties);
         if (extSeries != null && extSeries.Count > 0 && extSeries.Any(s => s.ValuesRef != null || s.CategoriesRef != null))
         {
-            // Dotted syntax with references — return literal values where available, empty arrays for references
-            return extSeries.Select(s => (s.Name, s.Values ?? Array.Empty<double>())).ToList();
+            // Dotted syntax with references. Literal values may still ride
+            // alongside via `data=` / `series{N}=` (the batch emitter dumps
+            // both the cached point values AND the source cell-range ref) —
+            // merge them positionally so the built numLit carries the real
+            // data and the numRef rewrite preserves it as numCache. Without
+            // the merge a ref-bearing series came back with an EMPTY value
+            // list → numRef with no numCache → real PowerPoint silently
+            // renders a blank chart.
+            var literalSeries = ParseLiteralSeriesData(properties);
+            var merged = new List<(string name, double[] values)>(extSeries.Count);
+            for (int i = 0; i < extSeries.Count; i++)
+            {
+                var s = extSeries[i];
+                var name = s.Name;
+                var vals = s.Values ?? Array.Empty<double>();
+                if (i < literalSeries.Count)
+                {
+                    if (vals.Length == 0) vals = literalSeries[i].values;
+                    if (!properties.ContainsKey($"series{i + 1}.name")
+                        && literalSeries[i].name.Length > 0)
+                        name = literalSeries[i].name;
+                }
+                merged.Add((name, vals));
+            }
+            for (int i = extSeries.Count; i < literalSeries.Count; i++)
+                merged.Add(literalSeries[i]);
+            return merged;
         }
 
+        return ParseLiteralSeriesData(properties);
+    }
+
+    /// <summary>
+    /// Parse literal series data from `data=Name1:v1,v2;...` or the legacy
+    /// `series{N}=Name:v1,v2` / dotted `series{N}.values=v1,v2` keys.
+    /// </summary>
+    private static List<(string name, double[] values)> ParseLiteralSeriesData(Dictionary<string, string> properties)
+    {
         var result = new List<(string name, double[] values)>();
 
         if (properties.TryGetValue("data", out var dataStr))
@@ -330,6 +364,11 @@ internal static partial class ChartHelper
         {
             var hasName = properties.TryGetValue($"series{i}.name", out var nameStr);
             var hasValues = properties.TryGetValue($"series{i}.values", out var valuesStr);
+            // `series{N}.valuesRef=<range>` carries the source cell-range ref
+            // WITHOUT displacing literal values (unlike `.values=<range>`).
+            // The batch emitter dumps it from the Reader's per-series
+            // Format["valuesRef"] so dump→replay rebuilds numRef + numCache.
+            var hasValuesRef = properties.TryGetValue($"series{i}.valuesRef", out var valuesRefStr);
             var hasCats = properties.TryGetValue($"series{i}.categories", out var catsStr);
             var hasBubbleSize = properties.TryGetValue($"series{i}.bubbleSize", out var bsStr);
             var hasBubbleSizeRef = properties.ContainsKey($"series{i}.bubbleSizeRef");
@@ -347,7 +386,7 @@ internal static partial class ChartHelper
                 legacyRangeRef = legacyStr;
             }
 
-            if (!hasName && !hasValues && !hasCats && !hasBubbleSize && !hasBubbleSizeRef && legacyRangeRef == null) continue;
+            if (!hasName && !hasValues && !hasValuesRef && !hasCats && !hasBubbleSize && !hasBubbleSizeRef && legacyRangeRef == null) continue;
 
             var info = new SeriesInfo { Name = nameStr ?? $"Series {i}" };
 
@@ -361,6 +400,12 @@ internal static partial class ChartHelper
             else if (legacyRangeRef != null)
             {
                 info.ValuesRef = NormalizeRangeReference(legacyRangeRef);
+            }
+
+            if (info.ValuesRef == null && !string.IsNullOrEmpty(valuesRefStr)
+                && IsRangeReference(valuesRefStr))
+            {
+                info.ValuesRef = NormalizeRangeReference(valuesRefStr);
             }
 
             if (!string.IsNullOrEmpty(catsStr))
@@ -402,6 +447,12 @@ internal static partial class ChartHelper
     /// </summary>
     internal static string? ParseCategoriesRef(Dictionary<string, string> properties)
     {
+        // Explicit `categoriesRef=<range>` (the Reader/batch-emitter form:
+        // literal labels in `categories=` for the strCache, the source cell
+        // range here) wins over range-form `categories=`.
+        if (properties.TryGetValue("categoriesRef", out var catRefStr)
+            && IsRangeReference(catRefStr))
+            return NormalizeRangeReference(catRefStr);
         if (!properties.TryGetValue("categories", out var catStr)) return null;
         if (IsRangeReference(catStr)) return NormalizeRangeReference(catStr);
         return null;
@@ -475,7 +526,15 @@ internal static partial class ChartHelper
             // series spPr is the replay signal. We only flag it for default
             // suppression when it does NOT also carry a series-level fill key.
             if (!sub.Equals("dPt", StringComparison.OrdinalIgnoreCase)
-                && !sub.Equals("spPr", StringComparison.OrdinalIgnoreCase)) continue;
+                && !sub.Equals("spPr", StringComparison.OrdinalIgnoreCase)
+                && !sub.Equals("inheritFill", StringComparison.OrdinalIgnoreCase)) continue;
+            // `series{N}.inheritFill=true`: the dump saw a source series with
+            // no <c:spPr> at all — the fill is theme-inherited, so the replay
+            // must not pin a DefaultSeriesColors palette entry over it. The
+            // TryGetValue registers the key as consumed (handler-as-truth
+            // tracking doesn't fire on Dictionary-typed foreach iteration).
+            if (sub.Equals("inheritFill", StringComparison.OrdinalIgnoreCase))
+                properties.TryGetValue(k, out _);
             int idx0 = idx1 - 1;
             // A series{N}.spPr key IS a captured series fill — keep it (the
             // verbatim spPr is applied post-build), so do not flag spPr-bearing

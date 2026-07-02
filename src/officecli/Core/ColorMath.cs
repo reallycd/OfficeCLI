@@ -95,12 +95,12 @@ internal static class ColorMath
     }
 
     /// <summary>
-    /// Apply OOXML DrawingML color transforms: tint, shade, lumMod, lumOff, alpha.
+    /// Apply OOXML DrawingML color transforms: tint, shade, lumMod, lumOff, satMod, alpha.
     /// All values in 0–100000 units (percentage × 1000). Pass null to skip a transform.
     /// Input hex is 6-char without '#' prefix. Output includes '#' prefix (or rgba() if alpha &lt; 100000).
     /// </summary>
     public static string ApplyTransforms(string hex, int? tint = null, int? shade = null,
-        int? lumMod = null, int? lumOff = null, int? alpha = null)
+        int? lumMod = null, int? lumOff = null, int? alpha = null, int? satMod = null)
     {
         var (r, g, b) = ColorMath.HexToRgb(hex);
 
@@ -121,12 +121,16 @@ internal static class ColorMath
             b = (int)(b * s);
         }
 
-        // OOXML spec: lumMod/lumOff operate in HSL space
-        if (lumMod.HasValue || lumOff.HasValue)
+        // OOXML spec: lumMod/lumOff and satMod operate in HSL space.
+        // Fold them into a single HSL round-trip so a color with both gets
+        // S and L modulation applied together (no double-convert).
+        if (lumMod.HasValue || lumOff.HasValue || satMod.HasValue)
         {
             var mod = (lumMod ?? 100000) / 100000.0;
             var off = (lumOff ?? 0) / 100000.0;
             RgbToHsl(r, g, b, out var h, out var s, out var l);
+            if (satMod.HasValue)
+                s = Math.Clamp(s * (satMod.Value / 100000.0), 0, 1);
             l = Math.Clamp(l * mod + off, 0, 1);
             HslToRgb(h, s, l, out r, out g, out b);
         }

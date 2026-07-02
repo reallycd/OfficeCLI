@@ -20,17 +20,21 @@ public partial class PowerPointHandler
     /// </summary>
     private static void RenderShape(StringBuilder sb, Shape shape, OpenXmlPart part,
         Dictionary<string, string> themeColors, (long x, long y, long cx, long cy)? overridePos = null,
-        string? dataPath = null, bool suppressText = false)
+        string? dataPath = null, bool suppressText = false, int? slideNumber = null)
     {
         // prst="line" auto-shapes are line-segment geometry; render as SVG
         // through the connector pipeline so they don't degrade to a div with
         // border (which fakes a thin filled rect and loses zero-width/height
         // line semantics — observed on slide 2 of test-samples/07.pptx).
         var prstGeomEarly = shape.ShapeProperties?.GetFirstChild<Drawing.PresetGeometry>();
-        if (overridePos == null && prstGeomEarly?.Preset?.HasValue == true
+        if (prstGeomEarly?.Preset?.HasValue == true
             && prstGeomEarly.Preset.InnerText == "line")
         {
-            RenderConnector(sb, shape.ShapeProperties, themeColors, dataPath);
+            // Forward the shape's text body: a prstGeom="line" sp can carry a <p:txBody>
+            // label (PowerPoint renders it over the line); the connector overlay draws it.
+            // Without this the label was silently dropped.
+            RenderConnector(sb, shape.ShapeProperties, themeColors, dataPath, overridePos,
+                cxnTextBody: shape.TextBody, style: shape.ShapeStyle, part: part);
             return;
         }
 
@@ -111,11 +115,12 @@ public partial class PowerPointHandler
         // pipeline, which already draws zero-dimension lines with the correct
         // color/width/dash (DashTypeToSvgDasharray). Only when the shape has no
         // text — a text-bearing collapsed shape is unusual; keep the div path.
-        if (overridePos == null && (cx == 0 || cy == 0)
+        if ((cx == 0 || cy == 0)
             && shape.ShapeProperties?.GetFirstChild<Drawing.Outline>() != null
             && string.IsNullOrWhiteSpace(GetShapeText(shape)))
         {
-            RenderConnector(sb, shape.ShapeProperties, themeColors, dataPath);
+            RenderConnector(sb, shape.ShapeProperties, themeColors, dataPath, overridePos,
+                style: shape.ShapeStyle, part: part);
             return;
         }
 
@@ -166,16 +171,22 @@ public partial class PowerPointHandler
         // in ParseOutline and degrades to solid #000000.
         var outlineGradFill = outline?.GetFirstChild<Drawing.GradientFill>();
         var parsedOutline = outline != null ? ParseOutline(outline, themeColors) : null;
+        // R23-B: a gradient outline used to always emit `border:Npt solid transparent`
+        // + `border-image:<gradient> 1`. But CSS `border-image` is IGNORED whenever
+        // `border-radius` is also set (spec) — so a roundRect (or any preset whose
+        // PresetGeometryToCss yields border-radius / a clip-path) rendered the
+        // gradient outline as a SQUARE solid-ish border. Defer rounded / non-rect
+        // gradient outlines to the SVG stroke overlay below (stroke=url(#grad)),
+        // mirroring the connector gradient-stroke path; plain rects keep border-image
+        // (which works there).
+        double gradOutlineW = 0;
         if (outlineGradFill != null)
         {
-            var lineW = outline!.Width?.HasValue == true
+            gradOutlineW = outline!.Width?.HasValue == true
                 ? outline.Width.Value / EmuConverter.EmuPerPointF : 1.0;
-            if (lineW < 0.5) lineW = 0.5;
-            var gradCss = GradientToCss(outlineGradFill, themeColors);
-            // border-image needs a non-zero transparent border to paint into.
-            styles.Add($"border:{lineW:0.##}pt solid transparent");
-            styles.Add($"border-image:{gradCss} 1");
-            // Suppress the solid-CSS and SVG-overlay outline paths below.
+            if (gradOutlineW < 0.5) gradOutlineW = 0.5;
+            // Suppress the solid-CSS and SVG-dashed outline paths below; the gradient
+            // is rendered either as border-image (plain rect) or SVG stroke (rounded).
             parsedOutline = null;
         }
         else if (parsedOutline != null && parsedOutline.Value.dashType == "solid")
@@ -239,6 +250,16 @@ public partial class PowerPointHandler
         // Geometry: preset or custom — track clip-path separately to avoid clipping text
         string clipPathCss = "";
         string borderRadiusCss = "";
+        // R48: multi-subpath / fill="none" custGeom rendered as an inline SVG <path>
+        // overlay instead of clip-path:polygon (which can hold only one polygon).
+        string custGeomSvgFillD = "";
+        string custGeomSvgStrokeD = "";
+        long custGeomSvgW = 100000L;
+        long custGeomSvgH = 100000L;
+        // R48: true once a custGeom routes its fill/stroke through the SVG overlay, so the
+        // shape <div> must NOT also paint the solidFill background (or for an all-fill="none"
+        // path, must paint nothing at all).
+        bool custGeomSvgRouted = false;
         var presetGeom = shape.ShapeProperties?.GetFirstChild<Drawing.PresetGeometry>();
         if (presetGeom?.Preset?.HasValue == true)
         {
@@ -260,9 +281,62 @@ public partial class PowerPointHandler
             var custGeom = shape.ShapeProperties?.GetFirstChild<Drawing.CustomGeometry>();
             if (custGeom != null)
             {
-                var clipPath = CustomGeometryToClipPath(custGeom);
-                if (!string.IsNullOrEmpty(clipPath))
-                    clipPathCss = clipPath;
+                // R48: a single filled subpath keeps the clip-path:polygon path (broadest
+                // browser support, unchanged common case). Multiple subpaths OR any
+                // fill="none" subpath cannot be expressed by one clip-path polygon, so
+                // route those through an inline SVG <path> overlay (set below).
+                var pathLst = custGeom.GetFirstChild<Drawing.PathList>();
+                var subPaths = pathLst?.Elements<Drawing.Path>().ToList() ?? new List<Drawing.Path>();
+                var needsSvg = subPaths.Count > 1
+                    || subPaths.Any(p => p.Fill?.Value == Drawing.PathFillModeValues.None);
+
+                if (needsSvg)
+                {
+                    // Multi-subpath or fill="none": never use clip-path (it can hold only
+                    // one polygon and cannot express a fill-less stroke-only path). The SVG
+                    // overlay carries fill+stroke; if every subpath is both fill="none" and
+                    // stroke=off the shape is correctly invisible (no fill, no clip-path).
+                    custGeomSvgRouted = true;
+                    CustomGeometryToSvgPaths(custGeom, out var fd, out var sd, out var pw, out var ph);
+                    custGeomSvgFillD = fd;
+                    custGeomSvgStrokeD = sd;
+                    custGeomSvgW = pw;
+                    custGeomSvgH = ph;
+                }
+                else
+                {
+                    var clipPath = CustomGeometryToClipPath(custGeom);
+                    if (!string.IsNullOrEmpty(clipPath))
+                        clipPathCss = clipPath;
+                }
+            }
+        }
+
+        // R23-B: gradient outline — pick the render strategy now that geometry is
+        // known. Plain rect (no border-radius, no clip-path) keeps border-image
+        // (it renders correctly). Rounded / clipped geometry uses the SVG stroke
+        // overlay emitted in the post-div block (border-image is silently ignored
+        // when border-radius is present, which produced a square solid border).
+        string? gradOutlineSvg = null;
+        bool gradOutlineRounded = false;
+        if (outlineGradFill != null)
+        {
+            gradOutlineRounded = !string.IsNullOrEmpty(borderRadiusCss)
+                || !string.IsNullOrEmpty(clipPathCss);
+            if (!gradOutlineRounded)
+            {
+                var gradCss = GradientToCss(outlineGradFill, themeColors);
+                styles.Add($"border:{gradOutlineW:0.##}pt solid transparent");
+                styles.Add($"border-image:{gradCss} 1");
+            }
+            else
+            {
+                var gradId = $"shg{_markerCounter++}";
+                gradOutlineSvg = BuildSvgLinearGradient(outlineGradFill, gradId, themeColors, out _);
+                if (string.IsNullOrEmpty(gradOutlineSvg))
+                    gradOutlineSvg = null;
+                else
+                    gradOutlineSvg = "url(#" + gradId + ")|" + gradOutlineSvg;
             }
         }
 
@@ -277,12 +351,26 @@ public partial class PowerPointHandler
             effectFor = ResolveStyleEffectRefList(shape.ShapeStyle, part);
         var shadowCss = EffectListToShadowCss(effectFor, themeColors);
         var glowCss = EffectListToGlowCss(effectFor, themeColors);
-        // Merge multiple filter:drop-shadow into one filter property
+        // Merge multiple filter:drop-shadow into one filter property.
+        // EffectListToShadowCss returns either a "filter:..." value (outer/preset
+        // shadow) or a "box-shadow:inset ..." declaration (innerShdw, which has no
+        // CSS filter equivalent). Route each to the right place: filter values into
+        // filterParts, box-shadow segments into boxShadowParts so a single combined
+        // box-shadow declaration is emitted (CSS only honors the last box-shadow).
         var filterParts = new List<string>();
+        var boxShadowParts = new List<string>();
         if (!string.IsNullOrEmpty(shadowCss))
-            filterParts.Add(shadowCss.Replace("filter:", ""));
+        {
+            if (shadowCss.StartsWith("box-shadow:"))
+                boxShadowParts.Add(shadowCss["box-shadow:".Length..]);
+            else
+                filterParts.Add(shadowCss.Replace("filter:", ""));
+        }
         if (!string.IsNullOrEmpty(glowCss))
             filterParts.Add(glowCss.Replace("filter:", ""));
+        var blurCss = EffectListToBlurCss(effectFor);
+        if (!string.IsNullOrEmpty(blurCss))
+            filterParts.Add(blurCss);
         if (filterParts.Count > 0)
             styles.Add($"filter:{string.Join(" ", filterParts)}");
 
@@ -317,8 +405,13 @@ public partial class PowerPointHandler
         {
             var bevelW = sp3d.BevelTop.Width?.HasValue == true ? sp3d.BevelTop.Width.Value / EmuConverter.EmuPerPointF : 6; // OOXML default 76200 EMU = 6pt
             var bW = Math.Max(1, bevelW * 0.5);
-            styles.Add($"box-shadow:inset {bW:0.#}px {bW:0.#}px {bW * 1.5:0.#}px rgba(255,255,255,0.25),inset -{bW:0.#}px -{bW:0.#}px {bW * 1.5:0.#}px rgba(0,0,0,0.15)");
+            boxShadowParts.Add($"inset {bW:0.#}px {bW:0.#}px {bW * 1.5:0.#}px rgba(255,255,255,0.25),inset -{bW:0.#}px -{bW:0.#}px {bW * 1.5:0.#}px rgba(0,0,0,0.15)");
         }
+
+        // Emit one combined box-shadow (inner shadow + bevel). CSS only honors the
+        // last box-shadow in an inline style, so they must share a single declaration.
+        if (boxShadowParts.Count > 0)
+            styles.Add($"box-shadow:{string.Join(",", boxShadowParts)}");
 
         // Note: fill opacity (alpha) is already baked into rgba() by ResolveFillColor.
         // Do NOT add a separate CSS opacity here — it would double-apply.
@@ -365,8 +458,21 @@ public partial class PowerPointHandler
         if (!string.IsNullOrWhiteSpace(GetShapeText(shape)))
             styles.Add($"padding:{Units.EmuToPt(tIns)}pt {Units.EmuToPt(rIns)}pt {Units.EmuToPt(bIns)}pt {Units.EmuToPt(lIns)}pt");
 
-        // Vertical alignment class
-        var valign = "top";
+        // Vertical alignment class.
+        //
+        // Default (no explicit anchor, nothing inherited) is shape-kind
+        // dependent in real PowerPoint:
+        //   - text box (<p:cNvSpPr txBox="1">)  → top
+        //   - placeholder (<p:ph>)              → inherits from layout/master
+        //                                          (resolved below via
+        //                                          ResolveInheritedAnchor)
+        //   - autoshape (prstGeom/custGeom, no txBox) → center
+        // An explicit <a:bodyPr anchor="t|ctr|b"> always wins.
+        var isPlaceholder = shape.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
+            ?.GetFirstChild<PlaceholderShape>() != null;
+        var isTextBox = shape.NonVisualShapeProperties?.NonVisualShapeDrawingProperties
+            ?.TextBox?.Value == true;
+        var valign = (!isPlaceholder && !isTextBox) ? "center" : "top";
         if (bodyPr?.Anchor?.HasValue == true)
         {
             valign = bodyPr.Anchor.InnerText switch
@@ -375,6 +481,23 @@ public partial class PowerPointHandler
                 "b" => "bottom",
                 _ => "top"
             };
+        }
+        else if (isPlaceholder)
+        {
+            // Slide bodyPr has no explicit anchor: resolve via the standard
+            // slide→layout→master placeholder inheritance (same ph type/idx
+            // matching used for position/font/color). The first ancestor
+            // bodyPr that declares an anchor wins. Absent everywhere → "top".
+            var inheritedAnchor = ResolveInheritedAnchor(shape, part);
+            if (inheritedAnchor != null)
+            {
+                valign = inheritedAnchor switch
+                {
+                    "ctr" => "center",
+                    "b" => "bottom",
+                    _ => "top"
+                };
+            }
         }
 
         // bodyPr/@wrap="none": text does not wrap inside the shape. Combined
@@ -403,7 +526,8 @@ public partial class PowerPointHandler
         // bleed across decorative buttons.
         var hasFillBg = shape.ShapeProperties?.GetFirstChild<Drawing.SolidFill>() != null
             || shape.ShapeProperties?.GetFirstChild<Drawing.GradientFill>() != null
-            || shape.ShapeProperties?.GetFirstChild<Drawing.BlipFill>() != null;
+            || shape.ShapeProperties?.GetFirstChild<Drawing.BlipFill>() != null
+            || shape.ShapeProperties?.GetFirstChild<Drawing.PatternFill>() != null;
         var explicitNoAutofit = bodyPr?.GetFirstChild<Drawing.NoAutoFit>() != null;
         var allowOverflow = wrapNone || explicitNoAutofit;
         var shapeClass = hasFillBg && !allowOverflow ? "shape has-fill" : "shape";
@@ -418,7 +542,57 @@ public partial class PowerPointHandler
             sb.Append($"    <a class=\"shape-link\" href=\"{HtmlEncode(shapeHrefUrl!)}\" rel=\"noopener\" target=\"_blank\"{tooltipAttr} style=\"display:contents;cursor:pointer\">");
         }
 
-        if (!string.IsNullOrEmpty(clipPathCss))
+        if (custGeomSvgRouted)
+        {
+            // R48: multi-subpath / fill="none" custGeom. The shape fill is drawn by the
+            // SVG <path> (so background:/border: must NOT also be applied to the div).
+            // Pull the fill color out of the CSS background declaration; gradients
+            // degrade gracefully to the first parsed color (or no fill).
+            var outerStyles = new List<string>();
+            string svgFill = "none";
+            foreach (var s in styles)
+            {
+                if (s.StartsWith("background:"))
+                    svgFill = s["background:".Length..].Trim();
+                else if (s.StartsWith("background-image:") || s.StartsWith("border"))
+                    continue; // gradient/image fill or border handled by SVG paths
+                else
+                    outerStyles.Add(s);
+            }
+            if (!string.IsNullOrEmpty(shapeHrefUrl)) outerStyles.Add("cursor:pointer");
+            sb.Append($"    <div class=\"{shapeClass}\"{dataPathAttr}{textWarpAttr} style=\"{string.Join(";", outerStyles)}\">");
+
+            // A gradient fill can't be expressed as a single SVG `fill` color
+            // (CssSanitizeColor would reject "linear-gradient(...)" → transparent →
+            // invisible shape). Build a real SVG <linearGradient> def and reference it
+            // via url(#id); degrade to the first stop color if the gradient has <2 stops.
+            var fillGrad = shape.ShapeProperties?.GetFirstChild<Drawing.GradientFill>();
+            string gradFillDef = "";
+            string fillAttr = CssSanitizeColor(svgFill);
+            if (fillGrad != null)
+            {
+                var gid = $"cgg{_markerCounter++}";
+                gradFillDef = BuildSvgLinearGradient(fillGrad, gid, themeColors, out var fs);
+                if (!string.IsNullOrEmpty(gradFillDef)) fillAttr = $"url(#{gid})";
+                else if (!string.IsNullOrEmpty(fs)) fillAttr = CssSanitizeColor(fs);
+            }
+            var drawFill = !string.IsNullOrEmpty(custGeomSvgFillD) && (svgFill != "none" || fillGrad != null);
+            sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\" viewBox=\"0 0 {custGeomSvgW} {custGeomSvgH}\" preserveAspectRatio=\"none\">");
+            if (!string.IsNullOrEmpty(gradFillDef))
+                sb.Append($"<defs>{gradFillDef}</defs>");
+            if (drawFill)
+                sb.Append($"<path d=\"{custGeomSvgFillD}\" fill=\"{fillAttr}\" fill-rule=\"evenodd\"/>");
+            if (!string.IsNullOrEmpty(custGeomSvgStrokeD) && parsedOutline != null)
+            {
+                var (bw, dt, bc, cap, _, join) = parsedOutline.Value;
+                var dashArr = DashTypeToSvgDasharray(dt, bw);
+                var dashAttr = !string.IsNullOrEmpty(dashArr) ? $" stroke-dasharray=\"{dashArr}\"" : "";
+                var linecap = CapToSvgLinecap(cap);
+                sb.Append($"<path d=\"{custGeomSvgStrokeD}\" fill=\"none\" stroke=\"{CssSanitizeColor(bc)}\" stroke-width=\"{bw:0.##}pt\" vector-effect=\"non-scaling-stroke\" stroke-linecap=\"{linecap}\" stroke-linejoin=\"{join}\"{dashAttr}/>");
+            }
+            sb.Append("</svg>");
+        }
+        else if (!string.IsNullOrEmpty(clipPathCss))
         {
             // For clip-path shapes: move fill to a clipped background layer, keep text unclipped
             // Extract fill-related styles for the clipped background layer
@@ -448,7 +622,7 @@ public partial class PowerPointHandler
             // Border layer for clip-path shapes: always use SVG polygon stroke
             if (parsedOutline != null && clipPathCss.StartsWith("clip-path:polygon("))
             {
-                var (bw, dt, bc, cap, _) = parsedOutline.Value;
+                var (bw, dt, bc, cap, _, join) = parsedOutline.Value;
                 var polyStr = clipPathCss["clip-path:polygon(".Length..^1];
                 var svgPoints = polyStr.Replace("%", "");
                 var dashArr = DashTypeToSvgDasharray(dt, bw);
@@ -456,7 +630,7 @@ public partial class PowerPointHandler
                 var linecap = CapToSvgLinecap(cap);
                 var safeColor = CssSanitizeColor(bc);
                 sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\">");
-                sb.Append($"<polygon points=\"{svgPoints}\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" vector-effect=\"non-scaling-stroke\" stroke-linecap=\"{linecap}\"{dashAttr}/>");
+                sb.Append($"<polygon points=\"{svgPoints}\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" vector-effect=\"non-scaling-stroke\" stroke-linecap=\"{linecap}\" stroke-linejoin=\"{join}\"{dashAttr}/>");
                 sb.Append("</svg>");
             }
         }
@@ -527,6 +701,39 @@ public partial class PowerPointHandler
                     break;
             }
 
+            // Text-body rotation: <a:bodyPr rot="..."/> rotates the whole text body
+            // about the text-box center (units = 60000ths of a degree). This is an
+            // ADDITIONAL rotation on top of any shape-container rotation (xfrm rot),
+            // and does NOT change the shape box rectangle — only the text rotates,
+            // overflowing the box like PowerPoint. `vert` (writing-mode) and `rot`
+            // are normally mutually exclusive; if `vert270` already set a transform
+            // we append the bodyPr rotation rather than overwrite it.
+            string rotStyle = "";
+            if (bodyPr?.Rotation?.HasValue == true && bodyPr.Rotation.Value != 0)
+            {
+                var rotDeg = bodyPr.Rotation.Value / 60000.0;
+                if (vertStyle.Contains("transform:rotate("))
+                {
+                    // vert270 path: compose with its existing rotate(180deg)
+                    vertStyle = vertStyle.Replace("transform:rotate(180deg);",
+                        $"transform:rotate({(180 + rotDeg):0.##}deg);transform-origin:center center;");
+                }
+                else
+                {
+                    rotStyle = $"transform:rotate({rotDeg:0.##}deg);transform-origin:center center;";
+                }
+            }
+
+            // Horizontal block centering: <a:bodyPr anchorCtr="1"/> centers the
+            // text BLOCK horizontally within the text frame, independent of each
+            // paragraph's algn. PowerPoint centers short left-aligned text in a wide
+            // shape. The `.shape-text` flex column stretches children full-width by
+            // default; add `align-items:center` AND the `anchor-ctr` class (whose CSS
+            // rule shrink-wraps the otherwise width:100% .para divs) so the block
+            // visibly centers like PowerPoint instead of staying left-flush.
+            bool anchorCtr = bodyPr?.AnchorCenter?.Value == true;
+            string anchorCtrStyle = anchorCtr ? "align-items:center;" : "";
+
             // wrap=none: suppress the .shape inherited `white-space:pre-wrap`
             // on the inner text container so the line extends horizontally
             // rather than wrapping inside the shape's width box.
@@ -538,18 +745,37 @@ public partial class PowerPointHandler
             // columns CSS must live on a BLOCK-level wrapper INSIDE the flex div
             // — the flex parent still handles vertical anchoring while the inner
             // block establishes the multi-column formatting context.
+            // column-fill:auto + a BOUNDED height make PowerPoint's newspaper-style
+            // sequential fill (column 1 filled top-to-bottom before column 2) instead
+            // of the CSS default `balance` (even split). The wrapper is a block child
+            // of the display:flex .shape-text; a flex child's height:100% does not
+            // reliably resolve into a definite height for column-fill, so we set an
+            // explicit height equal to the shape's text content box (shape ext height
+            // minus the top+bottom body insets), in pt — the same insets used above
+            // for the text-frame padding.
             string columnStyle = "";
             if (bodyPr?.ColumnCount?.HasValue == true && bodyPr.ColumnCount.Value > 1)
             {
-                columnStyle = $"column-count:{bodyPr.ColumnCount.Value};";
+                columnStyle = $"column-count:{bodyPr.ColumnCount.Value};column-fill:auto;";
                 if (bodyPr.ColumnSpacing?.HasValue == true)
                     columnStyle += $"column-gap:{Units.EmuToPt(bodyPr.ColumnSpacing.Value):0.##}pt;";
+                var contentHeightEmu = cy - tIns - bIns;
+                if (contentHeightEmu > 0)
+                    columnStyle += $"height:{Units.EmuToPt(contentHeightEmu):0.##}pt;";
             }
 
-            var textStyle = !string.IsNullOrEmpty(flipStyle) || !string.IsNullOrEmpty(clipPathCss) || !string.IsNullOrEmpty(rtlColStyle) || !string.IsNullOrEmpty(wrapNoneStyle) || !string.IsNullOrEmpty(vertStyle)
-                ? $" style=\"{flipStyle}{rtlColStyle}{vertStyle}{wrapNoneStyle}{(string.IsNullOrEmpty(clipPathCss) ? "" : "position:relative;")}\""
+            var textStyle = !string.IsNullOrEmpty(flipStyle) || !string.IsNullOrEmpty(clipPathCss) || !string.IsNullOrEmpty(rtlColStyle) || !string.IsNullOrEmpty(wrapNoneStyle) || !string.IsNullOrEmpty(vertStyle) || !string.IsNullOrEmpty(rotStyle) || !string.IsNullOrEmpty(anchorCtrStyle)
+                ? $" style=\"{flipStyle}{rtlColStyle}{vertStyle}{rotStyle}{wrapNoneStyle}{anchorCtrStyle}{(string.IsNullOrEmpty(clipPathCss) ? "" : "position:relative;")}\""
                 : "";
-            sb.Append($"<div class=\"shape-text valign-{valign}\"{textStyle}>");
+            var anchorCtrClass = anchorCtr ? " anchor-ctr" : "";
+            // Vertical text (writing-mode) rotates the flex main axis to horizontal,
+            // so valign-* (justify-content) now anchors the text column HORIZONTALLY
+            // — which matches PowerPoint (anchor="ctr" centers a vert column across
+            // the frame width). But a width:100% .para fills that axis and blocks the
+            // centering, so flag the shape to shrink-wrap its paragraphs (same trick
+            // the anchor-ctr CSS uses).
+            var vertTextClass = !string.IsNullOrEmpty(vertStyle) ? " has-vert-text" : "";
+            sb.Append($"<div class=\"shape-text valign-{valign}{anchorCtrClass}{vertTextClass}\"{textStyle}>");
 
             // Block-level column wrapper: column-count works here (normal block
             // formatting context), unlike on the flex .shape-text parent.
@@ -559,20 +785,52 @@ public partial class PowerPointHandler
             // R11-3: pass the shape's <p:style>/<a:fontRef> schemeClr down as the
             // final fallback run color (used only when no explicit/inherited color).
             var fontRefDefaultColor = ResolveStyleRefSchemeColor(shape.ShapeStyle?.FontReference, themeColors);
-            RenderTextBody(sb, shape.TextBody, themeColors, shape, part, fontRefDefaultColor);
+            RenderTextBody(sb, shape.TextBody, themeColors, shape, part, fontRefDefaultColor, slideNumber);
 
             if (!string.IsNullOrEmpty(columnStyle))
                 sb.Append("</div>");
             sb.Append("</div>");
         }
 
+        // R23-B: SVG gradient-stroke overlay for rounded / clipped gradient outlines.
+        // border-image can't follow border-radius (CSS ignores it), so stroke a
+        // geometry-matching shape with stroke=url(#grad) — same approach the
+        // connector gradient stroke uses.
+        if (gradOutlineSvg != null)
+        {
+            var sep = gradOutlineSvg.IndexOf('|');
+            var strokeRef = gradOutlineSvg[..sep];
+            var gradDef = gradOutlineSvg[(sep + 1)..];
+            var bw = gradOutlineW;
+            sb.Append("<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\"><defs>");
+            sb.Append(gradDef);
+            sb.Append("</defs>");
+            if (!string.IsNullOrEmpty(clipPathCss) && clipPathCss.StartsWith("clip-path:polygon("))
+            {
+                var polyStr = clipPathCss["clip-path:polygon(".Length..^1];
+                var svgPoints = polyStr.Replace("%", "");
+                // viewBox 0..100 + non-scaling-stroke keeps the polygon in % space.
+                sb.Append("</svg>");
+                sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\"><defs>{gradDef}</defs>");
+                sb.Append($"<polygon points=\"{svgPoints}\" fill=\"none\" stroke=\"{strokeRef}\" stroke-width=\"{bw:0.##}pt\" vector-effect=\"non-scaling-stroke\"/>");
+            }
+            else
+            {
+                var rxMatch = System.Text.RegularExpressions.Regex.Match(borderRadiusCss, @"border-radius:([\d.]+)");
+                var rx = rxMatch.Success ? rxMatch.Groups[1].Value : "0";
+                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" rx=\"{rx}pt\" ry=\"{rx}pt\" fill=\"none\" stroke=\"{strokeRef}\" stroke-width=\"{bw:0.##}pt\"/>");
+            }
+            sb.Append("</svg>");
+        }
+
         // SVG border overlay for non-solid outlines (dashed, dotted, dashDot etc.)
         if (parsedOutline != null && parsedOutline.Value.dashType != "solid")
         {
-            var (bw, dt, bc, cap, _) = parsedOutline.Value;
+            var (bw, dt, bc, cap, _, join) = parsedOutline.Value;
             var dashArr = DashTypeToSvgDasharray(dt, bw);
             var dashAttr = !string.IsNullOrEmpty(dashArr) ? $" stroke-dasharray=\"{dashArr}\"" : "";
             var linecap = CapToSvgLinecap(cap);
+            var linejoinAttr = $" stroke-linejoin=\"{join}\"";
             var safeColor = CssSanitizeColor(bc);
 
             if (!string.IsNullOrEmpty(clipPathCss) && clipPathCss.StartsWith("clip-path:polygon("))
@@ -581,7 +839,7 @@ public partial class PowerPointHandler
                 var polyStr = clipPathCss["clip-path:polygon(".Length..^1];
                 var svgPoints = polyStr.Replace("%", "");
                 sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\">");
-                sb.Append($"<polygon points=\"{svgPoints}\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" vector-effect=\"non-scaling-stroke\" stroke-linecap=\"{linecap}\"{dashAttr}/>");
+                sb.Append($"<polygon points=\"{svgPoints}\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" vector-effect=\"non-scaling-stroke\" stroke-linecap=\"{linecap}\"{linejoinAttr}{dashAttr}/>");
                 sb.Append("</svg>");
             }
             else if (!string.IsNullOrEmpty(borderRadiusCss))
@@ -590,7 +848,7 @@ public partial class PowerPointHandler
                 var rxMatch = System.Text.RegularExpressions.Regex.Match(borderRadiusCss, @"border-radius:([\d.]+)");
                 var rx = rxMatch.Success ? rxMatch.Groups[1].Value : "0";
                 sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\">");
-                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" rx=\"{rx}\" ry=\"{rx}\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"{linecap}\"{dashAttr}/>");
+                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" rx=\"{rx}pt\" ry=\"{rx}pt\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"{linecap}\"{linejoinAttr}{dashAttr}/>");
                 sb.Append("</svg>");
             }
             else if (presetGeom?.Preset?.InnerText == "ellipse")
@@ -608,7 +866,7 @@ public partial class PowerPointHandler
                 // sits entirely inside the content box (box-sizing:border-box equivalent).
                 // CONSISTENCY(shape-stroke-unit): keep stroke-width in pt across solid/non-solid paths.
                 sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\">");
-                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"{linecap}\"{dashAttr}/>");
+                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"{linecap}\"{linejoinAttr}{dashAttr}/>");
                 sb.Append("</svg>");
             }
         }
@@ -701,6 +959,46 @@ public partial class PowerPointHandler
     }
 
     /// <summary>
+    /// Resolve the text vertical anchor (<a:bodyPr anchor="…">) for a placeholder
+    /// shape whose own bodyPr declares no anchor, walking the layout then master
+    /// matching placeholder (same ph type/idx matching as ResolveInheritedPosition).
+    /// Returns the first ancestor bodyPr that carries an anchor attribute
+    /// ("t" | "ctr" | "b"), or null if none specify one.
+    /// </summary>
+    private static string? ResolveInheritedAnchor(Shape shape, OpenXmlPart part)
+    {
+        var ph = shape.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
+            ?.GetFirstChild<PlaceholderShape>();
+        if (ph == null) return null;
+
+        var slidePart = part as SlidePart;
+        if (slidePart == null) return null;
+
+        var layoutShapeTree = slidePart.SlideLayoutPart?.SlideLayout?.CommonSlideData?.ShapeTree;
+        var masterShapeTree = slidePart.SlideLayoutPart?.SlideMasterPart?.SlideMaster?.CommonSlideData?.ShapeTree;
+
+        foreach (var tree in new[] { layoutShapeTree, masterShapeTree })
+        {
+            if (tree == null) continue;
+            foreach (var candidate in tree.Elements<Shape>())
+            {
+                var candidatePh = candidate.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
+                    ?.GetFirstChild<PlaceholderShape>();
+                if (candidatePh == null) continue;
+                if (!PlaceholderMatches(ph, candidatePh)) continue;
+
+                var candBodyPr = candidate.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                if (candBodyPr?.Anchor?.HasValue == true)
+                    return candBodyPr.Anchor.InnerText;
+                // Matched this ancestor but it has no anchor → fall through to
+                // the next ancestor (layout matched but silent → consult master).
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Check if two placeholder shapes match by type and/or index.
     /// </summary>
     private static bool PlaceholderMatches(PlaceholderShape slidePh, PlaceholderShape layoutPh)
@@ -712,6 +1010,18 @@ public partial class PowerPointHandler
         // Match by type
         if (slidePh.Type?.HasValue == true && layoutPh.Type?.HasValue == true)
             return slidePh.Type.Value == layoutPh.Type.Value;
+
+        // R26-5: slide ph has idx but NO type, layout ph has type but NO idx.
+        // OOXML: a <p:ph idx=N/> with no type defaults to type=body, so it
+        // should inherit from a type=body (or object) layout/master placeholder.
+        // Without this branch all inheritance silently drops for idx-only slide
+        // placeholders bound to a typed layout placeholder.
+        if (slidePh.Index?.HasValue == true && slidePh.Type?.HasValue != true
+            && layoutPh.Type?.HasValue == true && layoutPh.Index?.HasValue != true)
+        {
+            var lt = layoutPh.Type.Value;
+            return lt == PlaceholderValues.Body || lt == PlaceholderValues.Object;
+        }
 
         // If slide ph has no type/idx, match by name or consider it a body placeholder
         // Default placeholder type (when type is omitted) is "body" per OOXML spec
@@ -930,7 +1240,7 @@ public partial class PowerPointHandler
             p => p.GetFirstChild<Drawing.LineSpacing>() != null);
         var lnSpc = lvlPpr?.GetFirstChild<Drawing.LineSpacing>();
         if (lnSpc == null) return null;
-        var pct = lnSpc.GetFirstChild<Drawing.SpacingPercent>()?.Val?.Value;
+        var pct = lnSpc.GetFirstChild<Drawing.SpacingPercent>().PercentVal();
         if (pct.HasValue) return $"line-height:{pct.Value / 100000.0:0.##}";
         var pts = lnSpc.GetFirstChild<Drawing.SpacingPoints>()?.Val?.Value;
         if (pts.HasValue) return $"line-height:{pts.Value / 100.0:0.##}pt";
@@ -1091,6 +1401,38 @@ public partial class PowerPointHandler
         var cx = overridePos?.cx ?? xfrm.Extents.Cx?.Value ?? 0;
         var cy = overridePos?.cy ?? xfrm.Extents.Cy?.Value ?? 0;
 
+        // Picture-level hyperlink → wrap the picture <div> in <a> for clickability in
+        // HTML preview. CONSISTENCY(shape-picture-parity): RenderShape already does
+        // this for shapes (and NodeBuilder surfaces Format["link"] for pictures), but
+        // RenderPicture dropped it — a hyperlinked image rendered un-clickable. Same
+        // rules: external URLs only; internal slide-jump (ppaction://hlinksldjump) and
+        // unsafe schemes (javascript:/data: …) are skipped.
+        string? picHrefUrl = null;
+        string? picHrefTooltip = null;
+        {
+            var nvHlink = pic.NonVisualPictureProperties?.NonVisualDrawingProperties
+                ?.GetFirstChild<Drawing.HyperlinkOnClick>();
+            if (nvHlink != null)
+            {
+                picHrefTooltip = nvHlink.Tooltip?.Value;
+                var action = nvHlink.Action?.Value;
+                var hlId = nvHlink.Id?.Value;
+                if (string.IsNullOrEmpty(action) || !action.Contains("hlink"))
+                {
+                    if (!string.IsNullOrEmpty(hlId))
+                    {
+                        try
+                        {
+                            var rel = slidePart.HyperlinkRelationships.FirstOrDefault(r => r.Id == hlId);
+                            if (rel?.Uri != null && Core.HyperlinkUriValidator.IsSafeScheme(rel.Uri.ToString()))
+                                picHrefUrl = rel.Uri.ToString();
+                        }
+                        catch { }
+                    }
+                }
+            }
+        }
+
         var styles = new List<string>
         {
             $"left:{Units.EmuToPt(x)}pt",
@@ -1105,6 +1447,16 @@ public partial class PowerPointHandler
         // Rotation
         if (xfrm.Rotation != null && xfrm.Rotation.Value != 0)
             picTransforms.Add($"rotate({xfrm.Rotation.Value / 60000.0:0.##}deg)");
+
+        // Flip — CONSISTENCY(shape-picture-parity): mirror RenderShape's flip
+        // block (rotate before scale). A flipH/flipV picture mirrors in real
+        // PowerPoint, so view html must do the same.
+        if (xfrm.HorizontalFlip?.Value == true && xfrm.VerticalFlip?.Value == true)
+            picTransforms.Add("scale(-1,-1)");
+        else if (xfrm.HorizontalFlip?.Value == true)
+            picTransforms.Add("scaleX(-1)");
+        else if (xfrm.VerticalFlip?.Value == true)
+            picTransforms.Add("scaleY(-1)");
 
         // 3D rotation (scene3d camera rotation) → CSS perspective transform.
         // CONSISTENCY(shape-picture-parity): mirror RenderShape's scene3d block.
@@ -1130,18 +1482,44 @@ public partial class PowerPointHandler
 
         // Border
         var outline = pic.ShapeProperties?.GetFirstChild<Drawing.Outline>();
+        // Parse once so a non-solid dash (dot/dashDot/lgDash...) can be rendered as an
+        // accurate SVG stroke-dasharray overlay below — exactly as RenderShape does.
+        // OutlineToCss collapses every non-solid dash to a generic CSS border-style
+        // (dashed/dotted) that cannot express e.g. dashDot, so a picture border looked
+        // wrong vs PowerPoint (and vs a sibling shape with the same a:ln).
+        var parsedPicOutline = outline != null ? ParseOutline(outline, themeColors) : null;
         if (outline != null)
         {
-            var borderCss = OutlineToCss(outline, themeColors);
-            if (!string.IsNullOrEmpty(borderCss))
-                styles.Add(borderCss);
+            // Solid (or unparseable) → CSS border as before. Non-solid is deferred to
+            // the SVG overlay appended just before the picture's closing </div>.
+            if (parsedPicOutline == null || parsedPicOutline.Value.dashType == "solid")
+            {
+                var borderCss = OutlineToCss(outline, themeColors);
+                if (!string.IsNullOrEmpty(borderCss))
+                    styles.Add(borderCss);
+            }
+        }
+        else
+        {
+            // Style-matrix lnRef fallback (parity with RenderShape): a "Picture Style"
+            // preset (Picture Format → Picture Styles) encodes its border as
+            // p:style/a:lnRef into the theme line-style matrix with no explicit a:ln.
+            // RenderPicture previously ignored pic.ShapeStyle entirely, so a styled
+            // picture rendered with no border.
+            var lnRefCss = GetStyleLineRefCss(pic.ShapeStyle, slidePart, themeColors);
+            if (!string.IsNullOrEmpty(lnRefCss))
+                styles.Add(lnRefCss);
         }
 
         // Effects: brightness, contrast, glow, shadow, opacity all roll
         // into one CSS `filter` property (drop-shadow / brightness /
         // contrast) so they compose. Mirror the shape renderer above:
         // shadowCss + glowCss merged into filter:..., reflection separate.
-        var effectList = pic.ShapeProperties?.GetFirstChild<Drawing.EffectList>();
+        // Style-matrix effectRef fallback (parity with RenderShape): a Picture Style
+        // preset encodes its shadow/glow as p:style/a:effectRef with no explicit
+        // effectLst — resolve it the same way shapes do.
+        var effectList = pic.ShapeProperties?.GetFirstChild<Drawing.EffectList>()
+            ?? ResolveStyleEffectRefList(pic.ShapeStyle, slidePart);
         var shadowCss = EffectListToShadowCss(effectList, themeColors);
         var glowCss = EffectListToGlowCss(effectList, themeColors);
 
@@ -1187,28 +1565,60 @@ public partial class PowerPointHandler
         string? duotoneFilter = null;
         if (picDuotone != null)
         {
-            var highlight = picDuotone.ChildElements
-                .OfType<Drawing.RgbColorModelHex>()
-                .LastOrDefault()?.Val?.Value;
+            // The highlight (lighter) color is the LAST color child. It may be a
+            // <a:srgbClr> OR a <a:schemeClr> (PowerPoint's built-in duotone presets and
+            // the CLI both write schemeClr). Resolving only srgbClr left schemeClr
+            // duotones at hue 0 (sepia-orange) regardless of the actual accent — a blue
+            // accent duotone previewed orange. Resolve the scheme color via themeColors.
+            var lastColorEl = picDuotone.ChildElements
+                .LastOrDefault(e => e is Drawing.RgbColorModelHex or Drawing.SchemeColor);
+            string? highlight = lastColorEl switch
+            {
+                Drawing.RgbColorModelHex rgbH => rgbH.Val?.Value,
+                Drawing.SchemeColor schH when schH.Val?.InnerText is string sn
+                    && themeColors.TryGetValue(sn, out var shx) => shx,
+                _ => null,
+            };
             var hue = !string.IsNullOrEmpty(highlight) ? RgbHexToHueDeg(highlight!) : 0.0;
             duotoneFilter = $"grayscale(1) sepia(1) saturate(3) hue-rotate({hue:0.#}deg)";
         }
 
+        // Grayscale — Set.Media writes a bare <a:grayscl/> under a:blip,
+        // converting the picture to luminance grayscale (Picture Format →
+        // Color → Recolor → Grayscale). Maps directly to CSS grayscale(1).
+        // grayscl is mutually exclusive with duotone/biLevel in practice;
+        // skip if duotone already supplies a richer (grayscale-inclusive)
+        // filter so we don't emit two conflicting filters.
+        var picGrayscl = picBlipForFx?.GetFirstChild<Drawing.Grayscale>();
+
         var filterParts = new List<string>();
+        var boxShadowParts = new List<string>();
         if (picBiLevel != null)
             filterParts.Add("grayscale(1) contrast(1000%)");
         if (duotoneFilter != null)
             filterParts.Add(duotoneFilter);
+        if (picGrayscl != null && duotoneFilter == null && picBiLevel == null)
+            filterParts.Add("grayscale(1)");
         // CSS brightness(1) = no change; +N% brightness → brightness(1 + N/100).
         if (brightnessPct.HasValue && Math.Abs(brightnessPct.Value) > 0.01)
             filterParts.Add($"brightness({1 + brightnessPct.Value / 100.0:0.###})");
         // CSS contrast(1) = no change; +N% contrast → contrast(1 + N/100).
         if (contrastPct.HasValue && Math.Abs(contrastPct.Value) > 0.01)
             filterParts.Add($"contrast({1 + contrastPct.Value / 100.0:0.###})");
+        // innerShdw returns "box-shadow:inset ..." (no CSS filter equivalent); route
+        // it to boxShadowParts. Outer/preset shadow returns a "filter:..." value.
         if (!string.IsNullOrEmpty(shadowCss))
-            filterParts.Add(shadowCss.Replace("filter:", ""));
+        {
+            if (shadowCss.StartsWith("box-shadow:"))
+                boxShadowParts.Add(shadowCss["box-shadow:".Length..]);
+            else
+                filterParts.Add(shadowCss.Replace("filter:", ""));
+        }
         if (!string.IsNullOrEmpty(glowCss))
             filterParts.Add(glowCss.Replace("filter:", ""));
+        var picBlurCss = EffectListToBlurCss(effectList);
+        if (!string.IsNullOrEmpty(picBlurCss))
+            filterParts.Add(picBlurCss);
         if (filterParts.Count > 0)
             styles.Add($"filter:{string.Join(" ", filterParts)}");
 
@@ -1240,8 +1650,13 @@ public partial class PowerPointHandler
         {
             var bevelW = picSp3d.BevelTop.Width?.HasValue == true ? picSp3d.BevelTop.Width.Value / EmuConverter.EmuPerPointF : 6;
             var bW = Math.Max(1, bevelW * 0.5);
-            styles.Add($"box-shadow:inset {bW:0.#}px {bW:0.#}px {bW * 1.5:0.#}px rgba(255,255,255,0.25),inset -{bW:0.#}px -{bW:0.#}px {bW * 1.5:0.#}px rgba(0,0,0,0.15)");
+            boxShadowParts.Add($"inset {bW:0.#}px {bW:0.#}px {bW * 1.5:0.#}px rgba(255,255,255,0.25),inset -{bW:0.#}px -{bW:0.#}px {bW * 1.5:0.#}px rgba(0,0,0,0.15)");
         }
+
+        // Emit one combined box-shadow (inner shadow + bevel). CSS only honors the
+        // last box-shadow in an inline style, so they must share a single declaration.
+        if (boxShadowParts.Count > 0)
+            styles.Add($"box-shadow:{string.Join(",", boxShadowParts)}");
 
         // Geometry (rounded corners)
         var presetGeom = pic.ShapeProperties?.GetFirstChild<Drawing.PresetGeometry>();
@@ -1250,6 +1665,14 @@ public partial class PowerPointHandler
             var geomCss = PresetGeometryToCss(presetGeom.Preset!.InnerText!, cx, cy, presetGeom);
             if (!string.IsNullOrEmpty(geomCss))
                 styles.Add(geomCss);
+        }
+
+        // Open <a> wrapper for picture-level hyperlink (before the picture <div>).
+        if (!string.IsNullOrEmpty(picHrefUrl))
+        {
+            var tooltipAttr = !string.IsNullOrEmpty(picHrefTooltip)
+                ? $" title=\"{HtmlEncode(picHrefTooltip!)}\"" : "";
+            sb.Append($"    <a class=\"shape-link\" href=\"{HtmlEncode(picHrefUrl!)}\" rel=\"noopener\" target=\"_blank\"{tooltipAttr} style=\"display:contents;cursor:pointer\">");
         }
 
         sb.Append($"    <div class=\"picture\"{dataPathAttr} style=\"{string.Join(";", styles)}\">");
@@ -1275,6 +1698,16 @@ public partial class PowerPointHandler
                     ? "image/svg+xml"
                     : SanitizeContentType(imgPart.ContentType ?? "image/png");
 
+                // EMF/WMF are vector metafiles browsers cannot display via <img> or
+                // background-image — emitting a data:image/x-emf URI shows a broken-image
+                // icon. Emit the graceful placeholder used for other unrenderable images.
+                if (contentType is "image/x-emf" or "image/x-wmf" or "image/emf" or "image/wmf")
+                {
+                    sb.Append("<div style=\"width:100%;height:100%;background:rgba(128,128,128,0.15);display:flex;align-items:center;justify-content:center;color:rgba(128,128,128,0.5);font-size:12px\">Image</div>");
+                }
+                else
+                {
+
                 // Crop — PowerPoint srcRect semantics: select a rectangular region of the
                 // source image, then scale that region to fill the container.
                 // CSS equivalent: render as a <div> with background-image, setting
@@ -1296,6 +1729,18 @@ public partial class PowerPointHandler
                 // default stretched <img>; previously tile was ignored and the
                 // image rendered stretched-to-fit.
                 var tile = blipFill?.GetFirstChild<Drawing.Tile>();
+                // R49-02: <a:stretch><a:fillRect l/t/r/b> insets the stretched
+                // image from each edge (1/1000 percent; can be negative=outset).
+                // PowerPoint scales the image into the inner rect, leaving the
+                // border transparent. CSS: background-size = remaining %, and
+                // background-position derived from the l/t vs r/b split.
+                var stretch = blipFill?.GetFirstChild<Drawing.Stretch>();
+                var fillRect = stretch?.FillRectangle;
+                double frL = (fillRect?.Left?.Value ?? 0) / 1000.0;
+                double frT = (fillRect?.Top?.Value ?? 0) / 1000.0;
+                double frR = (fillRect?.Right?.Value ?? 0) / 1000.0;
+                double frB = (fillRect?.Bottom?.Value ?? 0) / 1000.0;
+                var hasFillRectInset = fillRect != null && (frL != 0 || frT != 0 || frR != 0 || frB != 0);
                 // Degenerate crop: L+R >= 100% or T+B >= 100% means zero/negative
                 // visible area. PowerPoint renders nothing in this case; HTML
                 // preview previously averaged the background-image into a muddy
@@ -1307,7 +1752,48 @@ public partial class PowerPointHandler
                 }
                 else if (tile != null)
                 {
-                    sb.Append($"<div style=\"width:100%;height:100%;background-image:url(data:{contentType};base64,{base64});background-repeat:repeat;background-size:auto\"></div>");
+                    // R49-01: honor <a:tile sx/sy> scale + algn. sx/sy are
+                    // ×1000 percent (30000 → 30%) of the image's NATIVE pixel
+                    // size. CSS background-size:30% is 30% of the container, not
+                    // the image, so a percentage cannot reproduce PowerPoint's
+                    // semantics — instead compute pixel dimensions from the
+                    // decoded image's natural size × ratio. When sx/sy are absent
+                    // keep background-size:auto (native size = the 100% default).
+                    var sx = tile.HorizontalRatio?.Value;
+                    var sy = tile.VerticalRatio?.Value;
+                    string bgSize = "auto";
+                    // 100% (or absent) == native size == auto; only a non-100%
+                    // ratio needs an explicit scaled background-size.
+                    var nonDefaultScale = (sx.HasValue && sx.Value != 100000)
+                        || (sy.HasValue && sy.Value != 100000);
+                    if (nonDefaultScale)
+                    {
+                        var nat = OfficeCli.Core.ImageSource.TryGetDimensions(ms);
+                        var sxPct = (sx ?? 100000) / 100000.0;
+                        var syPct = (sy ?? 100000) / 100000.0;
+                        if (nat != null)
+                            bgSize = $"{nat.Value.Width * sxPct:0.##}px {nat.Value.Height * syPct:0.##}px";
+                        else
+                            // No natural size: fall back to percent-of-container
+                            // (approximate, but still distinct from native auto).
+                            bgSize = $"{sxPct * 100:0.##}% {syPct * 100:0.##}%";
+                    }
+                    var bgPos = TileAlignToBackgroundPosition(tile.Alignment);
+                    sb.Append($"<div style=\"width:100%;height:100%;background-image:url(data:{contentType};base64,{base64});background-repeat:repeat;background-position:{bgPos};background-size:{bgSize}\"></div>");
+                }
+                else if (hasFillRectInset)
+                {
+                    // Image occupies the inner rect (100-l-r) × (100-t-b);
+                    // negative insets bleed outside and are clipped by the
+                    // .picture div's overflow. Position by the l vs r ratio.
+                    var sizeW = Math.Max(100.0 - frL - frR, 0.01);
+                    var sizeH = Math.Max(100.0 - frT - frB, 0.01);
+                    var posDenomX = frL + frR;
+                    var posDenomY = frT + frB;
+                    var posX = posDenomX != 0 ? frL / posDenomX * 100.0 : 0.0;
+                    var posY = posDenomY != 0 ? frT / posDenomY * 100.0 : 0.0;
+                    var bgStyle = $"width:100%;height:100%;overflow:hidden;background-image:url(data:{contentType};base64,{base64});background-repeat:no-repeat;background-size:{sizeW:0.##}% {sizeH:0.##}%;background-position:{posX:0.##}% {posY:0.##}%";
+                    sb.Append($"<div style=\"{bgStyle}\"></div>");
                 }
                 else if (hasCrop)
                 {
@@ -1330,6 +1816,7 @@ public partial class PowerPointHandler
                 {
                     sb.Append($"<img src=\"data:{contentType};base64,{base64}\" loading=\"lazy\">");
                 }
+                } // end else (renderable content type)
             }
             catch
             {
@@ -1346,17 +1833,39 @@ public partial class PowerPointHandler
             sb.Append("<div style=\"width:100%;height:100%;background:rgba(128,128,128,0.15);display:flex;align-items:center;justify-content:center;color:rgba(128,128,128,0.5);font-size:12px\">Linked image</div>");
         }
 
+        // Non-solid outline (dash/dot/dashDot/lgDash...) → accurate SVG stroke-dasharray
+        // overlay, mirroring RenderShape's plain-rect branch. A picture is always a plain
+        // rectangle, so only that branch is needed. The stroke is inset by bw/2 so it sits
+        // inside the content box (matching the solid CSS-border path's visual weight).
+        if (parsedPicOutline != null && parsedPicOutline.Value.dashType != "solid")
+        {
+            var (bw, dt, bc, cap, _, join) = parsedPicOutline.Value;
+            var dashArr = DashTypeToSvgDasharray(dt, bw);
+            var dashAttr = !string.IsNullOrEmpty(dashArr) ? $" stroke-dasharray=\"{dashArr}\"" : "";
+            var linecap = CapToSvgLinecap(cap);
+            var safeColor = CssSanitizeColor(bc);
+            sb.Append("<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\">");
+            sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"{linecap}\" stroke-linejoin=\"{join}\"{dashAttr}/>");
+            sb.Append("</svg>");
+        }
+
         sb.AppendLine("</div>");
+
+        // Close <a> wrapper for picture-level hyperlink.
+        if (!string.IsNullOrEmpty(picHrefUrl))
+            sb.Append("</a>");
     }
 
     // ==================== Connector Rendering ====================
 
     private static void RenderConnector(StringBuilder sb, ConnectionShape cxn, Dictionary<string, string> themeColors, string? dataPath = null,
-        (long x, long y, long cx, long cy)? overridePos = null)
+        (long x, long y, long cx, long cy)? overridePos = null, OpenXmlPart? part = null)
         // R15-1: resolve the connector's txBody (handles the SDK OpenXmlUnknownElement
         // parse) and forward it so the label renders as a centered overlay on the line.
+        // R234: forward ShapeStyle + part so a style-only connector (no <a:ln>) resolves
+        // its lnRef stroke color/width from the theme line-style matrix.
         => RenderConnector(sb, cxn.ShapeProperties, themeColors, dataPath, overridePos,
-            ResolveConnectorTextBody(cxn));
+            ResolveConnectorTextBody(cxn), cxn.ShapeStyle, part);
 
     // Shared SVG line/polyline/path renderer for both <p:cxnSp> connectors and
     // <p:sp> shapes with prst="line". Reads geometry + outline from a
@@ -1368,7 +1877,8 @@ public partial class PowerPointHandler
     // far outside the group div, where it disappears.
     private static void RenderConnector(StringBuilder sb, ShapeProperties? spPr, Dictionary<string, string> themeColors, string? dataPath = null,
         (long x, long y, long cx, long cy)? overridePos = null,
-        DocumentFormat.OpenXml.Presentation.TextBody? cxnTextBody = null)
+        DocumentFormat.OpenXml.Presentation.TextBody? cxnTextBody = null,
+        ShapeStyle? style = null, OpenXmlPart? part = null)
     {
         var xfrm = spPr?.Transform2D;
         if (overridePos == null && (xfrm?.Offset == null || xfrm?.Extents == null)) return;
@@ -1423,6 +1933,20 @@ public partial class PowerPointHandler
             if (outline.CapType?.HasValue == true) lineCap = outline.CapType.InnerText ?? "flat";
             if (outline.CompoundLineType?.HasValue == true) lineCmpd = outline.CompoundLineType.InnerText ?? "sng";
         }
+        else
+        {
+            // Style-matrix lnRef fallback (parity with RenderShape / RenderPicture):
+            // a connector with NO explicit <a:ln> takes its color and weight from
+            // <p:style>/<a:lnRef idx=N> against the theme line-style matrix. Every
+            // default PowerPoint connector is styled this way (typically an accent
+            // color), so without this the line wrongly rendered theme-tx1 black.
+            var stroke = ResolveStyleLineRefStroke(style, part, themeColors);
+            if (stroke != null)
+            {
+                lineColor = stroke.Value.color;
+                lineWidth = stroke.Value.widthPt;
+            }
+        }
 
         // Ensure minimum dimensions so the line is visible
         // For horizontal lines (cy=0), the container needs height for stroke width
@@ -1476,6 +2000,34 @@ public partial class PowerPointHandler
             if (!string.IsNullOrEmpty(dashArray))
                 dashAttr = $" stroke-dasharray=\"{dashArray}\"";
         }
+        else
+        {
+            // CONSISTENCY(dash-presets): <a:custDash> (mutually exclusive with prstDash)
+            // is a list of <a:ds d sp/> stops (ST_PositivePercentage of line width).
+            // Mirror ParseOutline's encoding into "custom:<onMult>,<offMult>,..." and
+            // run it through the same DashTypeToSvgDasharray converter. Without this,
+            // a connector with a custom dash rendered SOLID.
+            var custDash = outline?.GetFirstChild<Drawing.CustomDash>();
+            if (custDash != null)
+            {
+                var ci = System.Globalization.CultureInfo.InvariantCulture;
+                var segs = new List<string>();
+                foreach (var ds in custDash.Elements<Drawing.DashStop>())
+                {
+                    double d = (ds.DashLength?.Value ?? 0) / 100000.0;
+                    double sp = (ds.SpaceLength?.Value ?? 0) / 100000.0;
+                    if (d <= 0 && sp <= 0) continue;
+                    segs.Add(d.ToString("0.##", ci));
+                    segs.Add(sp.ToString("0.##", ci));
+                }
+                if (segs.Count > 0)
+                {
+                    var dashArray = DashTypeToSvgDasharray("custom:" + string.Join(",", segs), lineWidth);
+                    if (!string.IsNullOrEmpty(dashArray))
+                        dashAttr = $" stroke-dasharray=\"{dashArray}\"";
+                }
+            }
+        }
 
         // Arrow markers
         var headEnd = outline?.GetFirstChild<Drawing.HeadEnd>();
@@ -1489,22 +2041,36 @@ public partial class PowerPointHandler
 
         if (hasHead || hasTail)
         {
-            var baseArrowSize = Math.Max(3, lineWidth * 3);
+            // R37-A: marker dimensions are in strokeWidth units (SVG default
+            // markerUnits="strokeWidth"), so the rendered arrowhead size is
+            // markerWidth × strokeWidth. The base must therefore be a SMALL CONSTANT
+            // (NOT multiplied by lineWidth) — otherwise the effective size grows as
+            // O(lineWidth²). A "med" triangle in PowerPoint is ~3-4.5× the stroke width,
+            // so base ≈ 4 gives the right proportion and scales LINEARLY with the line.
+            var baseArrowSize = 4.0;
             // R4-5: scale the marker by the head/tail @w / @len size enum
             // (sm/med/lg) so a large arrowhead renders visibly bigger than the
             // default; previously arrowSize was uniform and ignored @w/@len.
             // ST_LineEndWidth/Length default is "med" → ×1.0.
             static double TokenScale(string? s) => s switch { "sm" => 0.6, "lg" => 1.6, _ => 1.0 };
-            static double ArrowSizeScale(OpenXmlElement? end)
+            // @w (ST_LineEndWidth) = arrowhead width PERPENDICULAR to the line;
+            // @len (ST_LineEndLength) = arrowhead length ALONG the line. They are
+            // independent — a "w=lg len=sm" head is wide but short. Return both
+            // scales so the marker can be a rectangle, not a Math.Max square.
+            static (double lenScale, double wScale) ArrowSizeScales(OpenXmlElement? end)
             {
-                if (end == null) return 1.0;
+                if (end == null) return (1.0, 1.0);
                 var attrs = end.GetAttributes();
                 var w = attrs.FirstOrDefault(a => a.LocalName == "w").Value;
                 var l = attrs.FirstOrDefault(a => a.LocalName == "len").Value;
-                return Math.Max(TokenScale(w), TokenScale(l));
+                return (TokenScale(l), TokenScale(w));
             }
-            var headArrowSize = baseArrowSize * ArrowSizeScale(headEnd);
-            var tailArrowSize = baseArrowSize * ArrowSizeScale(tailEnd);
+            var (headLenScale, headWScale) = ArrowSizeScales(headEnd);
+            var (tailLenScale, tailWScale) = ArrowSizeScales(tailEnd);
+            var headLen = baseArrowSize * headLenScale;
+            var headW = baseArrowSize * headWScale;
+            var tailLen = baseArrowSize * tailLenScale;
+            var tailW = baseArrowSize * tailWScale;
             var defs = new StringBuilder();
             defs.Append("<defs>");
             // BUG1(marker-id-collision): marker ids are document-global in HTML even when each
@@ -1520,13 +2086,13 @@ public partial class PowerPointHandler
             if (hasHead)
             {
                 var hid = $"ah{markerSeq}";
-                defs.Append($"<marker id=\"{hid}\" markerWidth=\"{headArrowSize:0.#}\" markerHeight=\"{headArrowSize:0.#}\" refX=\"{headArrowSize:0.#}\" refY=\"{headArrowSize / 2:0.#}\" orient=\"auto-start-reverse\">{ArrowMarkerGeometry(headEnd!.Type!.InnerText ?? "triangle", headArrowSize, safeColor)}</marker>");
+                defs.Append($"<marker id=\"{hid}\" markerWidth=\"{headLen:0.#}\" markerHeight=\"{headW:0.#}\" refX=\"{headLen:0.#}\" refY=\"{headW / 2:0.#}\" orient=\"auto-start-reverse\">{ArrowMarkerGeometry(headEnd!.Type!.InnerText ?? "triangle", headLen, headW, safeColor)}</marker>");
                 markerStartAttr = $" marker-start=\"url(#{hid})\"";
             }
             if (hasTail)
             {
                 var tid = $"at{markerSeq}";
-                defs.Append($"<marker id=\"{tid}\" markerWidth=\"{tailArrowSize:0.#}\" markerHeight=\"{tailArrowSize:0.#}\" refX=\"{tailArrowSize:0.#}\" refY=\"{tailArrowSize / 2:0.#}\" orient=\"auto\">{ArrowMarkerGeometry(tailEnd!.Type!.InnerText ?? "triangle", tailArrowSize, safeColor)}</marker>");
+                defs.Append($"<marker id=\"{tid}\" markerWidth=\"{tailLen:0.#}\" markerHeight=\"{tailW:0.#}\" refX=\"{tailLen:0.#}\" refY=\"{tailW / 2:0.#}\" orient=\"auto\">{ArrowMarkerGeometry(tailEnd!.Type!.InnerText ?? "triangle", tailLen, tailW, safeColor)}</marker>");
                 markerEndAttr = $" marker-end=\"url(#{tid})\"";
             }
             defs.Append("</defs>");
@@ -1582,7 +2148,33 @@ public partial class PowerPointHandler
         var cxnRotTransform = "";
         if (xfrm?.Rotation != null && xfrm.Rotation.Value != 0)
             cxnRotTransform = $";transform:rotate({xfrm.Rotation.Value / 60000.0:0.##}deg)";
-        sb.AppendLine($"    <div class=\"connector\"{dataPathAttr} style=\"left:{Units.EmuToPt(renderX)}pt;top:{Units.EmuToPt(renderY)}pt;width:{widthPt}pt;height:{heightPt}pt{cxnRotTransform}\">");
+        // Effects (outer shadow / glow / blur) — connectors carry a:effectLst on their
+        // spPr just like shapes/pictures and PowerPoint renders the shadow beneath the
+        // line. RenderConnector previously dropped it entirely; mirror the shape path
+        // (the SVG sits in an overflow:visible div, so filter:drop-shadow applies to the
+        // stroke). Inner shadow has no CSS-filter equivalent on a line, so skip it.
+        var cxnEffectList = spPr?.GetFirstChild<Drawing.EffectList>();
+        // Style-matrix fallback: when the connector's spPr carries no explicit
+        // <a:effectLst>, resolve its <p:style>/<a:effectRef> against the theme
+        // EffectStyleList — exactly as the shape (RenderShape ~line 347) and
+        // picture (~line 1508) paths already do. A connector styled via the
+        // "Shadow"/effect connector-style gallery stores its shadow in effectRef,
+        // not in spPr; without this fallback PowerPoint draws the shadow but the
+        // preview dropped it. Explicit spPr effects still win.
+        if (cxnEffectList == null && part != null)
+            cxnEffectList = ResolveStyleEffectRefList(style, part);
+        var cxnFilterParts = new List<string>();
+        var cxnShadowCss = EffectListToShadowCss(cxnEffectList, themeColors);
+        if (!string.IsNullOrEmpty(cxnShadowCss) && !cxnShadowCss.StartsWith("box-shadow:"))
+            cxnFilterParts.Add(cxnShadowCss.Replace("filter:", ""));
+        var cxnGlowCss = EffectListToGlowCss(cxnEffectList, themeColors);
+        if (!string.IsNullOrEmpty(cxnGlowCss))
+            cxnFilterParts.Add(cxnGlowCss.Replace("filter:", ""));
+        var cxnBlurCss = EffectListToBlurCss(cxnEffectList);
+        if (!string.IsNullOrEmpty(cxnBlurCss))
+            cxnFilterParts.Add(cxnBlurCss);
+        var cxnFilter = cxnFilterParts.Count > 0 ? $";filter:{string.Join(" ", cxnFilterParts)}" : "";
+        sb.AppendLine($"    <div class=\"connector\"{dataPathAttr} style=\"left:{Units.EmuToPt(renderX)}pt;top:{Units.EmuToPt(renderY)}pt;width:{widthPt}pt;height:{heightPt}pt{cxnRotTransform}{cxnFilter}\">");
 
         if (preset.StartsWith("bentConnector", StringComparison.Ordinal))
         {
@@ -1591,12 +2183,38 @@ public partial class PowerPointHandler
             // bentConnector2: single 90-degree bend (2 segments, 3 points).
             // bentConnector3 (default): 3 segments with mid bend — (0,0) -> (50,0) -> (50,100) -> (100,100).
             // bentConnector4/5: approximate with 25/75 splits when no adjustments set.
-            string points = preset switch
+            // The elbow position(s) are driven by avLst adjusts (a user dragging the
+            // elbow handle writes <a:gd name="adjN" fmla="val P"/>, P in 1/100000).
+            // Previously the elbows were hardcoded (50% for bentConnector3; 25/50/75 for
+            // 4/5), so any non-default elbow rendered in the wrong place.
+            var ci = System.Globalization.CultureInfo.InvariantCulture;
+            double ConnAdj(string name, double def)
             {
-                "bentConnector2" => "0,0 100,0 100,100",
-                "bentConnector4" or "bentConnector5" => "0,0 25,0 25,50 75,50 75,100 100,100",
-                _ => "0,0 50,0 50,100 100,100", // bentConnector3
-            };
+                var f = prstGeom?.GetFirstChild<Drawing.AdjustValueList>()?.Elements<Drawing.ShapeGuide>()
+                    .FirstOrDefault(g => g.Name?.Value == name)?.Formula?.Value;
+                if (f != null && f.StartsWith("val ", StringComparison.Ordinal)
+                    && double.TryParse(f.AsSpan(4), System.Globalization.NumberStyles.Float, ci, out var v))
+                    return v / 100000.0 * 100.0;
+                return def;
+            }
+            string N(double v) => v.ToString("0.##", ci);
+            string points;
+            if (preset == "bentConnector2")
+                points = "0,0 100,0 100,100";
+            else if (preset is "bentConnector4" or "bentConnector5")
+            {
+                var a1 = ConnAdj("adj1", 25); var a2 = ConnAdj("adj2", 50); var a3 = ConnAdj("adj3", 75);
+                points = $"0,0 {N(a1)},0 {N(a1)},{N(a2)} {N(a3)},{N(a2)} {N(a3)},100 100,100";
+            }
+            else // bentConnector3
+            {
+                var ex = ConnAdj("adj1", 50);
+                points = $"0,0 {N(ex)},0 {N(ex)},100 100,100";
+            }
+            // R27: mirror the polyline in the 0..100 viewBox when flipH/flipV is
+            // set so a flipped elbow lands on the shape edges (the straight branch
+            // already flips via svgX1/Y1/X2/Y2). flipH → x'=100-x, flipV → y'=100-y.
+            points = MirrorConnectorPoints(points, flipH, flipV);
             sb.AppendLine("      <svg width=\"100%\" height=\"100%\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\" style=\"overflow:visible;display:block\">");
             if (!string.IsNullOrEmpty(markerDefs))
                 sb.AppendLine($"        {markerDefs}");
@@ -1615,6 +2233,9 @@ public partial class PowerPointHandler
                 "curvedConnector4" or "curvedConnector5" => "M 0,0 C 25,0 25,50 50,50 C 75,50 75,100 100,100",
                 _ => "M 0,0 C 50,0 50,100 100,100", // curvedConnector3
             };
+            // R27: mirror the bezier control points in the 0..100 viewBox when
+            // flipH/flipV is set (parity with the bent + straight branches).
+            d = MirrorConnectorPath(d, flipH, flipV);
             sb.AppendLine("      <svg width=\"100%\" height=\"100%\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\" style=\"overflow:visible;display:block\">");
             if (!string.IsNullOrEmpty(markerDefs))
                 sb.AppendLine($"        {markerDefs}");
@@ -1645,7 +2266,60 @@ public partial class PowerPointHandler
         sb.AppendLine("    </div>");
     }
 
+    // R27: mirror a "x,y x,y ..." polyline-points string in the 0..100 viewBox.
+    // flipH → x'=100-x; flipV → y'=100-y. Both axes are applied independently so
+    // a bent/curved connector flips to the same orientation real PowerPoint routes.
+    private static string MirrorConnectorPoints(string points, bool flipH, bool flipV)
+    {
+        if (!flipH && !flipV) return points;
+        var pairs = points.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < pairs.Length; i++)
+        {
+            var xy = pairs[i].Split(',');
+            if (xy.Length != 2) continue;
+            if (flipH && double.TryParse(xy[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var px))
+                xy[0] = (100 - px).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            if (flipV && double.TryParse(xy[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var py))
+                xy[1] = (100 - py).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            pairs[i] = $"{xy[0]},{xy[1]}";
+        }
+        return string.Join(' ', pairs);
+    }
+
+    // R27: mirror an SVG path "d" of the form "M x,y C/Q x,y x,y x,y" — the
+    // command letters (M/C/Q) pass through; every "x,y" coordinate token is
+    // mirrored via MirrorConnectorPoints' per-pair logic.
+    private static string MirrorConnectorPath(string d, bool flipH, bool flipV)
+    {
+        if (!flipH && !flipV) return d;
+        var tokens = d.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < tokens.Length; i++)
+        {
+            if (!tokens[i].Contains(',')) continue; // command letter (M/C/Q)
+            tokens[i] = MirrorConnectorPoints(tokens[i], flipH, flipV);
+        }
+        return string.Join(' ', tokens);
+    }
+
     // ==================== Group Rendering ====================
+
+    // CONSISTENCY(shape-group-parity): build the group container transform from
+    // rotation + flip, mirroring RenderShape (rotate before scale). A flipped
+    // group mirrors all its children in real PowerPoint, so the container div
+    // must carry the flip too. Returns "" or ";transform:...".
+    private static string BuildGroupTransform(Drawing.TransformGroup? grpXfrm)
+    {
+        var parts = new List<string>();
+        if (grpXfrm?.Rotation != null && grpXfrm.Rotation.Value != 0)
+            parts.Add($"rotate({grpXfrm.Rotation.Value / 60000.0:0.##}deg)");
+        if (grpXfrm?.HorizontalFlip?.Value == true && grpXfrm.VerticalFlip?.Value == true)
+            parts.Add("scale(-1,-1)");
+        else if (grpXfrm?.HorizontalFlip?.Value == true)
+            parts.Add("scaleX(-1)");
+        else if (grpXfrm?.VerticalFlip?.Value == true)
+            parts.Add("scaleY(-1)");
+        return parts.Count > 0 ? $";transform:{string.Join(" ", parts)}" : "";
+    }
 
     private void RenderGroup(StringBuilder sb, GroupShape grp, OpenXmlPart slidePart, Dictionary<string, string> themeColors, string? dataPath = null)
     {
@@ -1674,9 +2348,7 @@ public partial class PowerPointHandler
         // (transform:rotate(Ndeg)). OOXML group rotation rotates children as a composite
         // around the group's bounding-box center; CSS default transform-origin (50% 50%)
         // matches this.
-        var grpTransform = "";
-        if (grpXfrm?.Rotation != null && grpXfrm.Rotation.Value != 0)
-            grpTransform = $";transform:rotate({grpXfrm.Rotation.Value / 60000.0:0.##}deg)";
+        var grpTransform = BuildGroupTransform(grpXfrm);
         sb.AppendLine($"    <div class=\"group\"{dataPathAttr} style=\"left:{Units.EmuToPt(x)}pt;top:{Units.EmuToPt(y)}pt;width:{Units.EmuToPt(cx)}pt;height:{Units.EmuToPt(cy)}pt{grpTransform}\">");
 
         foreach (var child in grp.ChildElements)
@@ -1720,7 +2392,7 @@ public partial class PowerPointHandler
                     // placed the connector far outside the group (invisible).
                     var pos = CalcGroupChildPos(cxn.ShapeProperties?.Transform2D, offX, offY, scaleX, scaleY);
                     if (pos.HasValue)
-                        RenderConnector(sb, cxn, themeColors, dataPath: null, overridePos: pos);
+                        RenderConnector(sb, cxn, themeColors, dataPath: null, overridePos: pos, part: slidePart);
                     break;
                 }
                 case GraphicFrame gf:
@@ -1732,7 +2404,7 @@ public partial class PowerPointHandler
                     if (pos.HasValue)
                     {
                         if (gf.Descendants<Drawing.Table>().Any())
-                            RenderTable(sb, gf, themeColors, dataPath: null, overridePos: pos);
+                            RenderTable(sb, gf, themeColors, dataPath: null, overridePos: pos, part: slidePart);
                         else if (slidePart is SlidePart sp)
                             RenderChart(sb, gf, sp, themeColors, dataPath: null, overridePos: pos);
                     }
@@ -1807,9 +2479,7 @@ public partial class PowerPointHandler
         var offY = childOff?.Y?.Value ?? 0;
 
         // CONSISTENCY(group-rotation): same idiom as RenderGroup
-        var grpTransform = "";
-        if (grpXfrm?.Rotation != null && grpXfrm.Rotation.Value != 0)
-            grpTransform = $";transform:rotate({grpXfrm.Rotation.Value / 60000.0:0.##}deg)";
+        var grpTransform = BuildGroupTransform(grpXfrm);
         sb.AppendLine($"    <div class=\"group\" style=\"left:{Units.EmuToPt(x)}pt;top:{Units.EmuToPt(y)}pt;width:{Units.EmuToPt(cx)}pt;height:{Units.EmuToPt(cy)}pt{grpTransform}\">");
 
         foreach (var child in grp.ChildElements)
@@ -1848,7 +2518,7 @@ public partial class PowerPointHandler
                     // CONSISTENCY(group-child-pos): see RenderGroup ConnectionShape branch.
                     var pos = CalcGroupChildPos(cxn.ShapeProperties?.Transform2D, offX, offY, scaleX, scaleY);
                     if (pos.HasValue)
-                        RenderConnector(sb, cxn, themeColors, dataPath: null, overridePos: pos);
+                        RenderConnector(sb, cxn, themeColors, dataPath: null, overridePos: pos, part: slidePart);
                     break;
                 }
                 case GraphicFrame gf:
@@ -1858,7 +2528,7 @@ public partial class PowerPointHandler
                     if (pos.HasValue)
                     {
                         if (gf.Descendants<Drawing.Table>().Any())
-                            RenderTable(sb, gf, themeColors, dataPath: null, overridePos: pos);
+                            RenderTable(sb, gf, themeColors, dataPath: null, overridePos: pos, part: slidePart);
                         else if (slidePart is SlidePart sp)
                             RenderChart(sb, gf, sp, themeColors, dataPath: null, overridePos: pos);
                     }
@@ -1923,27 +2593,33 @@ public partial class PowerPointHandler
     private static int _markerCounter;
 
     // Build the SVG geometry for an arrowhead marker of the given OOXML end type.
-    // Coordinate space: viewBox 0..arrowSize, line enters from the left, tip at the right
-    // (refX=arrowSize, refY=arrowSize/2). marker-start flips this via orient.
-    private static string ArrowMarkerGeometry(string endType, double arrowSize, string color)
+    // Coordinate space: 0..len along the line (x), 0..width perpendicular (y); line
+    // enters from the left, tip at the right (refX=len, refY=width/2). The two
+    // dimensions are independent so @w (width) and @len (length) render with the
+    // correct aspect ratio — a wide-but-short arrowhead is NOT an equilateral one.
+    // marker-start flips this via orient.
+    private static string ArrowMarkerGeometry(string endType, double len, double width, string color)
     {
-        var s = arrowSize;
-        var h = arrowSize / 2;
+        var s = len;            // extent along the line (x)
+        var w = width;          // extent perpendicular (y)
+        var h = width / 2;      // perpendicular centre
+        var m = len / 2;        // mid along the line
         return endType switch
         {
             // Rhombus centered on the tip: left, top, right, bottom vertices.
-            "diamond" => $"<polygon points=\"0 {h:0.#},{h:0.#} 0,{s:0.#} {h:0.#},{h:0.#} {s:0.#}\" fill=\"{color}\"/>",
-            // Filled circle sitting at the line end.
-            "oval" => $"<circle cx=\"{h:0.#}\" cy=\"{h:0.#}\" r=\"{h:0.#}\" fill=\"{color}\"/>",
+            "diamond" => $"<polygon points=\"0 {h:0.#},{m:0.#} 0,{s:0.#} {h:0.#},{m:0.#} {w:0.#}\" fill=\"{color}\"/>",
+            // Filled ellipse sitting at the line end (circle when len==width).
+            "oval" => $"<ellipse cx=\"{m:0.#}\" cy=\"{h:0.#}\" rx=\"{m:0.#}\" ry=\"{h:0.#}\" fill=\"{color}\"/>",
             // Concave/notched arrow: triangle with a notch cut into the back edge.
-            "stealth" => $"<polygon points=\"0 0,{s:0.#} {h:0.#},0 {s:0.#},{h:0.#} {h:0.#}\" fill=\"{color}\"/>",
-            // Slimmer, more-pointed arrowhead (➜): narrower base than the wide triangle
-            // plus a shallow concave back edge, so it reads as a pointed open arrow rather
-            // than a wide solid wedge. Back vertices pulled inward (x=h/2) toward a center
-            // notch at (h,h); tip at the right (s,h). All coords stay within 0..s.
-            "arrow" => $"<polygon points=\"{h / 2:0.#} 0,{s:0.#} {h:0.#},{h / 2:0.#} {s:0.#},{h:0.#} {h:0.#}\" fill=\"{color}\"/>",
-            // triangle / default: wide right-pointing solid triangle (▶).
-            _ => $"<polygon points=\"0 0,{s:0.#} {h:0.#},0 {s:0.#}\" fill=\"{color}\"/>",
+            "stealth" => $"<polygon points=\"0 0,{s:0.#} {h:0.#},0 {w:0.#},{m:0.#} {h:0.#}\" fill=\"{color}\"/>",
+            // R37-B: OOXML type="arrow" is an OPEN arrowhead — two strokes meeting at the
+            // tip (like ">"), NOT a filled area. Emit an open chevron via <polyline> with
+            // fill="none" and an explicit stroke (the marker's internal coordinate space does
+            // not inherit the outer line's stroke-width, so set it explicitly ≈ width/6).
+            // Back corners at (0,0) and (0,w), tip at the right (s,h).
+            "arrow" => $"<polyline points=\"0 0,{s:0.#} {h:0.#},0 {w:0.#}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"{w / 6:0.##}\"/>",
+            // triangle / default: right-pointing solid triangle (▶).
+            _ => $"<polygon points=\"0 0,{s:0.#} {h:0.#},0 {w:0.#}\" fill=\"{color}\"/>",
         };
     }
 
@@ -2202,6 +2878,135 @@ public partial class PowerPointHandler
     /// the slide canvas is not silently empty and selection has a data-path
     /// to bind to.
     /// </summary>
+    // SmartArt (diagram) GraphicFrame. Prefer rendering the cached dsp drawing
+    // part (the fully laid-out <dsp:sp> shapes). Resolve chain:
+    //   gf → dgm:relIds/@r:dm → DiagramDataPart
+    //   data part → <dsp:dataModelExt @relId> → DiagramPersistLayoutPart (slide rel)
+    //   drawing part → <dsp:spTree> with <dsp:sp> shapes
+    // Each <dsp:sp> is structurally identical to <p:sp>; we namespace-swap the
+    // drawing XML to the presentation namespace, reparse into a ShapeTree, and
+    // reuse RenderShape. dsp shape xfrm offsets are in the diagram's own space,
+    // which (per the dsp drawing contract) shares the graphicFrame's EMU origin,
+    // so we offset each shape by the frame's top-left. When the drawing part is
+    // absent/unresolvable, fall back to a labeled placeholder (mirrors
+    // RenderOlePlaceholder) so the SmartArt is never silently invisible.
+    private void RenderSmartArt(StringBuilder sb, GraphicFrame gf, OpenXmlPart slidePart,
+        Dictionary<string, string> themeColors, string? dataPath = null)
+    {
+        var xfrm = gf.Transform;
+        var fx = xfrm?.Offset?.X?.Value ?? 0;
+        var fy = xfrm?.Offset?.Y?.Value ?? 0;
+        var fcx = xfrm?.Extents?.Cx?.Value ?? 0;
+        var fcy = xfrm?.Extents?.Cy?.Value ?? 0;
+
+        var drawingPart = TryResolveDiagramDrawingPart(gf, slidePart);
+        if (drawingPart != null)
+        {
+            try
+            {
+                string raw;
+                using (var s = drawingPart.GetStream(FileMode.Open, FileAccess.Read))
+                using (var r = new StreamReader(s))
+                    raw = r.ReadToEnd();
+
+                // Swap the dsp namespace to the presentation namespace so <dsp:sp>
+                // (and its nvSpPr/spPr/txBody) reparse as p:sp / Shape, and the
+                // drawing/spTree roots as p:cSld/p:spTree. dsp shares the same
+                // child element local-names + Drawing (a:) children as p:.
+                const string dspNs = "http://schemas.microsoft.com/office/drawing/2008/diagram";
+                const string pNs = "http://schemas.openxmlformats.org/presentationml/2006/main";
+                // Swap both the element prefix (<dsp:spTree> → <p:spTree>, and the
+                // xmlns:dsp= declaration → xmlns:p=) AND the namespace URI. Replacing
+                // only the URI leaves the elements as <dsp:...>, so the spTree
+                // extraction below would never match (dead drawing-render path).
+                var swapped = raw.Replace("dsp:", "p:").Replace(dspNs, pNs);
+
+                // Wrap the spTree in a throwaway slide so reparse yields a Slide we
+                // can walk for Shape children. The dsp drawing root is <dsp:drawing>
+                // with a <dsp:spTree>; after the swap it's <p:drawing>/<p:spTree>.
+                // Extract just the spTree subtree and host it in a minimal p:sld.
+                int treeStart = swapped.IndexOf("<p:spTree", StringComparison.Ordinal);
+                int treeEnd = swapped.LastIndexOf("</p:spTree>", StringComparison.Ordinal);
+                if (treeStart >= 0 && treeEnd > treeStart)
+                {
+                    var treeXml = swapped.Substring(treeStart, treeEnd - treeStart + "</p:spTree>".Length);
+                    var sldXml =
+                        $"<p:sld xmlns:p=\"{pNs}\" " +
+                        "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
+                        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+                        "<p:cSld>" + treeXml + "</p:cSld></p:sld>";
+                    var slide = new Slide(sldXml);
+                    var spTree = slide.CommonSlideData?.ShapeTree;
+                    if (spTree != null)
+                    {
+                        bool emittedAny = false;
+                        bool dpUsed = false;
+                        foreach (var shape in spTree.Elements<Shape>())
+                        {
+                            var sx = shape.ShapeProperties?.Transform2D?.Offset?.X?.Value ?? 0;
+                            var sy = shape.ShapeProperties?.Transform2D?.Offset?.Y?.Value ?? 0;
+                            var scx = shape.ShapeProperties?.Transform2D?.Extents?.Cx?.Value ?? 0;
+                            var scy = shape.ShapeProperties?.Transform2D?.Extents?.Cy?.Value ?? 0;
+                            // The dsp spTree origin maps to the frame origin; offset
+                            // each shape's local position by the frame's top-left.
+                            var pos = (x: fx + sx, y: fy + sy, cx: scx, cy: scy);
+                            RenderShape(sb, shape, slidePart, themeColors, overridePos: pos,
+                                dataPath: dpUsed ? null : dataPath);
+                            dpUsed = true;
+                            emittedAny = true;
+                        }
+                        if (emittedAny) return;
+                    }
+                }
+            }
+            catch { /* fall through to placeholder */ }
+        }
+
+        // Fallback: labeled placeholder so the element is never silently invisible.
+        var leftPt = Units.EmuToPt(fx);
+        var topPt = Units.EmuToPt(fy);
+        var widthPt = Units.EmuToPt(fcx);
+        var heightPt = Units.EmuToPt(fcy);
+        var dpAttr = string.IsNullOrEmpty(dataPath) ? "" : $" data-path=\"{HtmlEncode(dataPath)}\"";
+        sb.AppendLine($"    <div class=\"smartart-placeholder\"{dpAttr} style=\"position:absolute;" +
+            $"left:{leftPt:0.##}pt;top:{topPt:0.##}pt;" +
+            $"width:{widthPt:0.##}pt;height:{heightPt:0.##}pt;" +
+            $"border:2px dashed rgba(108,117,125,0.6);border-radius:4px;" +
+            $"display:flex;align-items:center;justify-content:center;" +
+            $"font:11pt sans-serif;color:#495057;background:rgba(248,249,250,0.7);" +
+            $"overflow:hidden;text-align:center;padding:4px;box-sizing:border-box;\">" +
+            $"SmartArt</div>");
+    }
+
+    // Resolve the dsp cached-drawing part for a SmartArt graphicFrame, or null.
+    private static DiagramPersistLayoutPart? TryResolveDiagramDrawingPart(GraphicFrame gf, OpenXmlPart slidePart)
+    {
+        try
+        {
+            const string dgmNs = "http://schemas.openxmlformats.org/drawingml/2006/diagram";
+            const string dspNs = "http://schemas.microsoft.com/office/drawing/2008/diagram";
+            var relIds = gf.Descendants().FirstOrDefault(e =>
+                e.LocalName == "relIds" && e.NamespaceUri == dgmNs);
+            if (relIds == null) return null;
+            string? dataRid = null;
+            foreach (var a in relIds.GetAttributes())
+                if (a.LocalName == "dm") { dataRid = a.Value; break; }
+            if (string.IsNullOrEmpty(dataRid)) return null;
+
+            if (slidePart.GetPartById(dataRid!) is not DiagramDataPart dataPart) return null;
+            var ext = dataPart.DataModelRoot?.Descendants().FirstOrDefault(e =>
+                e.LocalName == "dataModelExt" && e.NamespaceUri == dspNs);
+            string? drawingRelId = null;
+            if (ext != null)
+                foreach (var a in ext.GetAttributes())
+                    if (a.LocalName == "relId") { drawingRelId = a.Value; break; }
+            if (string.IsNullOrEmpty(drawingRelId)) return null;
+
+            return slidePart.GetPartById(drawingRelId!) as DiagramPersistLayoutPart;
+        }
+        catch { return null; }
+    }
+
     private static void RenderOlePlaceholder(StringBuilder sb, GraphicFrame gf, OpenXmlPart slidePart, string? dataPath = null)
     {
         var xfrm = gf.Transform;

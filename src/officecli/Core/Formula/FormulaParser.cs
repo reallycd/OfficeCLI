@@ -53,26 +53,38 @@ internal static class FormulaParser
     // hint; the tree walkers throw CliException).
     [ThreadStatic] private static int _groupDepth;
 
-    // Optional per-call sink for LaTeX tokens the parser did not recognise
-    // (unknown \command and unknown \begin{env}). Thread-static so the recursive
-    // descent needn't thread a collector parameter through every builder; set by
-    // the collector-aware Parse overload and restored afterwards (re-entrant).
-    // Null means "don't collect" — the common 1-arg path pays nothing.
-    [ThreadStatic] private static List<string>? _unrecognized;
+    // Collector for LaTeX commands / environments that the parser does not
+    // recognize and silently renders as literal text. Threaded as a
+    // [ThreadStatic] field (same convention as _groupDepth) rather than a
+    // parameter so the many recursive parse helpers stay untouched. When
+    // non-null, the two text-fallback sites (unknown command default arm,
+    // unknown environment arm) append the token here. The CLI/handler layer
+    // then surfaces these as `unrecognized_latex_command` warnings, mirroring
+    // the `unsupported_property` UX (warning + JSON envelope + exit 2). Lenient
+    // accept is preserved: the text fallback still happens regardless.
+    [ThreadStatic] private static ICollection<string>? _unrecognized;
+
+    private static void RecordUnrecognized(string token)
+    {
+        var sink = _unrecognized;
+        if (sink == null) return;
+        // De-duplicate so a command used twice is reported once.
+        if (!sink.Contains(token)) sink.Add(token);
+    }
 
     public static OpenXmlElement Parse(string latex) => Parse(latex, null);
 
     /// <summary>
-    /// Parse LaTeX to OMML, additionally recording any unrecognised tokens into
-    /// <paramref name="warnings"/>. Each entry is the source form the parser fell
-    /// back on: an unknown command as <c>\cmd</c>, an unknown environment as
-    /// <c>\begin{env}</c>. Recognised syntax adds nothing. Pass <c>null</c> (or use
-    /// the single-argument overload) to skip collection.
+    /// Parse LaTeX to OMML, additionally collecting any unrecognized commands
+    /// or environments into <paramref name="unrecognized"/> (de-duplicated).
+    /// Unknown tokens are still rendered as literal text (lenient accept); the
+    /// collector is purely a diagnostics out-channel so callers can surface a
+    /// visible warning. Pass <c>null</c> for the legacy no-diagnostics behavior.
     /// </summary>
-    public static OpenXmlElement Parse(string latex, List<string>? warnings)
+    public static OpenXmlElement Parse(string latex, ICollection<string>? unrecognized)
     {
-        var previous = _unrecognized;
-        _unrecognized = warnings;
+        var prevUnrecognized = _unrecognized;
+        _unrecognized = unrecognized;
         try
         {
             // Preprocess: fix double-escaped backslashes (common AI/JSON over-escaping)
@@ -94,6 +106,15 @@ internal static class FormulaParser
             FlattenNestedOfficeMath(root);
             return root;
         }
+        catch (FormulaParseException)
+        {
+            // A FormulaParseException thrown from inside the parser (e.g. the
+            // depth guard at ParseGroup) already carries the KaTeX hint.
+            // Re-wrapping it here would append the hint a second time, so let
+            // it propagate unchanged. Only foreign exceptions get the wrap +
+            // hint below.
+            throw;
+        }
         catch (Exception ex)
         {
             throw new FormulaParseException(
@@ -101,7 +122,42 @@ internal static class FormulaParser
         }
         finally
         {
-            _unrecognized = previous;
+            _unrecognized = prevUnrecognized;
+        }
+    }
+
+    /// <summary>
+    /// Lenient parse for the handler add/set paths. Behaves exactly like
+    /// <see cref="Parse(string, ICollection{string}?)"/> but, instead of
+    /// throwing a <see cref="FormulaParseException"/> (which would propagate to
+    /// exit 1 and, in a batch, fail the WHOLE batch), it RECORDS the failure on
+    /// the same diagnostics channel used for unrecognized commands and returns a
+    /// minimal valid placeholder <m:oMath> carrying the literal source text.
+    /// R3-fuzz-1: this makes a too-deep / unparseable equation consistent with
+    /// the unrecognized-command model — a visible warning + exit 2 + a graceful
+    /// lenient write — rather than an exit-1 hard failure that sinks the batch.
+    /// </summary>
+    public static OpenXmlElement ParseLenient(string latex, ICollection<string>? unrecognized)
+    {
+        try
+        {
+            return Parse(latex, unrecognized);
+        }
+        catch (FormulaParseException ex)
+        {
+            // Surface the failure through the unrecognized channel so the CLI/
+            // resident layer maps it to the unrecognized_latex_command warning
+            // + exit 2 (same UX as an unknown command). The message already
+            // carries the KaTeX hint.
+            unrecognized?.Add(ex.Message);
+            // Lenient write: a minimal valid <m:oMath> with one empty run. We do
+            // NOT echo the source text — an unparseable formula may be enormous
+            // (a depth-bomb) or contain XML-illegal control chars (e.g. 0x0C),
+            // which would make the saved part itself invalid and throw at save
+            // time (re-introducing the exit-1 failure this fix removes). An
+            // empty placeholder keeps the element present and the file valid.
+            return new M.OfficeMath(
+                new M.Run(new M.Text("") { Space = SpaceProcessingModeValues.Preserve }));
         }
     }
 
@@ -142,7 +198,26 @@ internal static class FormulaParser
     {
         while (true)
         {
-            var idx = latex.IndexOf("\\over");
+            // R4-fuzz-1: match the STANDALONE \over primitive only, never the
+            // \over PREFIX of a longer command (\overbrace, \overline, \overset,
+            // \overleftarrow, \overrightarrow, \overleftrightarrow, …). A bare
+            // string IndexOf("\\over") matched those prefixes, splitting e.g.
+            // {\overbrace{x}} into \frac{}{...} and corrupting the math. The
+            // exact \over token is "\over" NOT immediately followed by an ASCII
+            // letter (it is followed by a space, '{', digit, '\', etc.). Scan
+            // forward past any prefix matches.
+            int idx = -1;
+            int searchFrom = 0;
+            while (true)
+            {
+                var cand = latex.IndexOf("\\over", searchFrom, StringComparison.Ordinal);
+                if (cand < 0) break;
+                int after = cand + 5;
+                char next = after < latex.Length ? latex[after] : '\0';
+                bool nextIsAsciiLetter = (next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z');
+                if (!nextIsAsciiLetter) { idx = cand; break; }
+                searchFrom = cand + 5; // skip this \over... prefix and keep looking
+            }
             if (idx < 0) break;
 
             // Find the opening brace that contains \over
@@ -289,8 +364,22 @@ internal static class FormulaParser
                         // rather than \text{sin}. CONSISTENCY(formula-funcname):
                         // keep this set in sync with the upright-name list in
                         // ParseCommand's "lim or sin or cos ..." arm.
+                        //
+                        // A m:nor run carrying a weight/script axis is a
+                        // \textbf/\textit/\texttt/\textsf (the text-styling
+                        // family); reverse to the matching command. \emph
+                        // collapses to \textit (same italic axis), like other
+                        // canonical-equivalent collapses.
                         if (_uprightFunctionNames.Contains(text))
                             result = "\\" + text;
+                        else if (styVal == "b")
+                            result = $"\\textbf{{{EscapeLatex(text)}}}";
+                        else if (styVal == "i" || styVal == "bi")
+                            result = $"\\textit{{{EscapeLatex(text)}}}";
+                        else if (scrVal == "monospace")
+                            result = $"\\texttt{{{EscapeLatex(text)}}}";
+                        else if (scrVal == "sans-serif")
+                            result = $"\\textsf{{{EscapeLatex(text)}}}";
                         else
                             result = $"\\text{{{EscapeLatex(text)}}}";
                     }
@@ -309,6 +398,12 @@ internal static class FormulaParser
                         result = $"\\mathbb{{{WrapMathStyle(styVal, text)}}}";
                     else if (scrVal == "script")
                         result = $"\\mathcal{{{WrapMathStyle(styVal, text)}}}";
+                    else if (scrVal == "fraktur")
+                        result = $"\\mathfrak{{{WrapMathStyle(styVal, text)}}}";
+                    else if (scrVal == "sans-serif")
+                        result = $"\\mathsf{{{WrapMathStyle(styVal, text)}}}";
+                    else if (scrVal == "monospace")
+                        result = $"\\mathtt{{{WrapMathStyle(styVal, text)}}}";
                     else
                         result = WrapMathStyle(styVal, text);
                 }
@@ -363,6 +458,12 @@ internal static class FormulaParser
             {
                 var num = ArgToLatex(element.ChildElements.FirstOrDefault(e => e.LocalName == "num"));
                 var den = ArgToLatex(element.ChildElements.FirstOrDefault(e => e.LocalName == "den"));
+                // A bar-less fraction (m:type val="noBar") is a binomial coefficient,
+                // not a \frac (which always draws a bar). The forward parser stores
+                // \binom as m:d wrapping such a fraction; emit \binom here so the
+                // round-trip stays stable even if the m:f is reached directly.
+                if (IsNoBarFraction(element))
+                    return $"\\binom{{{num}}}{{{den}}}";
                 return $"\\frac{{{num}}}{{{den}}}";
             }
 
@@ -406,44 +507,122 @@ internal static class FormulaParser
                 var dPr = element.ChildElements.FirstOrDefault(e => e.LocalName == "dPr");
                 var begChr = dPr?.ChildElements.FirstOrDefault(e => e.LocalName == "begChr");
                 var endChr = dPr?.ChildElements.FirstOrDefault(e => e.LocalName == "endChr");
-                var begin = begChr?.GetAttribute("val", "http://schemas.openxmlformats.org/officeDocument/2006/math").Value ?? "(";
-                var end = endChr?.GetAttribute("val", "http://schemas.openxmlformats.org/officeDocument/2006/math").Value ?? ")";
-                // Check if delimiter wraps a matrix — emit \begin{pmatrix} etc.
+                // Note: begChr/endChr default to "(" / ")" only when the element
+                // is absent. An explicitly empty val (e.g. cases' endChr="") must
+                // stay empty, so distinguish "missing element" from "empty val".
+                var begin = begChr != null
+                    ? (begChr.GetAttribute("val", "http://schemas.openxmlformats.org/officeDocument/2006/math").Value ?? "")
+                    : "(";
+                var end = endChr != null
+                    ? (endChr.GetAttribute("val", "http://schemas.openxmlformats.org/officeDocument/2006/math").Value ?? "")
+                    : ")";
                 var bases = element.ChildElements.Where(e => e.LocalName == "e").ToList();
                 if (bases.Count == 1)
                 {
+                    // \pmod{n}: parens whose base is [mod-run, em-space, arg].
+                    // The forward parser (ParseCommand case "pmod") stores it
+                    // exactly this way, so reverse it to \pmod{<arg>} rather than
+                    // the generic "(\text{mod} n)". Keyed on the base's first run
+                    // text starting with "mod"; the modulus is whatever follows
+                    // the mod-run and the spacer run.
+                    if (begin == "(" && end == ")")
+                    {
+                        var modKids = bases[0].ChildElements
+                            .Where(e => e.LocalName != "argPr").ToList();
+                        var firstRun = modKids.FirstOrDefault(e => e.LocalName == "r");
+                        var firstRunText = firstRun?.ChildElements
+                            .FirstOrDefault(e => e.LocalName == "t")?.InnerText ?? "";
+                        if (firstRunText.StartsWith("mod", StringComparison.Ordinal))
+                        {
+                            var argEls = modKids
+                                .SkipWhile(e => e.LocalName == "r"
+                                    && ((e.ChildElements.FirstOrDefault(c => c.LocalName == "t")?.InnerText ?? "")
+                                        .StartsWith("mod", StringComparison.Ordinal)
+                                        || string.IsNullOrWhiteSpace(
+                                            e.ChildElements.FirstOrDefault(c => c.LocalName == "t")?.InnerText)))
+                                .ToList();
+                            var modArg = string.Concat(argEls.Select(ToLatexByName));
+                            return $"\\pmod{{{modArg}}}";
+                        }
+                    }
+
+                    // Binomial: parens wrapping a single bar-less fraction. The
+                    // forward parser stores \binom{a}{b} exactly this way, so
+                    // reconstruct \binom (not literal "(\frac{a}{b})" — \frac has
+                    // a bar a binomial must not have).
+                    var innerFrac = bases[0].ChildElements.FirstOrDefault(e => e.LocalName == "f");
+                    if (innerFrac != null && begin == "(" && end == ")" && IsNoBarFraction(innerFrac))
+                    {
+                        var bnum = ArgToLatex(innerFrac.ChildElements.FirstOrDefault(e => e.LocalName == "num"));
+                        var bden = ArgToLatex(innerFrac.ChildElements.FirstOrDefault(e => e.LocalName == "den"));
+                        return $"\\binom{{{bnum}}}{{{bden}}}";
+                    }
+
+                    // Check if delimiter wraps a matrix — emit \begin{pmatrix} etc.
                     var inner = bases[0].ChildElements.FirstOrDefault(e => e.LocalName == "m");
                     if (inner != null)
                     {
+                        // Cases: "{" with an empty/absent closing delimiter. The
+                        // forward parser stores \begin{cases} this way, so emit the
+                        // dedicated environment for a stable round-trip.
+                        if (begin == "{" && string.IsNullOrEmpty(end))
+                        {
+                            var casesContent = ToLatexByName(inner);
+                            return $"\\begin{{cases}}{casesContent}\\end{{cases}}";
+                        }
+                        // rcases: empty opening brace, "}" closing — mirror of cases.
+                        if (string.IsNullOrEmpty(begin) && end == "}")
+                        {
+                            var casesContent = ToLatexByName(inner);
+                            return $"\\begin{{rcases}}{casesContent}\\end{{rcases}}";
+                        }
                         var envName = (begin, end) switch
                         {
                             ("(", ")") => "pmatrix",
                             ("[", "]") => "bmatrix",
                             ("{", "}") => "Bmatrix",
                             ("|", "|") => "vmatrix",
+                            ("‖", "‖") => "Vmatrix",
                             _ => null
                         };
                         var matrixContent = ToLatexByName(inner);
                         if (envName != null)
                             return $"\\begin{{{envName}}}{matrixContent}\\end{{{envName}}}";
-                        return $"\\left{begin}\\begin{{matrix}}{matrixContent}\\end{{matrix}}\\right{end}";
+                        return $"\\left{LatexDelim(begin)}\\begin{{matrix}}{matrixContent}\\end{{matrix}}\\right{LatexDelim(end)}";
                     }
                 }
                 var content = string.Concat(bases.Select(ArgToLatex));
+                // Generic delimiter: braces must be escaped (\{ \}) and an empty
+                // side needs the "null" delimiter (\left. / \right.) to stay valid
+                // LaTeX. Only wrap with \left..\right when at least one side is a
+                // brace/empty (otherwise plain parens/brackets read fine literally).
+                if (begin == "{" || end == "}" || string.IsNullOrEmpty(begin) || string.IsNullOrEmpty(end))
+                    return $"\\left{LatexDelim(begin)}{content}\\right{LatexDelim(end)}";
                 return $"{begin}{content}{end}";
             }
 
             case "limUpp": // upper limit (overset)
             {
-                var baseText = ArgToLatex(element.ChildElements.FirstOrDefault(e => e.LocalName == "e"));
+                var baseElem = element.ChildElements.FirstOrDefault(e => e.LocalName == "e");
+                var baseText = ArgToLatex(baseElem);
                 var limText = ArgToLatex(element.ChildElements.FirstOrDefault(e => e.LocalName == "lim"));
+                // A limit-style operator name (\lim, \max, \sup, ...) round-trips as
+                // \op^{...}, not \overset{...}{\op}. The base may itself be a limLow
+                // (operator with both _ and ^), so peel that too.
+                var opCmd = LimitOperatorCommand(baseElem);
+                if (opCmd != null)
+                    return $"{opCmd}^{{{limText}}}";
                 return $"\\overset{{{limText}}}{{{baseText}}}";
             }
 
             case "limLow": // lower limit (underset)
             {
-                var baseText = ArgToLatex(element.ChildElements.FirstOrDefault(e => e.LocalName == "e"));
+                var baseElem = element.ChildElements.FirstOrDefault(e => e.LocalName == "e");
+                var baseText = ArgToLatex(baseElem);
                 var limText = ArgToLatex(element.ChildElements.FirstOrDefault(e => e.LocalName == "lim"));
+                var opCmd = LimitOperatorCommand(baseElem);
+                if (opCmd != null)
+                    return $"{opCmd}_{{{limText}}}";
                 return $"\\underset{{{limText}}}{{{baseText}}}";
             }
 
@@ -469,7 +648,20 @@ internal static class FormulaParser
                     "\u20D7" => "vec",
                     "\u0307" => "dot",
                     "\u0308" => "ddot",
+                    "\u20DB" => "dddot",
                     "\u0303" => "tilde",
+                    "\u0301" => "acute",
+                    "\u0300" => "grave",
+                    "\u030C" => "check",
+                    "\u0306" => "breve",
+                    "\u030A" => "mathring",
+                    // Wide-accent combining chars have no narrow equivalent, so
+                    // they round-trip to their own commands. \widehat (U+0302) and
+                    // \widetilde (U+0303) share a codepoint with \hat/\tilde \u2014 OMML
+                    // can't distinguish them, so those collapse to \hat/\tilde
+                    // (acceptable canonical equivalent).
+                    "\u20D6" => "overleftarrow",
+                    "\u20E1" => "overleftrightarrow",
                     _ => "hat"
                 };
                 return $"\\{cmd}{{{baseText}}}";
@@ -514,7 +706,16 @@ internal static class FormulaParser
                 var content = string.Join(" \\\\ ", rowStrings);
                 // Standalone matrix (not inside a delimiter) needs environment wrapper
                 if (element.Parent?.LocalName != "e" || element.Parent?.Parent?.LocalName != "d")
+                {
+                    // If the matrix carries explicit per-column justification
+                    // (m:mPr/m:mcs/m:mc/m:mcPr/m:mcJc), reconstruct \begin{array}{...}
+                    // with the justification letters — the forward path stores
+                    // \begin{array}{lcr} this way. No mcJc → plain \begin{matrix}.
+                    var colSpec = MatrixColSpec(element);
+                    if (colSpec != null)
+                        return $"\\begin{{array}}{{{colSpec}}}{content}\\end{{array}}";
                     return $"\\begin{{matrix}}{content}\\end{{matrix}}";
+                }
                 return content;
             }
 
@@ -568,6 +769,37 @@ internal static class FormulaParser
     }
 
     private static bool NeedsBraces(string text) => text.Length != 1;
+
+    /// <summary>
+    /// If a matrix carries explicit per-column justification (m:mPr/m:mcs/m:mc/
+    /// m:mcPr/m:mcJc with left|center|right), return the LaTeX array colspec
+    /// string (e.g. "lcr"); otherwise null. Vertical rules can't be recovered
+    /// (OMML never stored them — known limitation), so the colspec is letters
+    /// only. A matrix without mcJc (the default centered grid) returns null so
+    /// it round-trips as \begin{matrix} rather than a redundant array.
+    /// </summary>
+    private static string? MatrixColSpec(OpenXmlElement matrix)
+    {
+        var mPr = matrix.ChildElements.FirstOrDefault(e => e.LocalName == "mPr");
+        var mcs = mPr?.ChildElements.FirstOrDefault(e => e.LocalName == "mcs");
+        if (mcs == null) return null;
+        var sb = new System.Text.StringBuilder();
+        bool any = false;
+        foreach (var mc in mcs.ChildElements.Where(e => e.LocalName == "mc"))
+        {
+            var mcPr = mc.ChildElements.FirstOrDefault(e => e.LocalName == "mcPr");
+            var jc = mcPr?.ChildElements.FirstOrDefault(e => e.LocalName == "mcJc");
+            var val = jc?.GetAttribute("val", "http://schemas.openxmlformats.org/officeDocument/2006/math").Value;
+            switch (val)
+            {
+                case "left": sb.Append('l'); any = true; break;
+                case "right": sb.Append('r'); any = true; break;
+                case "center": sb.Append('c'); any = true; break;
+                default: sb.Append('c'); break;
+            }
+        }
+        return any ? sb.ToString() : null;
+    }
 
     /// <summary>
     /// Convert OMML to readable Unicode text (for view text display).
@@ -1050,6 +1282,9 @@ internal static class FormulaParser
         switch (cmd)
         {
             case "frac":
+            case "cfrac": // continued fraction — OMML has no separate cfrac; map to m:f
+            case "dfrac": // display-style \frac (OMML can't hold the sizing distinction)
+            case "tfrac": // text-style \frac
             {
                 var num = ParseBracedArg(tokens, ref pos);
                 var den = ParseBracedArg(tokens, ref pos);
@@ -1091,6 +1326,34 @@ internal static class FormulaParser
                 }
 
                 return radical;
+            }
+            case "substack":
+            {
+                // \substack{a \\ b \\ c} — stacked content (under sums/limits).
+                // Map to a single-column m:m matrix (one row per \\). Reuse the
+                // matrix parser by feeding it the braced body plus a fake \end so
+                // ParseMatrix's row (\\) splitting applies. Column separators (&)
+                // are not expected in substack but pass through harmlessly.
+                if (pos < tokens.Count && tokens[pos].Type == TokenType.LBrace)
+                {
+                    pos++; // skip {
+                    var subTokens = new List<Token>();
+                    int braceDepth = 1;
+                    while (pos < tokens.Count && braceDepth > 0)
+                    {
+                        if (tokens[pos].Type == TokenType.LBrace) braceDepth++;
+                        else if (tokens[pos].Type == TokenType.RBrace) { braceDepth--; if (braceDepth == 0) { pos++; break; } }
+                        subTokens.Add(tokens[pos]);
+                        pos++;
+                    }
+                    subTokens.Add(new Token(TokenType.Command, "end"));
+                    subTokens.Add(new Token(TokenType.LBrace, "{"));
+                    subTokens.Add(new Token(TokenType.Text, "matrix"));
+                    subTokens.Add(new Token(TokenType.RBrace, "}"));
+                    int spos = 0;
+                    return ParseMatrix("matrix", subTokens, ref spos);
+                }
+                return MakeMathRun("");
             }
             case "matrix":
             {
@@ -1134,17 +1397,54 @@ internal static class FormulaParser
                     if (pos < tokens.Count) pos++; // skip }
                 }
 
-                if (envName is "matrix" or "pmatrix" or "bmatrix" or "Bmatrix" or "vmatrix" or "cases"
-                    or "array")
+                // Starred matrix environments (matrix*/pmatrix*/…) take an
+                // OPTIONAL [l|c|r] alignment arg applied to ALL columns. Parse
+                // the bracket here, strip the star to reuse the non-star path,
+                // and feed the letter through as a uniform column spec (it is
+                // expanded per-column inside ParseMatrix). Default center if the
+                // bracket is absent.
+                string? starAlign = null;
+                if (envName is "matrix*" or "pmatrix*" or "bmatrix*"
+                    or "Bmatrix*" or "vmatrix*" or "Vmatrix*")
                 {
-                    // For array, skip optional column spec like {cc}
+                    if (pos < tokens.Count && tokens[pos].Type == TokenType.LBracket)
+                    {
+                        pos++; // skip [
+                        var spec = "";
+                        while (pos < tokens.Count && tokens[pos].Type != TokenType.RBracket)
+                        {
+                            spec += tokens[pos].Value;
+                            pos++;
+                        }
+                        if (pos < tokens.Count) pos++; // skip ]
+                        spec = spec.Trim();
+                        if (spec.Length > 0) starAlign = spec[..1];
+                    }
+                    envName = envName[..^1]; // drop trailing '*'
+                }
+
+                if (envName is "matrix" or "pmatrix" or "bmatrix" or "Bmatrix" or "vmatrix"
+                    or "Vmatrix" or "cases"
+                    or "rcases" or "array" or "smallmatrix")
+                {
+                    // For array, read the column spec like {l|c|r} and honor the
+                    // per-column justification letters (l/c/r) via m:mcJc. Vertical
+                    // rules ("|") are NOT expressible in OMML matrices — ignore them
+                    // (known limitation).
+                    string? arrayColSpec = null;
                     if (envName == "array" && pos < tokens.Count && tokens[pos].Type == TokenType.LBrace)
                     {
                         pos++; // skip {
-                        while (pos < tokens.Count && tokens[pos].Type != TokenType.RBrace) pos++;
+                        var spec = "";
+                        while (pos < tokens.Count && tokens[pos].Type != TokenType.RBrace)
+                        {
+                            spec += tokens[pos].Value;
+                            pos++;
+                        }
                         if (pos < tokens.Count) pos++; // skip }
+                        arrayColSpec = spec;
                     }
-                    var matrixResult = ParseMatrix(envName, tokens, ref pos);
+                    var matrixResult = ParseMatrix(envName, tokens, ref pos, arrayColSpec, starAlign);
                     // array should render without implicit delimiters
                     if (envName == "array" && matrixResult is M.Delimiter arrDelim)
                     {
@@ -1154,8 +1454,24 @@ internal static class FormulaParser
                     }
                     return matrixResult;
                 }
+                // \begin{alignat}{n} takes a mandatory {n} column-count arg.
+                // Consume/skip it, then route through the same multi-alignment
+                // path as align (the >2-cell matrix branch below handles the
+                // multiple alignment points).
+                if (envName is "alignat" or "alignat*")
+                {
+                    if (pos < tokens.Count && tokens[pos].Type == TokenType.LBrace)
+                    {
+                        pos++; // skip {
+                        while (pos < tokens.Count && tokens[pos].Type != TokenType.RBrace) pos++;
+                        if (pos < tokens.Count) pos++; // skip }
+                    }
+                    envName = "align";
+                }
+
                 if (envName is "align" or "align*" or "aligned" or "gathered" or "eqnarray"
-                    or "eqnarray*" or "split")
+                    or "eqnarray*" or "split"
+                    or "gather" or "gather*" or "multline" or "multline*")
                 {
                     // Multi-line equation environments map to m:eqArr (equation
                     // array — a vertical stack of equations), NOT m:m. m:m is a
@@ -1170,8 +1486,50 @@ internal static class FormulaParser
                         ?? matrixEl.Descendants<M.Matrix>().FirstOrDefault();
                     if (rowsMatrix == null)
                         return matrixEl;
+
+                    // An alignment point ("&") splits a row into ≥2 cells. m:eqArr
+                    // models only a vertically-stacked CENTERED column with no
+                    // alignment point, so any row carrying a "&" renders centered
+                    // and drops the "&" — wrong for align/aligned/alignat, which
+                    // must align AT the "&" (a &= b → right-justify "a", left-
+                    // justify "= b"). Route every ≥2-cell case to a borderless
+                    // matrix with alternating right/left m:mcJc justification
+                    // (a &= b & c &= d → r l r l). This reverses to
+                    // \begin{array}{rl…} (the m:m colSpec path) and truly aligns.
+                    // Rows with NO "&" (a single cell, e.g. gather/gathered/
+                    // multline) keep the eqArr path — centered is correct there.
+                    var matRows = rowsMatrix.Elements<M.MatrixRow>().ToList();
+                    var maxCells = matRows.Count == 0 ? 0 : matRows.Max(r => r.Elements<M.Base>().Count());
+                    if (maxCells >= 2)
+                    {
+                        // Pad short rows to equal column count with empty cells.
+                        foreach (var mr in matRows)
+                        {
+                            var have = mr.Elements<M.Base>().Count();
+                            for (var k = have; k < maxCells; k++)
+                                mr.AppendChild(new M.Base(MakeMathRun("")));
+                        }
+                        // Alternating right/left column justification (col 0 = right).
+                        var mPr = rowsMatrix.GetFirstChild<M.MatrixProperties>()
+                            ?? rowsMatrix.PrependChild(new M.MatrixProperties());
+                        var mcs = new M.MatrixColumns();
+                        for (var ci = 0; ci < maxCells; ci++)
+                            mcs.AppendChild(new M.MatrixColumn(
+                                new M.MatrixColumnProperties(
+                                    new M.MatrixColumnCount { Val = 1 },
+                                    new M.MatrixColumnJustification
+                                    {
+                                        Val = ci % 2 == 0
+                                            ? M.HorizontalAlignmentValues.Right
+                                            : M.HorizontalAlignmentValues.Left
+                                    })));
+                        mPr.AppendChild(mcs);
+                        rowsMatrix.Remove();
+                        return rowsMatrix;
+                    }
+
                     var eqArr = new M.EquationArray();
-                    foreach (var mr in rowsMatrix.Elements<M.MatrixRow>())
+                    foreach (var mr in matRows)
                     {
                         var rowBase = new M.Base();
                         foreach (var cell in mr.Elements<M.Base>())
@@ -1183,7 +1541,7 @@ internal static class FormulaParser
                 }
 
                 // Unknown environment, render as text
-                _unrecognized?.Add($"\\begin{{{envName}}}");
+                RecordUnrecognized($"\\begin{{{envName}}}");
                 return MakeMathRun($"\\begin{{{envName}}}");
             }
             case "end":
@@ -1337,6 +1695,7 @@ internal static class FormulaParser
                 return MakeMathRun("");
             }
             case "overset":
+            case "stackrel": // \stackrel{top}{rel} == \overset (top over base); reverse → \overset
             {
                 var above = ParseBracedArg(tokens, ref pos);
                 var baseArg = ParseBracedArg(tokens, ref pos);
@@ -1357,15 +1716,87 @@ internal static class FormulaParser
                 );
             }
             case "text":
+            case "textrm":  // roman/upright — same as \text
+            case "textbf":  // bold
+            case "textit":  // italic
+            case "emph":    // emphasis → italic
+            case "texttt":  // monospace
+            case "textsf":  // sans-serif
             {
-                // \text{...} → M.Run with normal text properties (upright, not math italic)
+                // \text{...} family → upright text run (m:nor). The styled
+                // variants add the matching axis: \textbf sets m:sty=b, \textit/
+                // \emph sets m:sty=i, \texttt sets m:scr=monospace, \textsf sets
+                // m:scr=sans-serif. m:nor keeps the run upright (text, not math
+                // italic) like \text; \textit re-introduces italic via m:sty.
                 var content = ParseBracedArg(tokens, ref pos);
                 var text = ExtractText(content);
-                var run = new M.Run(
-                    new M.RunProperties(new M.NormalText()),
+                // ECMA-376 CT_MathRPr is (lit?, (nor | (scr?, sty?)), ...):
+                // m:nor (NormalText) is mutually exclusive with BOTH m:scr
+                // (script alphabet) and m:sty (weight/posture). Emitting m:nor
+                // alongside either yields a schema-invalid run Word refuses
+                // ("unexpected child element 'sty'/'scr'"). So a styled text
+                // command carries ONLY its axis (no m:nor): \textbf/\textit/
+                // \emph → m:sty=b/i (renders upright bold/italic for letters,
+                // same as \mathbf/\mathit); \texttt/\textsf → m:scr; plain
+                // \text/\textrm keep bare m:nor for upright text.
+                //
+                // R2-bt-2: a NESTED text-style command (\textbf{\textit{x}})
+                // parses the inner command first, so `content`'s run already
+                // carries an m:sty (i here). ExtractText only pulls the text,
+                // dropping that axis, so the outer command would emit sty=b and
+                // lose the italic. Read the inner run's existing m:sty/m:scr and
+                // COMPOSE: bold+italic → "bi".
+                // ParseBracedArg returns the single inner node directly (so
+                // {\textit{x}} yields the inner M.Run itself), or an OfficeMath
+                // wrapper for multi-node groups. Handle both: the node itself,
+                // then any descendant run.
+                var innerRun = content as M.Run
+                    ?? content.Descendants<M.Run>().FirstOrDefault();
+                var innerRPr = innerRun?.GetFirstChild<M.RunProperties>();
+                var innerSty = innerRPr?.GetFirstChild<M.Style>()?.Val?.Value;
+                var innerScr = innerRPr?.GetFirstChild<M.Script>()?.Val?.Value;
+                bool innerBold = innerSty is M.StyleValues v1 && (v1 == M.StyleValues.Bold || v1 == M.StyleValues.BoldItalic);
+                bool innerItalic = innerSty is M.StyleValues v2 && (v2 == M.StyleValues.Italic || v2 == M.StyleValues.BoldItalic);
+
+                static M.StyleValues ComposeStyle(bool bold, bool italic) =>
+                    (bold, italic) switch
+                    {
+                        (true, true) => M.StyleValues.BoldItalic,
+                        (true, false) => M.StyleValues.Bold,
+                        (false, true) => M.StyleValues.Italic,
+                        _ => M.StyleValues.Plain,
+                    };
+
+                M.RunProperties rPr;
+                switch (cmd)
+                {
+                    case "textbf":
+                        rPr = new M.RunProperties(new M.Style { Val = ComposeStyle(true, innerItalic) });
+                        break;
+                    case "textit":
+                    case "emph":
+                        rPr = new M.RunProperties(new M.Style { Val = ComposeStyle(innerBold, true) });
+                        break;
+                    case "texttt":
+                        rPr = new M.RunProperties(new M.Script { Val = M.ScriptValues.Monospace });
+                        break;
+                    case "textsf":
+                        rPr = new M.RunProperties(new M.Script { Val = M.ScriptValues.SansSerif });
+                        break;
+                    default: // "text", "textrm": carry an inner weight if one was
+                             // composed (e.g. \text{\textbf{x}}); else bare m:nor.
+                        if (innerBold || innerItalic)
+                            rPr = new M.RunProperties(new M.Style { Val = ComposeStyle(innerBold, innerItalic) });
+                        else if (innerScr != null)
+                            rPr = new M.RunProperties(new M.Script { Val = innerScr });
+                        else
+                            rPr = new M.RunProperties(new M.NormalText());
+                        break;
+                }
+                return new M.Run(
+                    rPr,
                     new M.Text(text) { Space = SpaceProcessingModeValues.Preserve }
                 );
-                return run;
             }
             case "overline":
             {
@@ -1383,16 +1814,31 @@ internal static class FormulaParser
                     new M.Base(ExtractChildren(arg))
                 );
             }
-            case "hat" or "bar" or "vec" or "dot" or "ddot" or "tilde":
+            case "hat" or "bar" or "vec" or "dot" or "ddot" or "tilde"
+                or "widehat" or "widetilde" or "overrightarrow" or "overleftarrow"
+                or "overleftrightarrow"
+                or "acute" or "grave" or "check" or "breve" or "mathring" or "dddot":
             {
+                // Wide accents (\widehat, \overrightarrow, ...) are the same m:acc
+                // construct as the narrow ones \u2014 only the combining char differs.
+                // OMML draws the accent stretched to the base width automatically,
+                // so there is no separate "wide" flag to set.
                 var accentChar = cmd switch
                 {
-                    "hat" => "\u0302",   // combining circumflex
+                    "hat" or "widehat" => "\u0302",   // combining circumflex
                     "bar" => "\u0304",   // combining macron
-                    "vec" => "\u20D7",   // combining right arrow above
+                    "vec" or "overrightarrow" => "\u20D7", // combining right arrow above
+                    "overleftarrow" => "\u20D6",       // combining left arrow above
+                    "overleftrightarrow" => "\u20E1",  // combining left-right arrow above
                     "dot" => "\u0307",   // combining dot above
                     "ddot" => "\u0308",  // combining diaeresis
-                    "tilde" => "\u0303", // combining tilde
+                    "dddot" => "\u20db", // combining three dots above
+                    "tilde" or "widetilde" => "\u0303", // combining tilde
+                    "acute" => "\u0301", // combining acute accent
+                    "grave" => "\u0300", // combining grave accent
+                    "check" => "\u030c", // combining caron
+                    "breve" => "\u0306", // combining breve
+                    "mathring" => "\u030a", // combining ring above
                     _ => "\u0302"
                 };
                 var arg = ParseBracedArg(tokens, ref pos);
@@ -1403,7 +1849,9 @@ internal static class FormulaParser
             }
             case "lim" or "sin" or "cos" or "tan" or "log" or "ln" or "exp" or "min" or "max"
                 or "sup" or "inf" or "det" or "gcd" or "dim" or "ker" or "hom" or "deg"
-                or "arg" or "sec" or "csc" or "cot" or "sinh" or "cosh" or "tanh":
+                or "arg" or "sec" or "csc" or "cot" or "sinh" or "cosh" or "tanh"
+                or "coth" or "sech" or "csch"
+                or "limsup" or "liminf" or "Pr" or "argmax" or "argmin":
             {
                 // Function names: render upright (non-italic) using M.NormalText
                 var funcRun = new M.Run(
@@ -1411,20 +1859,39 @@ internal static class FormulaParser
                     new M.Text(cmd) { Space = SpaceProcessingModeValues.Preserve }
                 );
 
-                // For \lim, check for sub/sup to create nary-like limLow structure
-                if (cmd == "lim" && pos < tokens.Count && tokens[pos].Type == TokenType.Sub)
+                // Limit-style operators (\lim, \max, \sup, ...) place their _/^
+                // scripts UNDER/OVER the operator name (m:limLow/m:limUpp), not as
+                // a trailing sub/superscript. \limits forces this even for ops that
+                // would not default to it; \nolimits forces plain sub/sup. Other
+                // function names (\sin, \log, ...) keep the default sub/sup that the
+                // caller's TryAttachScript applies.
+                if (_limitStyleOperators.Contains(cmd))
+                    return ParseOperatorWithLimits(funcRun, tokens, ref pos, forceLimits: true);
+
+                // A \limits / \nolimits keyword may follow any operator name and
+                // override the placement. \nolimits leaves scripts to the caller.
+                if (pos < tokens.Count && tokens[pos].Type == TokenType.Command
+                    && tokens[pos].Value == "limits")
                 {
                     pos++;
-                    var subArg = ParseSingleArg(tokens, ref pos);
-                    return new M.LimitLower(
-                        new M.LimitLowerProperties(),
-                        new M.Base(funcRun),
-                        new M.Limit(ExtractChildren(subArg))
-                    );
+                    return ParseOperatorWithLimits(funcRun, tokens, ref pos, forceLimits: true);
+                }
+                if (pos < tokens.Count && tokens[pos].Type == TokenType.Command
+                    && tokens[pos].Value == "nolimits")
+                {
+                    pos++; // consume; scripts attach as sub/sup via TryAttachScript
                 }
                 return funcRun;
             }
+            case "limits":
+            case "nolimits":
+                // Stray \limits / \nolimits with no recognised preceding operator
+                // (or already consumed by the operator arm). Swallow it so it does
+                // not leak as an unknown "\limits" token.
+                return MakeMathRun("");
             case "binom":
+            case "dbinom": // display-style binom; OMML can't hold sizing → same as \binom
+            case "tbinom": // text-style binom
             {
                 var top = ParseBracedArg(tokens, ref pos);
                 var bottom = ParseBracedArg(tokens, ref pos);
@@ -1438,7 +1905,8 @@ internal static class FormulaParser
                 delimiter.AppendChild(new M.Base(frac));
                 return delimiter;
             }
-            case "mathbf" or "mathrm" or "mathit" or "mathbb" or "mathcal" or "boldsymbol":
+            case "mathbf" or "mathrm" or "mathit" or "mathbb" or "mathcal" or "boldsymbol"
+                or "mathfrak" or "mathscr" or "mathsf" or "mathtt":
             {
                 var arg = ParseBracedArg(tokens, ref pos);
                 var text = ExtractText(arg);
@@ -1450,11 +1918,20 @@ internal static class FormulaParser
                     "mathit" => M.StyleValues.Italic,
                     _ => M.StyleValues.Plain
                 };
-                if (cmd is "mathbb" or "mathcal")
+                // Script-alphabet commands set m:scr (orthogonal to m:sty weight).
+                // OMML m:scr values: roman|script|fraktur|double-struck|sans-serif|
+                // monospace. \mathscr aliases the same "script" style as \mathcal
+                // (OMML has no separate calligraphic vs script axis).
+                if (cmd is "mathbb" or "mathcal" or "mathfrak" or "mathscr" or "mathsf" or "mathtt")
                 {
-                    var scriptVal = cmd == "mathbb"
-                        ? M.ScriptValues.DoubleStruck
-                        : M.ScriptValues.Script;
+                    var scriptVal = cmd switch
+                    {
+                        "mathbb" => M.ScriptValues.DoubleStruck,
+                        "mathfrak" => M.ScriptValues.Fraktur,
+                        "mathsf" => M.ScriptValues.SansSerif,
+                        "mathtt" => M.ScriptValues.Monospace,
+                        _ => M.ScriptValues.Script, // mathcal, mathscr
+                    };
                     // BUG-R8A(BUG4): m:scr (script alphabet) and m:sty
                     // (weight/posture) are orthogonal OMML axes. A source run may
                     // carry both (e.g. <m:scr m:val="double-struck"/><m:sty
@@ -1480,7 +1957,8 @@ internal static class FormulaParser
                     new M.Text(text) { Space = SpaceProcessingModeValues.Preserve }
                 );
             }
-            case "sum" or "int" or "iint" or "iiint" or "prod" or "coprod" or "bigcup" or "bigcap":
+            case "sum" or "int" or "iint" or "iiint" or "oint" or "oiint" or "oiiint"
+                or "prod" or "coprod" or "bigcup" or "bigcap":
             {
                 var naryChar = cmd switch
                 {
@@ -1488,6 +1966,9 @@ internal static class FormulaParser
                     "int" => "∫",
                     "iint" => "∬",
                     "iiint" => "∭",
+                    "oint" => "∮",
+                    "oiint" => "∯",
+                    "oiiint" => "∰",
                     "prod" => "∏",
                     "coprod" => "∐",
                     "bigcup" => "⋃",
@@ -1495,6 +1976,24 @@ internal static class FormulaParser
                     _ => "∑"
                 };
                 var naryProps = new M.NaryProperties(new M.AccentChar { Val = naryChar });
+
+                // A \limits / \nolimits keyword may follow an n-ary operator to
+                // override script placement. For n-ary operators the bounds are
+                // ALWAYS carried as the operator's own m:sub/m:sup; the keyword
+                // only toggles m:limLoc (under/over vs subSup). \limits → under/
+                // over (limLoc undOvr), \nolimits → subscript/superscript
+                // (limLoc subSup). Either way the bounds stay on the nary and are
+                // never hidden or pushed onto the body. Consume the keyword here
+                // so it is not parsed as the (empty) base operand.
+                if (pos < tokens.Count && tokens[pos].Type == TokenType.Command
+                    && (tokens[pos].Value == "limits" || tokens[pos].Value == "nolimits"))
+                {
+                    var limLoc = tokens[pos].Value == "nolimits"
+                        ? M.LimitLocationValues.SubscriptSuperscript
+                        : M.LimitLocationValues.UnderOver;
+                    naryProps.AppendChild(new M.LimitLocation { Val = limLoc });
+                    pos++;
+                }
 
                 // Parse optional sub and sup limits (they come as _{}^{} after the command)
                 OpenXmlElement? subArg = null;
@@ -1581,8 +2080,11 @@ internal static class FormulaParser
                     bbPr.AppendChild(new M.StrikeBottomLeftToTopRight { Val = M.BooleanValues.True });
                 else // xcancel — both diagonals
                 {
-                    bbPr.AppendChild(new M.StrikeTopLeftToBottomRight { Val = M.BooleanValues.True });
+                    // ECMA-376 CT_BorderBoxPr requires strikeBLTR before
+                    // strikeTLBR. Emitting them in the reverse order yields a
+                    // schema-invalid document.
                     bbPr.AppendChild(new M.StrikeBottomLeftToTopRight { Val = M.BooleanValues.True });
+                    bbPr.AppendChild(new M.StrikeTopLeftToBottomRight { Val = M.BooleanValues.True });
                 }
                 return new M.BorderBox(bbPr, new M.Base(ExtractChildren(cancelArg)));
             }
@@ -1688,6 +2190,90 @@ internal static class FormulaParser
                 );
                 return funcRun;
             }
+            case "not":
+            {
+                // \not negates the following relation. Precompose the common cases
+                // to a single Unicode codepoint (so they round-trip cleanly via the
+                // symbol table): \not= → ≠, \not\in → ∉, \not\subset → ⊄, etc.
+                // Anything else falls back to base char + combining U+0338 overlay.
+                if (pos < tokens.Count)
+                {
+                    var t = tokens[pos];
+                    string? precomposed = null;
+                    if (t.Type == TokenType.Command)
+                    {
+                        precomposed = t.Value switch
+                        {
+                            "in" => "∉",
+                            "ni" => "∌",
+                            "subset" => "⊄",
+                            "supset" => "⊅",
+                            "subseteq" => "⊈",
+                            "supseteq" => "⊉",
+                            "equiv" => "≢",
+                            "sim" => "≁",
+                            "approx" => "≉",
+                            "cong" => "≇",
+                            "mid" => "∤",
+                            "parallel" => "∦",
+                            "exists" => "∄",
+                            "leq" or "le" => "≰",
+                            "geq" or "ge" => "≱",
+                            _ => null
+                        };
+                    }
+                    else if (t.Type == TokenType.Text && t.Value.Length > 0)
+                    {
+                        precomposed = t.Value[0] switch
+                        {
+                            '=' => "≠",
+                            '<' => "≮",
+                            '>' => "≯",
+                            _ => null
+                        };
+                    }
+                    if (precomposed != null)
+                    {
+                        // Consume the negated token (or just its first char for a
+                        // multi-char Text run, putting the remainder back).
+                        if (t.Type == TokenType.Text && t.Value.Length > 1)
+                            tokens[pos] = new Token(TokenType.Text, t.Value[1..]);
+                        else
+                            pos++;
+                        return MakeMathRun(precomposed);
+                    }
+                }
+                // No precompose available: emit a lone combining long solidus
+                // overlay (U+0338); it combines with whatever run follows.
+                return MakeMathRun("̸");
+            }
+            case "displaystyle":
+            case "textstyle":
+            case "scriptstyle":
+            case "scriptscriptstyle":
+            case "mathstrut":
+            {
+                // Math-style switches and the invisible strut have no OMML
+                // equivalent (OMML does not model display/text sizing as a
+                // run switch). They take NO argument and affect the rest of
+                // the group, so render nothing here and let the following
+                // content flow through unchanged: "\displaystyle x" → x.
+                return MakeMathRun("");
+            }
+            case "smash":
+            {
+                // \smash{x} sets x's height/depth to zero — no OMML equivalent.
+                // Render the argument normally.
+                var arg = ParseBracedArg(tokens, ref pos);
+                return arg;
+            }
+            case "phantom":
+            {
+                // \phantom{x} reserves x's space but renders nothing. Consume
+                // the argument cleanly and emit an empty run.
+                ParseBracedArg(tokens, ref pos);
+                return MakeMathRun("");
+            }
             case "operatorname":
             {
                 // \operatorname{name} → upright function name with limit support
@@ -1718,9 +2304,46 @@ internal static class FormulaParser
 
             default:
                 // Unknown command: render as text with backslash
-                _unrecognized?.Add($"\\{cmd}");
+                RecordUnrecognized($"\\{cmd}");
                 return MakeMathRun($"\\{cmd}");
         }
+    }
+
+    // Generalises the \lim sub-limit handling to any limit-style operator.
+    // Consumes a following \limits/\nolimits keyword (placement override) and the
+    // _/^ scripts, wrapping them as m:limLow/m:limUpp (under/over the name) or
+    // leaving them for the caller's sub/sup handling when \nolimits wins.
+    private static OpenXmlElement ParseOperatorWithLimits(
+        OpenXmlElement opRun, List<Token> tokens, ref int pos, bool forceLimits)
+    {
+        var useLimits = forceLimits;
+        if (pos < tokens.Count && tokens[pos].Type == TokenType.Command)
+        {
+            if (tokens[pos].Value == "limits") { pos++; useLimits = true; }
+            else if (tokens[pos].Value == "nolimits") { pos++; useLimits = false; }
+        }
+
+        if (!useLimits)
+            return opRun; // scripts attach as sub/sup via the caller's TryAttachScript
+
+        OpenXmlElement? subArg = null, supArg = null;
+        for (var i = 0; i < 2 && pos < tokens.Count; i++)
+        {
+            if (tokens[pos].Type == TokenType.Sub && subArg == null)
+            { pos++; subArg = ParseSingleArg(tokens, ref pos); }
+            else if (tokens[pos].Type == TokenType.Sup && supArg == null)
+            { pos++; supArg = ParseSingleArg(tokens, ref pos); }
+            else break;
+        }
+
+        OpenXmlElement result = opRun;
+        if (subArg != null)
+            result = new M.LimitLower(new M.LimitLowerProperties(),
+                new M.Base(result), new M.Limit(ExtractChildren(subArg)));
+        if (supArg != null)
+            result = new M.LimitUpper(new M.LimitUpperProperties(),
+                new M.Base(result), new M.Limit(ExtractChildren(supArg)));
+        return result;
     }
 
     private static OpenXmlElement ParseBracedArg(List<Token> tokens, ref int pos)
@@ -1734,7 +2357,8 @@ internal static class FormulaParser
         return ParseSingleArg(tokens, ref pos);
     }
 
-    private static OpenXmlElement ParseMatrix(string envName, List<Token> tokens, ref int pos)
+    private static OpenXmlElement ParseMatrix(string envName, List<Token> tokens, ref int pos,
+        string? arrayColSpec = null, string? starAlign = null)
     {
         var rows = new List<List<List<OpenXmlElement>>>();
         var currentRow = new List<List<OpenXmlElement>>();
@@ -1816,6 +2440,43 @@ internal static class FormulaParser
             rows.Add(currentRow);
         }
 
+        // R2-fuzz-4 / WB-R2-1: an EMPTY environment (\begin{matrix}\end{matrix},
+        // \begin{cases}\end{cases}, an unclosed \begin{matrix} with no tokens,
+        // …) leaves `rows` empty. OMML CT_M requires ≥1 m:mr and CT_MR ≥1 m:e,
+        // so an empty matrix is schema-invalid (Word refuses the file); the
+        // cases/star/array column code also called rows.Max(...) which throws
+        // "Sequence contains no elements" on an empty list. Synthesize one
+        // minimal row holding one empty cell so every empty environment yields
+        // valid minimal OMML instead of crashing or writing a corrupt file.
+        if (rows.Count == 0)
+            rows.Add(new List<List<OpenXmlElement>>
+            {
+                new List<OpenXmlElement> { MakeMathRun("") }
+            });
+
+        // ECMA-376 CT_M caps a matrix at 64 rows (m:mr) and CT_MR caps a row
+        // at 64 columns (m:e). Exceeding either silently produces a
+        // schema-invalid document that Word refuses to open. Clamp both and
+        // surface an `unrecognized_latex_command`-style warning so the
+        // truncation is visible rather than a silent corrupt file.
+        const int MatrixMaxDim = 64;
+        if (rows.Count > MatrixMaxDim)
+        {
+            RecordUnrecognized($"\\begin{{{envName}}} (>{MatrixMaxDim} rows, truncated)");
+            rows = rows.Take(MatrixMaxDim).ToList();
+        }
+        var clampedCols = false;
+        foreach (var row in rows)
+        {
+            if (row.Count > MatrixMaxDim)
+            {
+                clampedCols = true;
+                row.RemoveRange(MatrixMaxDim, row.Count - MatrixMaxDim);
+            }
+        }
+        if (clampedCols)
+            RecordUnrecognized($"\\begin{{{envName}}} (>{MatrixMaxDim} columns, truncated)");
+
         // Build OMML Matrix
         var matrix = new M.Matrix(new M.MatrixProperties());
         foreach (var row in rows)
@@ -1839,8 +2500,80 @@ internal static class FormulaParser
             matrix.AppendChild(mr);
         }
 
-        // Wrap with delimiter based on environment
-        if (envName == "matrix")
+        // For \begin{array}{colspec}: honor per-column horizontal justification
+        // from the colspec letters (l/c/r) via m:mcJc — the same mechanism cases
+        // uses. Vertical rules ("|") in the colspec are NOT expressible in OMML
+        // matrices and are ignored (known limitation).
+        if (envName == "array" && !string.IsNullOrEmpty(arrayColSpec))
+        {
+            var justs = new List<M.HorizontalAlignmentValues>();
+            foreach (var ch in arrayColSpec!)
+            {
+                switch (ch)
+                {
+                    case 'l': justs.Add(M.HorizontalAlignmentValues.Left); break;
+                    case 'c': justs.Add(M.HorizontalAlignmentValues.Center); break;
+                    case 'r': justs.Add(M.HorizontalAlignmentValues.Right); break;
+                    // '|' (vertical rule) and any other char: ignored.
+                }
+            }
+            // R2-fuzz-2: the cell/row clamp above (MatrixMaxDim) caps m:mr/m:e,
+            // but the array COLSPEC builds one m:mc per colspec letter. A
+            // 65-letter colspec ({rrr…r}) would emit 65 m:mc into m:mcs, which
+            // CT_MCS caps at 64 — schema-invalid. Clamp the colspec-derived
+            // columns to 64 too (same warning style as the cell/row clamp).
+            if (justs.Count > MatrixMaxDim)
+            {
+                RecordUnrecognized($"\\begin{{{envName}}} (>{MatrixMaxDim} columns, truncated)");
+                justs = justs.Take(MatrixMaxDim).ToList();
+            }
+            if (justs.Count > 0)
+            {
+                var mPr = matrix.GetFirstChild<M.MatrixProperties>();
+                if (mPr != null)
+                {
+                    var mcs = new M.MatrixColumns();
+                    foreach (var j in justs)
+                        mcs.AppendChild(new M.MatrixColumn(
+                            new M.MatrixColumnProperties(
+                                new M.MatrixColumnCount { Val = 1 },
+                                new M.MatrixColumnJustification { Val = j }
+                            )));
+                    mPr.AppendChild(mcs);
+                }
+            }
+        }
+
+        // Starred matrix envs (matrix*/pmatrix*/…): apply the optional [l|c|r]
+        // alignment uniformly to every column via m:mcJc (default center if
+        // none was given). Reuses the same per-column mechanism as array/cases.
+        if (starAlign != null)
+        {
+            var j = starAlign switch
+            {
+                "l" => M.HorizontalAlignmentValues.Left,
+                "r" => M.HorizontalAlignmentValues.Right,
+                _ => M.HorizontalAlignmentValues.Center,
+            };
+            var mPr = matrix.GetFirstChild<M.MatrixProperties>();
+            if (mPr != null)
+            {
+                var colCount = rows.Count == 0 ? 0 : rows.Max(r => r.Count);
+                var mcs = new M.MatrixColumns();
+                for (int ci = 0; ci < colCount; ci++)
+                    mcs.AppendChild(new M.MatrixColumn(
+                        new M.MatrixColumnProperties(
+                            new M.MatrixColumnCount { Val = 1 },
+                            new M.MatrixColumnJustification { Val = j }
+                        )));
+                mPr.AppendChild(mcs);
+            }
+        }
+
+        // Wrap with delimiter based on environment. matrix/smallmatrix render
+        // with no implicit delimiters; smallmatrix differs only in glyph size,
+        // which OMML does not model, so it is treated as a bare matrix.
+        if (envName is "matrix" or "smallmatrix")
             return matrix;
 
         var (beginChar, endChar) = envName switch
@@ -1849,7 +2582,12 @@ internal static class FormulaParser
             "bmatrix" => ("[", "]"),
             "Bmatrix" => ("{", "}"),
             "vmatrix" => ("|", "|"),
+            // \begin{Vmatrix}: double-bar (norm) delimiters ‖ (U+2016).
+            "Vmatrix" => ("‖", "‖"),
             "cases" => ("{", ""),
+            // \begin{rcases}…\end{rcases}: brace on the RIGHT — the opening
+            // delimiter is empty and the closing one is "}". Mirror of cases.
+            "rcases" => ("", "}"),
             _ => ("(", ")")
         };
 
@@ -1859,8 +2597,8 @@ internal static class FormulaParser
         if (endChar != ")")
             dPr.AppendChild(new M.EndChar { Val = endChar });
 
-        // For cases: left-align cells
-        if (envName == "cases")
+        // For cases/rcases: left-align cells
+        if (envName is "cases" or "rcases")
         {
             // Set column justification to left for the matrix
             var mPr = matrix.ChildElements.FirstOrDefault(e => e.LocalName == "mPr") as M.MatrixProperties;
@@ -1887,6 +2625,33 @@ internal static class FormulaParser
     }
 
     // ==================== Helpers ====================
+
+    /// <summary>
+    /// True when an m:f fraction carries m:fPr/m:type val="noBar" — i.e. it is a
+    /// bar-less fraction that LaTeX represents as \binom rather than \frac.
+    /// </summary>
+    private static bool IsNoBarFraction(OpenXmlElement fraction)
+    {
+        var fPr = fraction.ChildElements.FirstOrDefault(e => e.LocalName == "fPr");
+        var type = fPr?.ChildElements.FirstOrDefault(e => e.LocalName == "type");
+        var val = type?.GetAttribute("val", "http://schemas.openxmlformats.org/officeDocument/2006/math").Value;
+        return val == "noBar";
+    }
+
+    /// <summary>
+    /// Map a delimiter character to a LaTeX-safe \left/\right operand. Braces
+    /// must be escaped (\{ \}); an empty side becomes the null delimiter (.).
+    /// </summary>
+    private static string LatexDelim(string chr)
+    {
+        if (string.IsNullOrEmpty(chr)) return ".";
+        return chr switch
+        {
+            "{" => "\\{",
+            "}" => "\\}",
+            _ => chr
+        };
+    }
 
     /// <summary>
     /// BUG-R8A(BUG4): render an m:sty (math weight/posture) value as the
@@ -2050,6 +2815,39 @@ internal static class FormulaParser
         return element.InnerText;
     }
 
+    // If `baseElem` is (or wraps) a limit-style operator name run, return the
+    // LaTeX command (e.g. "\max") so limLow/limUpp round-trips as \op_{..}/\op^{..}
+    // instead of \underset/\overset. Handles the nested both-limits case where the
+    // base of a limUpp is itself a limLow carrying the operator + its subscript
+    // (\op_a^b → limUpp(limLow(op, a), b)).
+    private static string? LimitOperatorCommand(OpenXmlElement? baseElem)
+    {
+        if (baseElem == null) return null;
+        // limUpp's base wraps its limLow in an <m:e>; unwrap a single-child e.
+        if (baseElem.LocalName == "e" && baseElem.ChildElements.Count == 1
+            && baseElem.ChildElements[0].LocalName == "limLow")
+            baseElem = baseElem.ChildElements[0];
+        if (baseElem.LocalName == "limLow")
+        {
+            var inner = baseElem.ChildElements.FirstOrDefault(e => e.LocalName == "e");
+            var innerCmd = LimitOperatorCommand(inner);
+            if (innerCmd == null) return null;
+            var limText = ArgToLatex(baseElem.ChildElements.FirstOrDefault(e => e.LocalName == "lim"));
+            return $"{innerCmd}_{{{limText}}}";
+        }
+        // Bare upright run: <m:r><m:rPr><m:nor/></m:rPr><m:t>max</m:t></m:r>
+        var run = baseElem.LocalName == "r"
+            ? baseElem
+            : (baseElem.ChildElements.Count == 1 && baseElem.ChildElements[0].LocalName == "r"
+                ? baseElem.ChildElements[0] : null);
+        if (run == null) return null;
+        var rPr = run.ChildElements.FirstOrDefault(e => e.LocalName == "rPr");
+        var isUpright = rPr?.ChildElements.Any(e => e.LocalName == "nor") == true;
+        if (!isUpright) return null;
+        var text = (run.ChildElements.FirstOrDefault(e => e.LocalName == "t")?.InnerText ?? "").Trim();
+        return _limitStyleOperators.Contains(text) ? "\\" + text : null;
+    }
+
     private static string ArgToLatex(OpenXmlElement? arg)
     {
         if (arg == null) return "";
@@ -2091,6 +2889,9 @@ internal static class FormulaParser
         "∫" => "\\int",
         "∬" => "\\iint",
         "∭" => "\\iiint",
+        "∮" => "\\oint",
+        "∯" => "\\oiint",
+        "∰" => "\\oiiint",
         "∏" => "\\prod",
         "∐" => "\\coprod",
         "⋃" => "\\bigcup",
@@ -2116,6 +2917,27 @@ internal static class FormulaParser
         "iff" => "⟺",
         "implies" => "⟹",
         "impliedby" => "⟸",
+        "hookrightarrow" => "↪",
+        "hookleftarrow" => "↩",
+        "longrightarrow" => "⟶",
+        "longleftarrow" => "⟵",
+        "longleftrightarrow" => "⟷",
+        "Longrightarrow" => "⟹",
+        "Longleftarrow" => "⟸",
+        "Longleftrightarrow" => "⟺",
+        "longmapsto" => "⟼",
+        "nearrow" => "↗",
+        "searrow" => "↘",
+        "swarrow" => "↙",
+        "nwarrow" => "↖",
+        "rightharpoonup" => "⇀",
+        "rightharpoondown" => "⇁",
+        "leftharpoonup" => "↼",
+        "leftharpoondown" => "↽",
+        "twoheadrightarrow" => "↠",
+        "rightsquigarrow" => "⇝",
+        "curvearrowright" => "↷",
+        "curvearrowleft" => "↶",
         // Logic
         "land" or "wedge" => "∧",
         "lor" or "vee" => "∨",
@@ -2149,6 +2971,49 @@ internal static class FormulaParser
         "supseteq" => "⊇",
         "in" => "∈",
         "notin" => "∉",
+        "ni" => "∋",   // contains-as-member (∋); forward was missing
+        // Additional relations
+        "propto" => "∝",
+        "cong" => "≅",
+        "simeq" => "≃",
+        "asymp" => "≍",
+        "doteq" => "≐",
+        "prec" => "≺",
+        "succ" => "≻",
+        "preceq" => "≼",
+        "succeq" => "≽",
+        "ll" => "≪",
+        "gg" => "≫",
+        "sqsubseteq" => "⊑",
+        "sqsupseteq" => "⊒",
+        "sqsubset" => "⊏",
+        "sqsupset" => "⊐",
+        "dashv" => "⊣",
+        "Vdash" => "⊩",
+        "bowtie" => "⋈",
+        "smile" => "⌣",
+        "frown" => "⌢",
+        // Negated relations / set membership (precomposed Unicode where one exists)
+        "nmid" => "∤",
+        "nparallel" => "∦",
+        "nleq" or "nleqslant" => "≰",
+        "ngeq" or "ngeqslant" => "≱",
+        "nsubseteq" => "⊈",
+        "nsupseteq" => "⊉",
+        "subsetneq" => "⊊",
+        "supsetneq" => "⊋",
+        "nexists" => "∄",
+        "models" or "vDash" => "⊨",
+        "vdash" => "⊢",
+        // Named letter-like symbols
+        "aleph" => "ℵ",
+        "beth" => "ℶ",
+        "gimel" => "ℷ",
+        "daleth" => "ℸ",
+        "ell" => "ℓ",
+        "wp" => "℘",
+        "Re" => "ℜ",
+        "Im" => "ℑ",
         "forall" => "∀",
         "exists" => "∃",
         "nabla" => "∇",
@@ -2157,6 +3022,36 @@ internal static class FormulaParser
         "triangle" => "△",
         "prime" => "′",
         "hbar" => "ℏ",
+        // Misc symbols
+        "perp" or "bot" => "⊥",
+        "top" => "⊤",
+        "angle" => "∠",
+        "measuredangle" => "∡",
+        "sphericalangle" => "∢",
+        "backslash" => "∖",
+        "flat" => "♭",
+        "sharp" => "♯",
+        "natural" => "♮",
+        "square" or "Box" => "□",
+        "blacksquare" => "■",
+        "triangleleft" => "◁",
+        "triangleright" => "▷",
+        "bigtriangleup" => "△",
+        "bigtriangledown" => "▽",
+        "diamond" => "⋄",
+        "Diamond" => "◇",
+        "bigstar" => "★",
+        "clubsuit" => "♣",
+        "diamondsuit" => "♦",
+        "heartsuit" => "♥",
+        "spadesuit" => "♠",
+        "dagger" => "†",
+        "ddagger" => "‡",
+        "wr" => "≀",
+        "amalg" => "⨿",
+        "uplus" => "⊎",
+        "sqcup" => "⊔",
+        "sqcap" => "⊓",
         "cdots" => "⋯",
         "ldots" => "…",
         "vdots" => "⋮",
@@ -2192,7 +3087,19 @@ internal static class FormulaParser
         "beta" => "β",
         "gamma" => "γ",
         "delta" => "δ",
-        "epsilon" => "ε",
+        // \epsilon is the lunate epsilon (U+03F5 ϵ); \varepsilon the script
+        // form (U+03B5 ε). Keep them distinct so each round-trips to its own
+        // command rather than collapsing.
+        "epsilon" => "ϵ",
+        "varepsilon" => "ε",
+        "vartheta" => "ϑ",
+        // \phi is the loopy phi (U+03D5 ϕ); \varphi the open form (U+03C6 φ).
+        "varphi" => "φ",
+        "varrho" => "ϱ",
+        "varpi" => "ϖ",
+        "varsigma" => "ς",
+        "varkappa" => "ϰ",
+        "digamma" => "ϝ",
         "zeta" => "ζ",
         "eta" => "η",
         "theta" => "θ",
@@ -2207,7 +3114,7 @@ internal static class FormulaParser
         "sigma" => "σ",
         "tau" => "τ",
         "upsilon" => "υ",
-        "phi" => "φ",
+        "phi" => "ϕ",
         "chi" => "χ",
         "psi" => "ψ",
         "omega" => "ω",
@@ -2233,7 +3140,19 @@ internal static class FormulaParser
     {
         "lim", "sin", "cos", "tan", "log", "ln", "exp", "min", "max",
         "sup", "inf", "det", "gcd", "dim", "ker", "hom", "deg",
-        "arg", "sec", "csc", "cot", "sinh", "cosh", "tanh"
+        "arg", "sec", "csc", "cot", "sinh", "cosh", "tanh",
+        "coth", "sech", "csch",
+        "arcsin", "arccos", "arctan", "arccot", "arcsec", "arccsc",
+        "limsup", "liminf", "Pr", "argmax", "argmin"
+    };
+
+    // Limit-style operators: a following _/^ renders UNDER/OVER the name
+    // (m:limLow/m:limUpp), like \lim, instead of as a trailing sub/superscript.
+    // ToLatex reconstructs these as \op_{...}/\op^{...} (not \underset{...}{\op}).
+    private static readonly HashSet<string> _limitStyleOperators = new(StringComparer.Ordinal)
+    {
+        "lim", "max", "min", "sup", "inf", "limsup", "liminf",
+        "det", "gcd", "Pr", "argmax", "argmin"
     };
 
     private static readonly (string Symbol, string Command)[] SymbolToCommandMap = new[]
@@ -2244,10 +3163,94 @@ internal static class FormulaParser
         ("≤", "\\leq "), ("≥", "\\geq "), ("≠", "\\neq "), ("≈", "\\approx "), ("≡", "\\equiv "),
         ("∈", "\\in "), ("∀", "\\forall "), ("∃", "\\exists "), ("∞", "\\infty "), ("△", "\\triangle "),
         ("′", "\\prime "), ("ℏ", "\\hbar "), ("⇌", "\\rightleftharpoons "),
+        // Negated relations / letter-like symbols (mirror CommandToSymbol additions).
+        // Order: precomposed negations before the bare "∉" already covered by
+        // \notin, so EscapeLatex replaces the multi-char codepoint atomically.
+        ("∤", "\\nmid "), ("≰", "\\nleq "), ("≱", "\\ngeq "),
+        ("⊈", "\\nsubseteq "), ("⊉", "\\nsupseteq "),
+        ("⊊", "\\subsetneq "), ("⊋", "\\supsetneq "),
+        ("∄", "\\nexists "), ("⊨", "\\models "), ("⊢", "\\vdash "),
+        // ("≠", "\\neq ") already mapped above (line ~3103); the second entry
+        // here was a dead no-op (first match wins) — removed.
+        ("∉", "\\notin "),
+        ("∌", "\\not\\ni "), ("⊄", "\\not\\subset "), ("⊅", "\\not\\supset "),
+        ("≢", "\\not\\equiv "), ("≁", "\\not\\sim "), ("≉", "\\not\\approx "),
+        ("≇", "\\not\\cong "), ("∦", "\\nparallel "),
+        ("≮", "\\not< "), ("≯", "\\not> "),
+        ("ℵ", "\\aleph "), ("ℶ", "\\beth "), ("ℷ", "\\gimel "), ("ℸ", "\\daleth "),
+        ("ℓ", "\\ell "), ("℘", "\\wp "), ("ℜ", "\\Re "), ("ℑ", "\\Im "),
         ("α", "\\alpha "), ("β", "\\beta "), ("γ", "\\gamma "), ("δ", "\\delta "),
-        ("ε", "\\epsilon "), ("θ", "\\theta "), ("λ", "\\lambda "), ("μ", "\\mu "),
-        ("π", "\\pi "), ("σ", "\\sigma "), ("φ", "\\phi "), ("ω", "\\omega "),
+        ("ϵ", "\\epsilon "), ("θ", "\\theta "), ("λ", "\\lambda "), ("μ", "\\mu "),
+        ("π", "\\pi "), ("σ", "\\sigma "), ("ϕ", "\\phi "), ("ω", "\\omega "),
+        // Remaining Greek lowercase (forward-only in CommandToSymbol until now,
+        // so they round-tripped to bare Unicode instead of the command).
+        ("ζ", "\\zeta "), ("η", "\\eta "), ("ι", "\\iota "), ("κ", "\\kappa "),
+        ("ν", "\\nu "), ("ξ", "\\xi "), ("ρ", "\\rho "), ("τ", "\\tau "),
+        ("υ", "\\upsilon "), ("χ", "\\chi "), ("ψ", "\\psi "),
         ("Σ", "\\Sigma "), ("Π", "\\Pi "), ("Δ", "\\Delta "), ("Ω", "\\Omega "),
+        // Remaining Greek uppercase.
+        ("Γ", "\\Gamma "), ("Θ", "\\Theta "), ("Λ", "\\Lambda "), ("Ξ", "\\Xi "),
+        ("Φ", "\\Phi "), ("Ψ", "\\Psi "),
+        // Variant Greek letters (distinct codepoints from the non-var forms above).
+        ("ε", "\\varepsilon "), ("ϑ", "\\vartheta "), ("φ", "\\varphi "),
+        ("ϱ", "\\varrho "), ("ϖ", "\\varpi "), ("ς", "\\varsigma "),
+        ("ϰ", "\\varkappa "), ("ϝ", "\\digamma "),
+        // Relations
+        ("∝", "\\propto "), ("≅", "\\cong "), ("≃", "\\simeq "), ("≍", "\\asymp "),
+        ("≐", "\\doteq "), ("≺", "\\prec "), ("≻", "\\succ "), ("≼", "\\preceq "),
+        ("≽", "\\succeq "), ("≪", "\\ll "), ("≫", "\\gg "),
+        ("⊑", "\\sqsubseteq "), ("⊒", "\\sqsupseteq "), ("⊏", "\\sqsubset "),
+        ("⊐", "\\sqsupset "), ("⊣", "\\dashv "), ("⊩", "\\Vdash "),
+        ("⋈", "\\bowtie "), ("⌣", "\\smile "), ("⌢", "\\frown "),
+        // Arrows
+        ("↪", "\\hookrightarrow "), ("↩", "\\hookleftarrow "),
+        ("⟶", "\\longrightarrow "), ("⟵", "\\longleftarrow "),
+        ("⟷", "\\longleftrightarrow "), ("⟼", "\\longmapsto "),
+        ("↗", "\\nearrow "), ("↘", "\\searrow "), ("↙", "\\swarrow "), ("↖", "\\nwarrow "),
+        ("⇀", "\\rightharpoonup "), ("⇁", "\\rightharpoondown "),
+        ("↼", "\\leftharpoonup "), ("↽", "\\leftharpoondown "),
+        ("↠", "\\twoheadrightarrow "), ("⇝", "\\rightsquigarrow "),
+        ("↷", "\\curvearrowright "), ("↶", "\\curvearrowleft "),
+        // \Longrightarrow/\Longleftarrow/\Longleftrightarrow collapse to
+        // \implies/\impliedby/\iff (same glyph) — handled below.
+        ("⟹", "\\implies "), ("⟸", "\\impliedby "), ("⟺", "\\iff "),
+        // Misc symbols (\perp/\bot share ⊥ → reverse picks \perp; \bigtriangleup
+        // shares △ with \triangle → reverse picks \triangle; \square/\Box share □).
+        ("⊥", "\\perp "), ("⊤", "\\top "), ("∠", "\\angle "),
+        ("∡", "\\measuredangle "), ("∢", "\\sphericalangle "), ("∖", "\\setminus "),
+        ("♭", "\\flat "), ("♯", "\\sharp "), ("♮", "\\natural "),
+        ("□", "\\square "), ("■", "\\blacksquare "),
+        ("◁", "\\triangleleft "), ("▷", "\\triangleright "), ("▽", "\\bigtriangledown "),
+        ("⋄", "\\diamond "), ("◇", "\\Diamond "), ("★", "\\bigstar "),
+        ("♣", "\\clubsuit "), ("♦", "\\diamondsuit "), ("♥", "\\heartsuit "),
+        ("♠", "\\spadesuit "), ("†", "\\dagger "), ("‡", "\\ddagger "),
+        ("≀", "\\wr "), ("⨿", "\\amalg "), ("⊎", "\\uplus "),
+        ("⊔", "\\sqcup "), ("⊓", "\\sqcap "),
+        // Operators / logic that were forward-only (round-tripped to bare
+        // Unicode). Where two commands share a glyph, pick one canonical:
+        // ∧ → \wedge (not \land), ∨ → \vee (not \lor), ¬ → \neg (not \lnot).
+        ("∧", "\\wedge "), ("∨", "\\vee "), ("¬", "\\neg "), ("∼", "\\sim "),
+        ("⊂", "\\subset "), ("⊃", "\\supset "), ("∓", "\\mp "),
+        ("∗", "\\ast "), ("⋆", "\\star "), ("∘", "\\circ "),
+        ("⊕", "\\oplus "), ("⊖", "\\ominus "), ("⊗", "\\otimes "), ("⊙", "\\odot "),
+        ("∩", "\\cap "), ("∪", "\\cup "), ("∣", "\\mid "), ("∥", "\\parallel "),
+        // Standalone delimiters.
+        ("⟨", "\\langle "), ("⟩", "\\rangle "),
+        ("⌈", "\\lceil "), ("⌉", "\\rceil "),
+        ("⌊", "\\lfloor "), ("⌋", "\\rfloor "),
+        // Arrows that were forward-only. ↔ → \leftrightarrow, ⇔ →
+        // \Leftrightarrow (shares glyph with \iff/⟺ which is a distinct
+        // codepoint), ↦ → \mapsto.
+        ("↔", "\\leftrightarrow "), ("⇔", "\\Leftrightarrow "), ("↦", "\\mapsto "),
+        // R3 completeness pass — remaining reverse orphans (forward-only in
+        // CommandToSymbol, previously round-tripped to bare Unicode): dots,
+        // set/relation glyphs, operators and letter-like symbols. ∅ is shared
+        // with \varnothing; canonical reverse is \emptyset. (Spacing commands
+        // \,/\;/\quad/\qquad map to whitespace, which is its own reverse.)
+        ("∙", "\\bullet "), ("⋯", "\\cdots "), ("⋱", "\\ddots "), ("⋮", "\\vdots "),
+        ("∅", "\\emptyset "), ("…", "\\ldots "), ("∇", "\\nabla "), ("∂", "\\partial "),
+        ("⊆", "\\subseteq "), ("⊇", "\\supseteq "), ("∁", "\\complement "),
+        ("∋", "\\ni "),
     };
 
     // ==================== Unicode subscript/superscript ====================

@@ -632,14 +632,12 @@ public partial class ExcelHandler
         }
 
         // Line/border
+        // CONSISTENCY(shape-line): accept the compound 'color[:width[:style]]'
+        // form (same grammar as pptx shape line and the xlsx Set path) via the
+        // shared BuildShapeOutline helper — not just a plain color.
         if (properties.TryGetValue("line", out var shpLine))
         {
-            if (shpLine.Equals("none", StringComparison.OrdinalIgnoreCase))
-                spPr.AppendChild(new Drawing.Outline(new Drawing.NoFill()));
-            else
-            {
-                spPr.AppendChild(new Drawing.Outline(DrawingColorBuilder.BuildSolidFill(shpLine)));
-            }
+            spPr.AppendChild(BuildShapeOutline(shpLine));
         }
 
         // Effects (shadow, glow, reflection, softEdge) — shape-level only for shapes with fill

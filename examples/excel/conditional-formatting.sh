@@ -9,8 +9,9 @@
 #
 # Each rule is one `add` against the sheet, with type= selecting the rule kind
 # and ref= the target range. The fill lands in the workbook <dxfs> table.
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 FILE="$(dirname "$0")/conditional-formatting.xlsx"
 echo "Building $FILE ..."
 rm -f "$FILE"

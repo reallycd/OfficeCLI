@@ -390,6 +390,30 @@ public partial class PowerPointHandler
 
         var parts = value.Split(':');
         var presetName = parts[0].Trim();
+
+        // Inherited pattern fill: a bare `<a:pattFill/>` (no preset, no colors)
+        // means "pattern fill, inherit preset + colors from the style/theme
+        // fillRef". NodeBuilder serializes this as "pattern=:" on dump; replay
+        // round-trips it here instead of erroring on an empty preset. Any
+        // explicitly-supplied fg/bg is still honored ("::FFFFFF" etc.).
+        if (string.IsNullOrEmpty(presetName))
+        {
+            var bare = new Drawing.PatternFill();
+            if (parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1]))
+            {
+                var fgClrInherit = new Drawing.ForegroundColor();
+                fgClrInherit.Append(BuildColorElement(parts[1].Trim()));
+                bare.Append(fgClrInherit);
+            }
+            if (parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2]))
+            {
+                var bgClrInherit = new Drawing.BackgroundColor();
+                bgClrInherit.Append(BuildColorElement(parts[2].Trim()));
+                bare.Append(bgClrInherit);
+            }
+            return bare;
+        }
+
         var fg = parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1]) ? parts[1].Trim() : "000000";
         var bg = parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2]) ? parts[2].Trim() : "FFFFFF";
 
@@ -604,7 +628,8 @@ public partial class PowerPointHandler
     /// Apply list style (bullet/numbered) to ParagraphProperties.
     /// Values: "bullet" or "•", "numbered" or "1", "alpha" or "a", "roman" or "i", "none"
     /// </summary>
-    private static void ApplyListStyle(Drawing.ParagraphProperties pProps, string value)
+    private static void ApplyListStyle(Drawing.ParagraphProperties pProps, string value,
+                                       bool preserveIndent = false)
     {
         pProps.RemoveAllChildren<Drawing.CharacterBullet>();
         pProps.RemoveAllChildren<Drawing.AutoNumberedBullet>();
@@ -645,8 +670,16 @@ public partial class PowerPointHandler
                 break;
             case "none" or "false":
                 pProps.AppendChild(new Drawing.NoBullet());
-                pProps.LeftMargin = null;
-                pProps.Indent = null;
+                // Interactive convenience: removing the bullet also clears the
+                // hanging indent. Skipped when the same property bag carries an
+                // explicit indent/marginLeft — key-iteration order is
+                // undefined, so list=none must not erase a sibling indent=0pt
+                // that was (or will be) applied in the same Set call.
+                if (!preserveIndent)
+                {
+                    pProps.LeftMargin = null;
+                    pProps.Indent = null;
+                }
                 return;
             default:
                 if (value.Length <= 2)

@@ -420,16 +420,13 @@ internal static partial class ChartHelper
         {
             dPt = new C.DataPoint();
             dPt.AppendChild(new C.Index { Val = (uint)pointIndex });
-            // Insert before c:dLbls, c:trendline, c:errBars, c:cat, c:val etc.
-            var insertBefore = series.GetFirstChild<C.DataLabels>() as OpenXmlElement
-                ?? series.GetFirstChild<C.Trendline>() as OpenXmlElement
-                ?? series.GetFirstChild<C.ErrorBars>() as OpenXmlElement
-                ?? series.GetFirstChild<C.CategoryAxisData>() as OpenXmlElement
-                ?? series.GetFirstChild<C.Values>();
-            if (insertBefore != null)
-                series.InsertBefore(dPt, insertBefore);
-            else
-                series.AppendChild(dPt);
+            // Route through the shared anchor helper so dPt lands after
+            // marker and before dLbls/trendline/errBars/cat/val/xVal/yVal/
+            // bubbleSize/smooth. Anchoring only on Values/CategoryAxisData
+            // misses scatter/bubble series (data is in xVal/yVal/bubbleSize),
+            // so dPt was appended after the data tail — the validator then
+            // reports "unexpected child element 'c:dPt'".
+            InsertSeriesChildInOrder(series, dPt);
         }
 
         var spPr = dPt.GetFirstChild<C.ChartShapeProperties>();
@@ -454,11 +451,7 @@ internal static partial class ChartHelper
         {
             dPt = new C.DataPoint();
             dPt.AppendChild(new C.Index { Val = (uint)pointIndex });
-            var insertBefore = series.GetFirstChild<C.DataLabels>() as OpenXmlElement
-                ?? series.GetFirstChild<C.CategoryAxisData>() as OpenXmlElement
-                ?? series.GetFirstChild<C.Values>();
-            if (insertBefore != null) series.InsertBefore(dPt, insertBefore);
-            else series.AppendChild(dPt);
+            InsertSeriesChildInOrder(series, dPt);
         }
         dPt.RemoveAllChildren<C.Explosion>();
         if (explosion > 0)
@@ -477,13 +470,7 @@ internal static partial class ChartHelper
         if (dPt != null) return dPt;
         dPt = new C.DataPoint();
         dPt.AppendChild(new C.Index { Val = (uint)pointIndex });
-        var insertBefore = series.GetFirstChild<C.DataLabels>() as OpenXmlElement
-            ?? series.GetFirstChild<C.Trendline>() as OpenXmlElement
-            ?? series.GetFirstChild<C.ErrorBars>() as OpenXmlElement
-            ?? series.GetFirstChild<C.CategoryAxisData>() as OpenXmlElement
-            ?? series.GetFirstChild<C.Values>();
-        if (insertBefore != null) series.InsertBefore(dPt, insertBefore);
-        else series.AppendChild(dPt);
+        InsertSeriesChildInOrder(series, dPt);
         return dPt;
     }
 

@@ -97,8 +97,7 @@ public partial class PowerPointHandler
         }
         else
         {
-            var layouts = presentationPart.SlideMasterParts
-                .SelectMany(m => m.SlideLayoutParts).ToList();
+            var layouts = PowerPointHandler.LayoutsInOrder(presentationPart);
             if (partIdx < 1 || partIdx > layouts.Count)
                 throw new ArgumentException($"SlideLayout {partIdx} not found (total: {layouts.Count})");
             ownerPart = layouts[partIdx - 1];
@@ -178,7 +177,7 @@ public partial class PowerPointHandler
             var allRuns = shape.Descendants<Drawing.Run>().ToList();
             // Pass the owning part so fill/image/effect helpers that need a
             // relationship anchor (e.g. picture fills) write to the correct part.
-            var unsupp = SetRunOrShapeProperties(properties, allRuns, shape, ownerPart);
+            var unsupp = SetRunOrShapeProperties(properties, allRuns, shape, ownerPart, unrecognizedLatex: LastUnrecognizedLatex);
             rootEl.Save();
             return unsupp;
         }

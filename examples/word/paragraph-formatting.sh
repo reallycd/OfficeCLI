@@ -8,8 +8,9 @@
 # Note: paragraph-level `bold` etc. apply to all runs in the paragraph and read
 # back on the paragraph; `markRPr.bold` formats only the paragraph mark and is
 # distinct. Both are settable + gettable.
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 DOCX="$(dirname "$0")/paragraph-formatting.docx"
 echo "Building $DOCX ..."
 rm -f "$DOCX"
@@ -119,11 +120,13 @@ officecli add "$DOCX" /body --type paragraph --prop "text=Framed paragraph — f
     --prop framePr.hSpace=180 --prop framePr.vSpace=180
 
 # --- paragraph borders (pBdr) ---
-# Whole-box forms only (`border=...`); per-side `border.top=` works but the
-# handler reports it as an unsupported prop, so the trio sticks to the box form.
+# Whole-box shorthand (`border=...`) sets all four sides at once. Per-side keys
+# (`border.top`/`border.bottom`/`border.left`/`border.right`) are also supported
+# and take the same `style;size;color` value — mix them for a partial box.
 heading "Paragraph borders (pBdr)"
 officecli add "$DOCX" /body --type paragraph --prop "text=Box border, all sides (single)" --prop border=single
 officecli add "$DOCX" /body --type paragraph --prop "text=Red 1pt box (style;size;color)" --prop "border=single;8;FF0000"
+officecli add "$DOCX" /body --type paragraph --prop "text=Per-side: top + bottom only (rule above and below)" --prop "border.top=single;8;0070C0" --prop "border.bottom=single;8;0070C0"
 
 # --- vertical text alignment within the line ---
 heading "Vertical text alignment"

@@ -49,7 +49,8 @@ static partial class CommandBuilder
     /// </summary>
     internal static List<BatchResult> ApplyBatchItems(
         OfficeCli.Core.IDocumentHandler handler, List<BatchItem> items,
-        bool stopOnError, bool json, bool skipResidentOnlyCommands = false)
+        bool stopOnError, bool json, bool skipResidentOnlyCommands = false,
+        ICollection<string>? unrecognizedLatex = null)
     {
         var results = new List<BatchResult>();
         for (int bi = 0; bi < items.Count; bi++)
@@ -74,6 +75,25 @@ static partial class CommandBuilder
                 results.Add(new BatchResult { Index = bi, Success = false, Item = item, Error = ex.Message });
                 if (stopOnError) break;
             }
+            // BUG-BT2: per-item unrecognized-LaTeX diagnostics. The handler
+            // resets LastUnrecognizedLatex on every Add/Set, so its tokens are
+            // only valid for the item just executed — collect them now,
+            // de-duplicated, so the caller can surface the same
+            // unrecognized_latex_command warning (and exit 2) that single-shot
+            // add/set produce. Without this the warnings were silently
+            // swallowed by the batch path.
+            if (unrecognizedLatex != null)
+            {
+                var toks = handler switch
+                {
+                    OfficeCli.Handlers.WordHandler wlx => wlx.LastUnrecognizedLatex,
+                    OfficeCli.Handlers.PowerPointHandler plx => plx.LastUnrecognizedLatex,
+                    _ => null,
+                };
+                if (toks is { Count: > 0 })
+                    foreach (var t in toks)
+                        if (!unrecognizedLatex.Contains(t)) unrecognizedLatex.Add(t);
+            }
         }
         return results;
     }
@@ -89,10 +109,10 @@ static partial class CommandBuilder
     /// </summary>
     internal static List<BatchResult> RunNonResidentBatch(
         OfficeCli.Core.IDocumentHandler handler, List<BatchItem> items,
-        bool stopOnError, bool json)
+        bool stopOnError, bool json, ICollection<string>? unrecognizedLatex = null)
     {
         if (handler is OfficeCli.Handlers.WordHandler wh) wh.DeferSave = true;
-        return ApplyBatchItems(handler, items, stopOnError, json);
+        return ApplyBatchItems(handler, items, stopOnError, json, unrecognizedLatex: unrecognizedLatex);
     }
 
     private static Command BuildBatchCommand(Option<bool> jsonOption)
@@ -371,7 +391,8 @@ static partial class CommandBuilder
             // DeferSave + replay loop, shared with the MCP batch surface. The
             // handler's using-Dispose performs the single FinalizeDeferredIds +
             // Save flush.
-            var batchResults = RunNonResidentBatch(handler, items, stopOnError, json);
+            var batchUnrecognizedLatex = new List<string>();
+            var batchResults = RunNonResidentBatch(handler, items, stopOnError, json, batchUnrecognizedLatex);
             // BUG-R6-02: in --json mode the non-resident path emitted the raw
             // {"results":...,"summary":...} body while the resident path
             // wrapped it in {"success":..., "data":{...}} (resident server
@@ -388,20 +409,39 @@ static partial class CommandBuilder
             // signal. Two `success` fields appear in the JSON (outer batch
             // verdict, inner per-step) — disambiguate by JSON path.
             var batchSuccess = batchResults.Count == 0 || !batchResults.Any(r => !r.Success);
+            // BUG-BT2: surface per-item unrecognized-LaTeX warnings the same way
+            // single-shot add/set do (warning + JSON envelope + exit 2). A batch
+            // whose only issue is an unknown LaTeX command otherwise exited 0
+            // with no diagnostic, silently writing the literal-text fallback.
+            var batchWarnings = new List<OfficeCli.Core.CliWarning>();
+            foreach (var tok in batchUnrecognizedLatex)
+            {
+                batchWarnings.Add(new OfficeCli.Core.CliWarning
+                {
+                    Message = $"unrecognized_latex_command: {tok}",
+                    Code = "unrecognized_latex_command",
+                    Suggestion = "Check the command spelling; see https://katex.org/docs/supported.html for supported syntax.",
+                });
+            }
             if (json)
             {
                 using var sw = new System.IO.StringWriter();
                 PrintBatchResults(batchResults, json, items.Count, sw);
                 var inner = sw.ToString().TrimEnd('\n', '\r');
-                Console.WriteLine(OfficeCli.Core.OutputFormatter.WrapEnvelope(inner, success: batchSuccess));
+                Console.WriteLine(OfficeCli.Core.OutputFormatter.WrapEnvelope(inner, batchWarnings, success: batchSuccess));
             }
             else
             {
                 PrintBatchResults(batchResults, json, items.Count);
+                foreach (var w in batchWarnings)
+                    Console.Error.WriteLine($"  WARNING: {w.Message}");
             }
             if (batchResults.Any(r => r.Success))
                 NotifyWatch(handler, file.FullName, null);
-            return batchSuccess ? 0 : 1;
+            // Exit precedence: a failed item (exit 1) outranks an
+            // unrecognized-LaTeX-only warning (exit 2 mirrors single-shot).
+            if (!batchSuccess) return 1;
+            return batchWarnings.Count > 0 ? 2 : 0;
         }, json); });
 
         return batchCommand;

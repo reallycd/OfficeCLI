@@ -311,6 +311,47 @@ public partial class WordHandler
             _ => throw new ArgumentException($"Invalid vertical relative position: '{value}'. Valid values: margin, page, paragraph, line, topMargin, bottomMargin, insideMargin, outsideMargin.")
         };
 
+    // Accessibility "decorative" flag. Stored as a docPr extension:
+    // <a:extLst><a:ext uri="{C183D7F6-DF14-4A22-8298-3B9A5F5C6C3B}">
+    //   <adec:decorative val="1" xmlns:adec="…/2017/decorative"/></a:ext></a:extLst>.
+    // adec is not a strongly-typed SDK element, so the marker is built/read as an
+    // OpenXmlUnknownElement under the typed extension list.
+    private const string DecorativeExtUri = "{C183D7F6-DF14-4A22-8298-3B9A5F5C6C3B}";
+    private const string DecorativeNs = "http://schemas.microsoft.com/office/drawing/2017/decorative";
+
+    private static void SetPictureDecorative(DW.DocProperties docProps)
+    {
+        if (docProps == null) return;
+        var extList = docProps.GetFirstChild<A.NonVisualDrawingPropertiesExtensionList>();
+        if (extList == null)
+        {
+            extList = new A.NonVisualDrawingPropertiesExtensionList();
+            docProps.AppendChild(extList);
+        }
+        // Avoid duplicating an existing decorative ext.
+        if (extList.Elements<A.Extension>()
+                .Any(e => string.Equals(e.Uri?.Value, DecorativeExtUri, StringComparison.OrdinalIgnoreCase)))
+            return;
+        var ext = new A.Extension { Uri = DecorativeExtUri };
+        var dec = new DocumentFormat.OpenXml.OpenXmlUnknownElement("adec", "decorative", DecorativeNs);
+        dec.SetAttribute(new DocumentFormat.OpenXml.OpenXmlAttribute("", "val", "", "1"));
+        ext.AppendChild(dec);
+        extList.AppendChild(ext);
+    }
+
+    private static bool IsPictureDecorative(DW.DocProperties? docProps)
+    {
+        var extList = docProps?.GetFirstChild<A.NonVisualDrawingPropertiesExtensionList>();
+        if (extList == null) return false;
+        // The adec:decorative marker deserializes either as a typed element
+        // (SDK-known) or as an OpenXmlUnknownElement, so match by LocalName.
+        return extList.Descendants()
+            .Any(e => e.LocalName == "decorative"
+                && (e.GetAttributes().Any(a => a.LocalName == "val"
+                        && (a.Value == "1" || string.Equals(a.Value, "true", StringComparison.OrdinalIgnoreCase)))
+                    || !e.GetAttributes().Any(a => a.LocalName == "val")));
+    }
+
     private static string GetDrawingInfo(Drawing drawing)
     {
         var docProps = drawing.Descendants<DW.DocProperties>().FirstOrDefault();
@@ -350,6 +391,10 @@ public partial class WordHandler
         // it, so the mono picture replayed visible and rendered (black) over the
         // colour logo. Surface it so AddPicture restores the hidden state.
         if (docProps?.Hidden?.Value == true) node.Format["hidden"] = true;
+        // Accessibility: <wp:docPr>/<a:extLst>/<a:ext uri="{C183D7F6-…}">/<adec:decorative val="1"/>
+        // marks the image decorative (ignored by screen readers). Surface it so
+        // AddPicture can restore the decorative extension on round-trip.
+        if (IsPictureDecorative(docProps)) node.Format["decorative"] = true;
         if (extent?.Cx != null) node.Format["width"] = $"{extent.Cx.Value / EmuConverter.EmuPerCmF:F1}cm";
         if (extent?.Cy != null) node.Format["height"] = $"{extent.Cy.Value / EmuConverter.EmuPerCmF:F1}cm";
         if (docProps?.Description?.Value != null) node.Format["alt"] = docProps.Description.Value;

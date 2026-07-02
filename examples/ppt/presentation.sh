@@ -1,8 +1,9 @@
 #!/bin/bash
 # Generate a visually stunning presentation: "The Art of Design"
 # Deep gradient backgrounds, geometric accents, clean typography
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 OUT="$(dirname "$0")/presentation.pptx"
 rm -f "$OUT"
 officecli create "$OUT"
@@ -14,7 +15,7 @@ officecli open "$OUT"
 # SLIDE 1 — Title Slide
 ###############################################################################
 echo "  -> Slide 1: Title"
-officecli add "$OUT" /presentation --type slide
+officecli add "$OUT" / --type slide
 
 # Full-bleed dark gradient background
 officecli raw-set "$OUT" /slide[1] --xpath "//p:cSld" --action prepend --xml '
@@ -155,7 +156,7 @@ officecli raw-set "$OUT" /slide[1] --xpath "//p:cSld/p:spTree" --action append -
 # SLIDE 2 — Three Pillars
 ###############################################################################
 echo "  -> Slide 2: Three Pillars"
-officecli add "$OUT" /presentation --type slide
+officecli add "$OUT" / --type slide
 
 officecli raw-set "$OUT" /slide[2] --xpath "//p:cSld" --action prepend --xml '
 <p:bg><p:bgPr><a:solidFill><a:srgbClr val="0D1B2A"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>'
@@ -277,7 +278,7 @@ officecli raw-set "$OUT" /slide[2] --xpath "//p:cSld/p:spTree" --action append -
 # SLIDE 3 — Data Showcase
 ###############################################################################
 echo "  -> Slide 3: Data Showcase"
-officecli add "$OUT" /presentation --type slide
+officecli add "$OUT" / --type slide
 
 officecli raw-set "$OUT" /slide[3] --xpath "//p:cSld" --action prepend --xml '
 <p:bg><p:bgPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:srgbClr val="0D1B2A"/></a:gs><a:gs pos="100000"><a:srgbClr val="152238"/></a:gs></a:gsLst><a:lin ang="2700000" scaled="1"/></a:gradFill><a:effectLst/></p:bgPr></p:bg>'
@@ -379,7 +380,7 @@ officecli raw-set "$OUT" /slide[3] --xpath "//p:cSld/p:spTree" --action append -
 # SLIDE 4 — Quote Slide
 ###############################################################################
 echo "  -> Slide 4: Quote"
-officecli add "$OUT" /presentation --type slide
+officecli add "$OUT" / --type slide
 
 officecli raw-set "$OUT" /slide[4] --xpath "//p:cSld" --action prepend --xml '
 <p:bg><p:bgPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:srgbClr val="1B2838"/></a:gs><a:gs pos="50000"><a:srgbClr val="0D1B2A"/></a:gs><a:gs pos="100000"><a:srgbClr val="1B2838"/></a:gs></a:gsLst><a:lin ang="2700000" scaled="1"/></a:gradFill><a:effectLst/></p:bgPr></p:bg>'
@@ -443,7 +444,7 @@ officecli raw-set "$OUT" /slide[4] --xpath "//p:cSld/p:spTree" --action append -
 # SLIDE 5 — Process / Timeline
 ###############################################################################
 echo "  -> Slide 5: Process"
-officecli add "$OUT" /presentation --type slide
+officecli add "$OUT" / --type slide
 
 officecli raw-set "$OUT" /slide[5] --xpath "//p:cSld" --action prepend --xml '
 <p:bg><p:bgPr><a:solidFill><a:srgbClr val="0D1B2A"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>'
@@ -534,7 +535,7 @@ officecli raw-set "$OUT" /slide[5] --xpath "//p:cSld/p:spTree" --action append -
 # SLIDE 6 — Closing
 ###############################################################################
 echo "  -> Slide 6: Closing"
-officecli add "$OUT" /presentation --type slide
+officecli add "$OUT" / --type slide
 
 officecli raw-set "$OUT" /slide[6] --xpath "//p:cSld" --action prepend --xml '
 <p:bg><p:bgPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:srgbClr val="0A1628"/></a:gs><a:gs pos="50000"><a:srgbClr val="0D1B2A"/></a:gs><a:gs pos="100000"><a:srgbClr val="1B2838"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="1"/></a:gradFill><a:effectLst/></p:bgPr></p:bg>'

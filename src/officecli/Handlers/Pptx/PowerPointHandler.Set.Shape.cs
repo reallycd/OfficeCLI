@@ -257,6 +257,22 @@ public partial class PowerPointHandler
                     pProps.Indent = (int)Math.Round(SpacingConverter.ParsePointsSigned(value) * EmuConverter.EmuPerPointF);
                     break;
                 }
+                case "liststyle" or "list":
+                {
+                    // Handle here (not via the shape-level fall-through) for two
+                    // reasons: the fall-through delegates a SINGLE-key dict, so
+                    // ApplyListStyle's list=none convenience (clear the hanging
+                    // indent) couldn't see a sibling indent=/marginLeft= in the
+                    // same Set call and erased it (sample19, replayed indent="0"
+                    // vanished); and shape-level scope would restyle every
+                    // paragraph instead of just this one.
+                    var pProps = para.ParagraphProperties ?? (para.ParagraphProperties = new Drawing.ParagraphProperties());
+                    ApplyListStyle(pProps, value, preserveIndent:
+                        properties.ContainsKey("indent") || properties.ContainsKey("marginLeft")
+                        || properties.ContainsKey("marginleft") || properties.ContainsKey("marL")
+                        || properties.ContainsKey("marl"));
+                    break;
+                }
                 case "level":
                 {
                     var pProps = para.ParagraphProperties ?? (para.ParagraphProperties = new Drawing.ParagraphProperties());
@@ -467,7 +483,7 @@ public partial class PowerPointHandler
                 firstPara.Append(seededRun);
             allRuns = new List<Drawing.Run> { seededRun };
         }
-        var unsupported = SetRunOrShapeProperties(properties, allRuns, shape, slidePart);
+        var unsupported = SetRunOrShapeProperties(properties, allRuns, shape, slidePart, unrecognizedLatex: LastUnrecognizedLatex);
         GetSlide(slidePart).Save();
         return unsupported;
     }
@@ -518,7 +534,7 @@ public partial class PowerPointHandler
                 firstPara.Append(seededRun);
             allRuns = new List<Drawing.Run> { seededRun };
         }
-        var unsupported = SetRunOrShapeProperties(properties, allRuns, shape, slidePart);
+        var unsupported = SetRunOrShapeProperties(properties, allRuns, shape, slidePart, unrecognizedLatex: LastUnrecognizedLatex);
         GetSlide(slidePart).Save();
         return unsupported;
     }
@@ -813,7 +829,7 @@ public partial class PowerPointHandler
                     outline.RemoveAllChildren<Drawing.SolidFill>();
                     outline.RemoveAllChildren<Drawing.NoFill>();
                     outline.RemoveAllChildren<Drawing.GradientFill>();
-                    var cxnGrad = BuildGradientFill(value);
+                    var cxnGrad = BuildGradientFill(NormalizeLineGradientSpec(value));
                     var cxnPrstDash = outline.GetFirstChild<Drawing.PresetDash>();
                     if (cxnPrstDash != null)
                         outline.InsertBefore(cxnGrad, cxnPrstDash);
@@ -1595,7 +1611,7 @@ public partial class PowerPointHandler
                 .Where(kv => !excludeKeys.Contains(kv.Key))
                 .ToDictionary(kv => kv.Key, kv => kv.Value);
 
-            var unsupported = SetRunOrShapeProperties(shapeProps, allRuns, shape, slidePart);
+            var unsupported = SetRunOrShapeProperties(shapeProps, allRuns, shape, slidePart, unrecognizedLatex: LastUnrecognizedLatex);
 
             if (animValue != null)
             {

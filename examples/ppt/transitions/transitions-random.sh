@@ -8,8 +8,9 @@
 #   random    — PowerPoint chooses a random transition each time you
 #               enter Slide Show mode.
 
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 DIR="$(dirname "$0")"
 PPTX="$DIR/transitions-random.pptx"
 

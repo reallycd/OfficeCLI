@@ -132,13 +132,26 @@ public static class TableStyleResolver
         var resolvedLeft   = pos.ColIndex == 0                  ? left   : insideV;
         var resolvedRight  = pos.ColIndex == pos.ColCount - 1   ? right  : insideV;
 
+        // PowerPoint's built-in table styles render the emphasis bands — header
+        // row, total row, first column, last column — in BOLD (their band defs carry
+        // tcTxStyle b="on"). Verified across Light/Medium/Dark families. A band only
+        // counts as "emphasis" when it actually styles the cell (distinct fill or text
+        // color); banded body rows have a distinct fill but are NOT bold, so they are
+        // intentionally excluded (only the four header/total/edge bands qualify).
+        static bool HasEmphasis(TableStyleRegion r) => r.Fill != null || r.TextColorRef != null;
+        bool bold = (isFirstRow && HasEmphasis(def.FirstRow))
+                 || (isLastRow  && HasEmphasis(def.LastRow))
+                 || (isFirstCol && HasEmphasis(def.FirstCol))
+                 || (isLastCol  && HasEmphasis(def.LastCol));
+
         return new ResolvedCell(
             Fill:      ResolveFillToHex(fill, themeColors),
             TextColor: ResolveColorRefToHex(textColor, themeColors, tint: null),
             Top:       MaterializeBorder(resolvedTop, themeColors),
             Bottom:    MaterializeBorder(resolvedBottom, themeColors),
             Left:      MaterializeBorder(resolvedLeft, themeColors),
-            Right:     MaterializeBorder(resolvedRight, themeColors));
+            Right:     MaterializeBorder(resolvedRight, themeColors),
+            Bold:      bold);
     }
 
     private static ResolvedBorder? MaterializeBorder(

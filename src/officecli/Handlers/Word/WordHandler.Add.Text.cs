@@ -1722,7 +1722,20 @@ public partial class WordHandler
     // inline path already wraps there; for display, Body uniquely tolerates a
     // bare m:oMathPara child (schema-legal) and is handled by its own branch.
     private static bool IsMathBlockContainer(OpenXmlElement parent) =>
-        parent is Body or SdtBlock or Footnote or Endnote or Header or Footer;
+        parent is Body or SdtBlock or Footnote or Endnote or Header or Footer
+              or TextBoxContent or Comment or SdtContentBlock;
+
+    // A plain-text SDT (<w:text/> in sdtPr) may legally hold only a single run of
+    // plain text — adding an equation (math / a block paragraph) makes the file
+    // one Word refuses to open, even though the SDK validator does not flag it.
+    // Adding an equation implies rich content, so drop the <w:text/> restriction,
+    // turning it into a rich-text SDT that accepts block-level content.
+    private static void UpgradeTextSdtForBlockContent(OpenXmlElement parent)
+    {
+        var sdt = (parent as SdtContentBlock)?.Parent as SdtBlock
+                  ?? parent.Ancestors<SdtBlock>().FirstOrDefault();
+        sdt?.SdtProperties?.GetFirstChild<SdtContentText>()?.Remove();
+    }
 
     // BUG-DUMP-COMMENT-IN-MATH: remove comment-range markers (commentRangeStart /
     // commentRangeEnd / commentReference, any prefix) from a verbatim math fragment
@@ -1750,10 +1763,40 @@ public partial class WordHandler
     {
         string resultPath;
         OpenXmlElement? newElement;
-        if (!properties.TryGetValue("formula", out var formula) && !properties.TryGetValue("text", out formula))
-            throw new ArgumentException("'formula' (or 'text') property is required for equation type");
+        // Accept `latex=` and `math=` as property aliases for `formula=` — both
+        // are pervasive in docs/usage and read naturally for an equation, and the
+        // TrackingPropertyDictionary marks them consumed so no false
+        // unsupported_property warning fires (handler-as-truth).
+        if (!properties.TryGetValue("formula", out var formula)
+            && !properties.TryGetValue("text", out formula)
+            && !properties.TryGetValue("latex", out formula)
+            && !properties.TryGetValue("math", out formula))
+            throw new ArgumentException(
+                "'formula' (or 'text' / 'latex' / 'math') property is required for equation type");
 
-        var mode = properties.GetValueOrDefault("mode", "display");
+        // A run (w:r) cannot host m:oMath/m:oMathPara — appending one produced a
+        // schema-invalid file Word refuses to open. Reject with a clear message
+        // rather than silently corrupting (exit 0).
+        if (parent is Run)
+            throw new ArgumentException(
+                "Cannot add an equation to a run (w:r). Valid parents: /body, a paragraph, "
+                + "a hyperlink, footnote, endnote, header/footer, textbox, comment, or sdtContent.");
+
+        // If the equation lands in a plain-text SDT, relax it to rich-text so the
+        // file stays openable in Word (see UpgradeTextSdtForBlockContent).
+        UpgradeTextSdtForBlockContent(parent);
+
+        // R2-fuzz-3: validate `mode` like Set does. Accept inline/display
+        // case-insensitively (mode=INLINE works); any other value is reported
+        // as unsupported (warning + exit 2) instead of silently defaulting to
+        // display. CONSISTENCY: mirrors SetElementMPara/SetElementOMath's
+        // "mode (valid: inline, display)" rejection.
+        var mode = properties.GetValueOrDefault("mode", "display").ToLowerInvariant();
+        if (properties.ContainsKey("mode") && mode is not ("inline" or "display"))
+        {
+            LastAddUnsupportedProps.Add("mode (valid: inline, display)");
+            mode = "display"; // fall back so the equation is still written
+        }
 
         // BUG-DUMP-EQVERBATIM: prefer the verbatim <m:oMath> the dump captured
         // (xml prop) over the LaTeX `formula` string. The formula string is lossy
@@ -1810,7 +1853,10 @@ public partial class WordHandler
                     catch { /* malformed — fall through to the formula string */ }
                 }
             }
-            var parsed = FormulaParser.Parse(formula);
+            // R3-fuzz-1: lenient parse — a too-deep/unparseable formula records
+            // a warning (exit 2) and writes a placeholder instead of throwing
+            // (exit 1 / whole-batch failure).
+            var parsed = FormulaParser.ParseLenient(formula, LastUnrecognizedLatex);
             return parsed as M.OfficeMath ?? new M.OfficeMath(parsed.CloneNode(true));
         }
 
@@ -1830,7 +1876,11 @@ public partial class WordHandler
             // than alongside it.
             inlineHl.AppendChild(BuildSourceOMath());
             var mathCount = inlineHl.Elements<M.OfficeMath>().Count();
-            resultPath = $"{parentPath}/equation[{mathCount}]";
+            // BUG-R4-1: emit the RESOLVABLE oMath[N] segment (the resolver
+            // matches the m:oMath element by LocalName). The non-hyperlink
+            // inline branch above was fixed in R3-bt-1; this hyperlink-parent
+            // branch still returned the unresolvable equation[N].
+            resultPath = $"{parentPath}/oMath[{mathCount}]";
             newElement = inlineHl;
         }
         else if (mode == "inline" && IsMathBlockContainer(parent))
@@ -2055,8 +2105,17 @@ public partial class WordHandler
                 {
                     AppendToParent(insertTarget, wrapPara);
                 }
+                // When the caller targeted a PARAGRAPH inside the container
+                // (insertAfter set), parentPath points at that child paragraph,
+                // not the container — strip the trailing segment so the result is
+                // /header/p[@paraId=X]/oMathPara[1], not the doubly-nested
+                // /header/p[target]/p[@paraId=X]/oMathPara[1] (unresolvable).
+                // Mirrors the Body branch's bodyPath derivation.
+                var containerPath = insertAfter != null
+                    ? parentPath.Substring(0, parentPath.LastIndexOf('/'))
+                    : parentPath;
                 var pIdx = insertTarget.Elements<Paragraph>().Count();
-                resultPath = $"{parentPath}/{BuildParaPathSegment(wrapPara, pIdx)}/oMathPara[1]";
+                resultPath = $"{containerPath}/{BuildParaPathSegment(wrapPara, pIdx)}/oMathPara[1]";
             }
             else
             {

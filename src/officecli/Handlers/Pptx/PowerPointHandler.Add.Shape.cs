@@ -649,7 +649,7 @@ public partial class PowerPointHandler
                         if (properties.TryGetValue("adj", out var adjSpec)
                             && !string.IsNullOrWhiteSpace(adjSpec))
                         {
-                            ApplyAdjustHandles(avLstForAdd, adjSpec);
+                            ApplyAdjustHandles(avLstForAdd, adjSpec, presetGeom);
                         }
                         newShape.ShapeProperties.AppendChild(
                             new Drawing.PresetGeometry(avLstForAdd) { Preset = presetGeom }
@@ -779,17 +779,23 @@ public partial class PowerPointHandler
                     else
                         outline.AppendChild(BuildSolidFill(lineColor));
                 }
+                // styledLine: the dump signals a <p:style> raw-set follows and
+                // no explicit line colour was captured — the stroke colour comes
+                // from lnRef, so the default-black fill injection must be
+                // skipped (stress013's theme-tinted borders replayed black).
+                bool shStyledLine = IsTruthy(properties.GetValueOrDefault("styledLine"))
+                                    || IsTruthy(properties.GetValueOrDefault("styledline"));
                 if (properties.TryGetValue("linewidth", out var lwStr) || properties.TryGetValue("lineWidth", out lwStr) || properties.TryGetValue("line.width", out lwStr) || properties.TryGetValue("border.width", out lwStr))
                 {
                     var outline = EnsureOutline(newShape.ShapeProperties!);
                     outline.Width = Core.EmuConverter.ParseLineWidth(lwStr);
-                    EnsureOutlineHasFill(outline);
+                    if (!shStyledLine) EnsureOutlineHasFill(outline);
                 }
                 else if (compoundLineWidth != null)
                 {
                     var outline = EnsureOutline(newShape.ShapeProperties!);
                     outline.Width = Core.EmuConverter.ParseLineWidth(compoundLineWidth);
-                    EnsureOutlineHasFill(outline);
+                    if (!shStyledLine) EnsureOutlineHasFill(outline);
                 }
                 // Stash the compound dash so the lineDash branch in
                 // SetRunOrShapeProperties below picks it up via the
@@ -827,7 +833,7 @@ public partial class PowerPointHandler
                     foreach (var para in newShape.TextBody?.Elements<Drawing.Paragraph>() ?? Enumerable.Empty<Drawing.Paragraph>())
                     {
                         var pProps = para.ParagraphProperties ?? (para.ParagraphProperties = new Drawing.ParagraphProperties());
-                        ApplyListStyle(pProps, listVal);
+                        ApplyListStyle(pProps, listVal, preserveIndent: properties.ContainsKey("indent") || properties.ContainsKey("marginLeft") || properties.ContainsKey("marginleft") || properties.ContainsKey("marL") || properties.ContainsKey("marl"));
                     }
                 }
 
@@ -871,9 +877,16 @@ public partial class PowerPointHandler
                       "textfill", "textgradient", "geometry",
                       "baseline", "superscript", "subscript",
                       "textwarp", "wordart", "autofit",
+                      // WordArt raw forms — verbatim prstTxWarp (keeps avLst)
+                      // and the bodyPr-level 3D-text scene3d/sp3d pair.
+                      "textwarpraw", "textWarpRaw",
+                      "textscene3draw", "textScene3dRaw",
+                      "textsp3draw", "textSp3dRaw",
                       // shrink-on-overflow scale — consumed alongside autofit=normal
                       "fontScale", "fontscale", "lnSpcReduction", "lnspcreduction",
-                      "wrap", "wordwrap",
+                      "wrap", "wordwrap", "anchorCtr", "anchorctr", "upright",
+                      "columns", "numcol", "columnSpacing", "columnspacing",
+                      "vertOverflow", "vertoverflow", "horzOverflow", "horzoverflow",
                       "lineopacity", "line.opacity",
                       "linegradient", "line.gradient",
                       // previously dropped silently — route through Set
@@ -898,7 +911,7 @@ public partial class PowerPointHandler
                       // BUG1: text direction — Set handles in SetRunOrShapeProperties
                       "textdirection", "textdir",
                       // BUG2: text outline — Set handles all three key variants
-                      "textOutline", "textoutline",
+                      "textOutline", "textoutline", "textOutlineRaw", "textoutlineraw", "textFillRaw", "textfillraw",
                       "textOutline.width", "textoutline.width",
                       "textOutline.color", "textoutline.color",
                       // CONSISTENCY(highlight): a:highlight — Set's curated case

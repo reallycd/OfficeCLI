@@ -592,7 +592,7 @@ public partial class PowerPointHandler
 
             // Line spacing
             double lineHeight = 1.0; // PowerPoint default is single spacing
-            var lsPct = pProps?.GetFirstChild<Drawing.LineSpacing>()?.GetFirstChild<Drawing.SpacingPercent>()?.Val?.Value;
+            var lsPct = pProps?.GetFirstChild<Drawing.LineSpacing>()?.GetFirstChild<Drawing.SpacingPercent>().PercentVal();
             if (lsPct.HasValue) lineHeight = lsPct.Value / 100000.0;
             var lsPts = pProps?.GetFirstChild<Drawing.LineSpacing>()?.GetFirstChild<Drawing.SpacingPoints>()?.Val?.Value;
             if (lsPts.HasValue) lineHeight = lsPts.Value / 100.0 / fontSizePt; // convert pt spacing to ratio
@@ -1207,7 +1207,7 @@ public partial class PowerPointHandler
             if (saPts.HasValue) paraStyles.Add($"margin-bottom:{saPts.Value / 100.0:0.##}pt");
 
             // Line spacing
-            var lsPct = pProps?.GetFirstChild<Drawing.LineSpacing>()?.GetFirstChild<Drawing.SpacingPercent>()?.Val?.Value;
+            var lsPct = pProps?.GetFirstChild<Drawing.LineSpacing>()?.GetFirstChild<Drawing.SpacingPercent>().PercentVal();
             if (lsPct.HasValue) paraStyles.Add($"line-height:{lsPct.Value / 100000.0:0.##}");
             var lsPts = pProps?.GetFirstChild<Drawing.LineSpacing>()?.GetFirstChild<Drawing.SpacingPoints>()?.Val?.Value;
             if (lsPts.HasValue) paraStyles.Add($"line-height:{lsPts.Value / 100.0:0.##}pt");
@@ -1400,7 +1400,8 @@ public partial class PowerPointHandler
 
             // Chevron
             "chevron" => $"0,0 {w * 0.8:0.##},0 {w:0.##},{h / 2:0.##} {w * 0.8:0.##},{h:0.##} 0,{h:0.##} {w * 0.2:0.##},{h / 2:0.##}",
-            "homePlate" => $"0,0 {w * 0.85:0.##},0 {w:0.##},{h / 2:0.##} {w * 0.85:0.##},{h:0.##} 0,{h:0.##}",
+            // adj = point depth fraction of width (default 25000 = 25%); body = (1-adj)*w.
+            "homePlate" => $"0,0 {w * (1 - ReadAdjValue(presetGeom, 0, 25000) / 100000.0):0.##},0 {w:0.##},{h / 2:0.##} {w * (1 - ReadAdjValue(presetGeom, 0, 25000) / 100000.0):0.##},{h:0.##} 0,{h:0.##}",
 
             // Cross / Plus
             "plus" or "cross" => $"{w * 0.33:0.##},0 {w * 0.67:0.##},0 {w * 0.67:0.##},{h * 0.33:0.##} {w:0.##},{h * 0.33:0.##} {w:0.##},{h * 0.67:0.##} {w * 0.67:0.##},{h * 0.67:0.##} {w * 0.67:0.##},{h:0.##} {w * 0.33:0.##},{h:0.##} {w * 0.33:0.##},{h * 0.67:0.##} 0,{h * 0.67:0.##} 0,{h * 0.33:0.##} {w * 0.33:0.##},{h * 0.33:0.##}",
@@ -1735,7 +1736,8 @@ public partial class PowerPointHandler
         var shadow = effectList.GetFirstChild<Drawing.OuterShadow>();
         if (shadow == null) return null;
 
-        var alpha = shadow.Descendants<Drawing.Alpha>().FirstOrDefault()?.Val?.Value ?? 50000;
+        // Absent <a:alpha> => fully opaque (OOXML default), matching PowerPoint.
+        var alpha = shadow.Descendants<Drawing.Alpha>().FirstOrDefault()?.Val?.Value ?? 100000;
         var opacity = alpha / 100000.0;
 
         var rgb = shadow.GetFirstChild<Drawing.RgbColorModelHex>()?.Val?.Value;

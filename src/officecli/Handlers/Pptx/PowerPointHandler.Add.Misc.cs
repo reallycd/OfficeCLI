@@ -243,6 +243,17 @@ public partial class PowerPointHandler
                     || properties.ContainsKey("miter.limit") || properties.ContainsKey("line.miterlimit");
                 bool skipOutline = bareLine && !hasAnyLineInput;
 
+                // A connector whose colour/width comes from its <p:style> lnRef
+                // (round-tripped as a raw-set append after this Add) must NOT get
+                // a synthetic default black solidFill + 1pt width — the explicit
+                // outline would override the theme reference and replay black.
+                // The emitter sets `styledLine` only when a style is present and
+                // no explicit line colour/width was supplied, so any other line.*
+                // input (tailEnd, dash, cap, …) still lands on a bare <a:ln> that
+                // inherits colour/width from lnRef.
+                bool styledLine = IsTruthy(properties.GetValueOrDefault("styledLine"))
+                                  || IsTruthy(properties.GetValueOrDefault("styledline"));
+
                 // Line style
                 var cxnOutline = new Drawing.Outline { Width = 12700 }; // 1pt default
                 // line.gradient parity with Set side — accept gradient outline at Add time
@@ -250,13 +261,13 @@ public partial class PowerPointHandler
                 if (properties.TryGetValue("line.gradient", out var cxnLineGrad)
                     || properties.TryGetValue("linegradient", out cxnLineGrad))
                 {
-                    cxnOutline.AppendChild(BuildGradientFill(cxnLineGrad));
+                    cxnOutline.AppendChild(BuildGradientFill(NormalizeLineGradientSpec(cxnLineGrad)));
                 }
                 else if (properties.TryGetValue("lineColor", out var cxnColor2) || properties.TryGetValue("linecolor", out cxnColor2)
                     || properties.TryGetValue("line", out cxnColor2) || properties.TryGetValue("color", out cxnColor2)
                     || properties.TryGetValue("line.color", out cxnColor2))
                     cxnOutline.AppendChild(BuildSolidFill(cxnColor2));
-                else
+                else if (!styledLine)
                     cxnOutline.AppendChild(BuildSolidFill("000000"));
                 if (properties.TryGetValue("linewidth", out var lwVal) || properties.TryGetValue("lineWidth", out lwVal)
                     || properties.TryGetValue("line.width", out lwVal))
@@ -999,6 +1010,50 @@ public partial class PowerPointHandler
         var phShapeTree = GetSlide(phSlidePart).CommonSlideData?.ShapeTree
             ?? throw new InvalidOperationException("Slide has no shape tree");
 
+        // Bare <p:ph/> round-trip: the source placeholder had NO type and NO idx
+        // (see NodeBuilder's phBare marker). It must replay bare so it stays
+        // UNBOUND to any layout slot — binding it (type="body"+idx) would
+        // inherit the slot's bullet/formatting the source deliberately opted out
+        // of (formatting-bullet-indent). Build a minimal shape carrying an empty
+        // <p:ph/> and forward the remaining props through Set exactly like the
+        // normal path.
+        if ((properties.TryGetValue("phBare", out var phBareVal) || properties.TryGetValue("phbare", out phBareVal))
+            && IsTruthy(phBareVal))
+        {
+            var bareId = AcquireShapeId(phShapeTree, properties);
+            var bareName = properties.GetValueOrDefault("name", $"Placeholder {bareId}");
+            var bareShape = new Shape
+            {
+                NonVisualShapeProperties = new NonVisualShapeProperties(
+                    new NonVisualDrawingProperties { Id = bareId, Name = bareName },
+                    new NonVisualShapeDrawingProperties(),
+                    new ApplicationNonVisualDrawingProperties(new PlaceholderShape())),
+                ShapeProperties = new ShapeProperties(),
+                TextBody = new TextBody(
+                    new Drawing.BodyProperties(),
+                    new Drawing.ListStyle(),
+                    new Drawing.Paragraph(new Drawing.EndParagraphRunProperties { Language = "en-US" })),
+            };
+            InsertAtPosition(phShapeTree, bareShape, index);
+            if (properties.TryGetValue("zorder", out var bz) || properties.TryGetValue("z-order", out bz)
+                || properties.TryGetValue("order", out bz))
+                ApplyZOrder(phSlidePart, bareShape, bz);
+            GetSlide(phSlidePart).Save();
+            var bareCount = phShapeTree.Elements<Shape>().Count();
+            var barePath = $"/slide[{phSlideIdx}]/shape[{bareCount}]";
+            var bareConsumed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "phBare", "phbare", "phType", "phtype", "type", "phIndex", "phindex", "idx",
+                "name", "id", "zorder", "z-order", "order", "text", "isTitle", "istitle",
+                "geometry", "noGrp", "nogrp",
+            };
+            var barePass = properties
+                .Where(kv => !bareConsumed.Contains(kv.Key))
+                .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+            if (barePass.Count > 0) Set(barePath, barePass);
+            return barePath;
+        }
+
         if (!properties.TryGetValue("phType", out var phTypeStr)
             && !properties.TryGetValue("phtype", out phTypeStr)
             && !properties.TryGetValue("type", out phTypeStr))
@@ -1222,7 +1277,7 @@ public partial class PowerPointHandler
         // sufficient — real PowerPoint does not always resolve geometry purely by
         // inheritance on this Add path, so a slide placeholder with empty spPr can
         // render at (0,0) and overlap a sibling (e.g. title over subtitle on the
-        // Title Slide layout — caught by officeshot in real Office). When the
+        // Title Slide layout — caught when rendered in real Office). When the
         // placeholder binds to a layout slot, copy that slot's resolved off/ext;
         // otherwise fall back to the standard slot rectangle below.
         shape.ShapeProperties = new ShapeProperties();
@@ -1402,12 +1457,20 @@ public partial class PowerPointHandler
                 var t = ph.Type?.Value;
                 if (isTitle)
                     return t == PlaceholderValues.Title || t == PlaceholderValues.CenteredTitle;
-                if (t != phType) return false;
-                // For non-title, when the slide placeholder has an idx, prefer the
-                // slot with the same idx; otherwise any same-type slot.
-                if (phIdx.HasValue && ph.Index?.Value is { } slotIdx)
-                    return slotIdx == phIdx.Value;
-                return true;
+                // Non-title: @idx is the authoritative binding key (ECMA-376
+                // §19.3.1.36). When the slide placeholder has an idx, match the
+                // layout slot with the SAME idx regardless of its @type — a
+                // layout slot may OMIT @type (it defaults to body/obj) yet still
+                // be the inheritance source (e.g. <p:ph sz="quarter" idx="13"/>
+                // carrying a custom off/ext). Requiring t == phType here missed
+                // such slots, so ResolveLayoutSlotGeometry returned null and
+                // AddPlaceholder stamped a generic default rectangle instead of
+                // the master/layout-inherited geometry — visibly shrinking and
+                // shifting the placeholder on round-trip.
+                if (phIdx.HasValue)
+                    return ph.Index?.Value == phIdx.Value;
+                // No idx on the slide placeholder: fall back to a same-type slot.
+                return t == phType;
             });
         }
 

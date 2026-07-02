@@ -416,6 +416,22 @@ public static class ModernFunctionQualifier
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Quote a worksheet name for use in a formula or defined-name reference
+    /// (the part before <c>!</c>) when Excel requires it — i.e. the name starts
+    /// with a digit or contains any character outside <c>[A-Za-z0-9_]</c> (space,
+    /// hyphen, punctuation, …). Embedded single quotes are doubled per the OOXML
+    /// rule. Names that don't need quoting are returned unchanged. Without this,
+    /// a defined name like <c>2-Print!$A$1</c> is invalid and Excel refuses to
+    /// open the entire workbook (0x800A03EC).
+    /// </summary>
+    public static string QuoteSheetNameForRef(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return name;
+        if (!SheetNameNeedsQuoting(name)) return name;
+        return "'" + name.Replace("'", "''") + "'";
+    }
+
     private static bool SheetNameNeedsQuoting(string name)
     {
         if (string.IsNullOrEmpty(name)) return false;

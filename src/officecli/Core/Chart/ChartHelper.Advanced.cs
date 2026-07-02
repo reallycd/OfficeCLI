@@ -543,29 +543,51 @@ internal static partial class ChartHelper
         var groups = seriesInfo.GroupBy(s => s.targetType).ToList();
         foreach (var group in groups)
         {
+            // Grouping-qualified tokens (columnstacked / areapercentstacked …)
+            // — parse the suffix so a stacked combo group doesn't rebuild as
+            // clustered/standard (and doesn't fall through to the default
+            // LineChart branch).
+            var groupToken = group.Key;
+            string comboGrpSuffix = "";
+            if (groupToken.EndsWith("percentstacked", StringComparison.Ordinal))
+            { comboGrpSuffix = "percentstacked"; groupToken = groupToken[..^14]; }
+            else if (groupToken.EndsWith("stacked", StringComparison.Ordinal))
+            { comboGrpSuffix = "stacked"; groupToken = groupToken[..^7]; }
+            var comboBarGrp = comboGrpSuffix switch
+            {
+                "percentstacked" => C.BarGroupingValues.PercentStacked,
+                "stacked" => C.BarGroupingValues.Stacked,
+                _ => C.BarGroupingValues.Clustered,
+            };
+            var comboStdGrp = comboGrpSuffix switch
+            {
+                "percentstacked" => C.GroupingValues.PercentStacked,
+                "stacked" => C.GroupingValues.Stacked,
+                _ => C.GroupingValues.Standard,
+            };
             OpenXmlCompositeElement chartTypeEl;
-            switch (group.Key)
+            switch (groupToken)
             {
                 case "bar":
                     chartTypeEl = new C.BarChart(
                         new C.BarDirection { Val = C.BarDirectionValues.Bar },
-                        new C.BarGrouping { Val = C.BarGroupingValues.Clustered },
+                        new C.BarGrouping { Val = comboBarGrp },
                         new C.VaryColors { Val = false });
                     break;
                 case "column" or "col":
                     chartTypeEl = new C.BarChart(
                         new C.BarDirection { Val = C.BarDirectionValues.Column },
-                        new C.BarGrouping { Val = C.BarGroupingValues.Clustered },
+                        new C.BarGrouping { Val = comboBarGrp },
                         new C.VaryColors { Val = false });
                     break;
                 case "line":
                     chartTypeEl = new C.LineChart(
-                        new C.Grouping { Val = C.GroupingValues.Standard },
+                        new C.Grouping { Val = comboStdGrp },
                         new C.VaryColors { Val = false });
                     break;
                 case "area":
                     chartTypeEl = new C.AreaChart(
-                        new C.Grouping { Val = C.GroupingValues.Standard },
+                        new C.Grouping { Val = comboStdGrp },
                         new C.VaryColors { Val = false });
                     break;
                 case "scatter":
@@ -575,7 +597,7 @@ internal static partial class ChartHelper
                     break;
                 default:
                     chartTypeEl = new C.LineChart(
-                        new C.Grouping { Val = C.GroupingValues.Standard },
+                        new C.Grouping { Val = comboStdGrp },
                         new C.VaryColors { Val = false });
                     break;
             }
@@ -586,7 +608,7 @@ internal static partial class ChartHelper
                 // chartTypeEl may be LineChart/AreaChart/ScatterChart which require
                 // LineChartSeries / AreaChartSeries / ScatterChartSeries respectively.
                 // Schema validation rejects mismatched series. Convert to the right type.
-                chartTypeEl.AppendChild(ConvertSeriesToType(original, group.Key));
+                chartTypeEl.AppendChild(ConvertSeriesToType(original, groupToken));
             }
 
             chartTypeEl.AppendChild(new C.AxisId { Val = catAxisId });

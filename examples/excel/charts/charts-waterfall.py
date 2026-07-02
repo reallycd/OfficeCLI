@@ -4,497 +4,300 @@ Waterfall Charts Showcase — waterfall chart type with all variations.
 
 Generates: charts-waterfall.xlsx
 
+4 sheets, 16 charts total:
+  1-Waterfall Fundamentals  4 charts — basic P&L, budget bridge, quarterly cash flow, title styling
+  2-Waterfall Styling       4 charts — title shadow, series shadow/fill, gridlines/axis font, borders
+  3-Waterfall Labels & Axis 4 charts — label numFmt, axis range, legend styling, manual plot layout
+  4-Waterfall Advanced      4 charts — reference line, axis line styling, glow/shadow, large dataset
+
+SDK twin of charts-waterfall.sh (officecli CLI). Both produce an equivalent
+charts-waterfall.xlsx. This one drives the **officecli Python SDK**
+(`pip install officecli-sdk`): one resident is started and every chart is
+shipped over the named pipe via `doc.batch(...)`. Each item is the same
+`{"command","parent","type","props"}` dict you'd put in an `officecli batch`
+list. The batch defaults to stop_on_error=False, so a not-yet-consumed
+("unsupported_property") prop warns but still creates the element — matching
+the CLI twin's forward-compat tolerance.
+
 Usage:
+  pip install officecli-sdk          # plus the `officecli` binary on PATH
   python3 charts-waterfall.py
 """
 
-import subprocess, sys, os, atexit
+import os
+import sys
 
-FILE = "charts-waterfall.xlsx"
+# --- locate the SDK: prefer an installed `officecli-sdk`, else the in-repo copy
+try:
+    import officecli  # pip install officecli-sdk
+except ImportError:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "..", "..", "sdk", "python"))
+    import officecli
 
-def cli(cmd):
-    """Run: officecli <cmd>"""
-    r = subprocess.run(f"officecli {cmd}", shell=True, capture_output=True, text=True)
-    out = (r.stdout or "").strip()
-    if out:
-        for line in out.split("\n"):
-            if line.strip():
-                print(f"  {line.strip()}")
-    if r.returncode != 0:
-        err = (r.stderr or "").strip()
-        if err and "UNSUPPORTED" not in err and "process cannot access" not in err:
-            print(f"  ERROR: {err}")
+FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "charts-waterfall.xlsx")
 
-if os.path.exists(FILE):
-    os.remove(FILE)
 
-cli(f'create "{FILE}"')
-cli(f'open "{FILE}"')
-atexit.register(lambda: cli(f'close "{FILE}"'))
+def add_sheet(name):
+    """One `add sheet` item in batch-shape."""
+    return {"command": "add", "parent": "/", "type": "sheet", "props": {"name": name}}
 
-# ==========================================================================
-# Sheet: 1-Waterfall Fundamentals
-# ==========================================================================
-print("\n--- 1-Waterfall Fundamentals ---")
-cli(f'add "{FILE}" / --type sheet --prop name="1-Waterfall Fundamentals"')
 
-# --------------------------------------------------------------------------
-# Chart 1: Basic P&L waterfall with increase/decrease/total colors
-#
-# officecli add charts-waterfall.xlsx "/1-Waterfall Fundamentals" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="P&L Summary" \
-#   --prop data="Start:1000,Revenue:500,Costs:-300,Tax:-100,Net:1100" \
-#   --prop increaseColor=70AD47 \
-#   --prop decreaseColor=FF0000 \
-#   --prop totalColor=4472C4 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop dataLabels=true
-#
-# Features: chartType=waterfall, data= name:value pairs, increaseColor,
-#   decreaseColor, totalColor, dataLabels
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/1-Waterfall Fundamentals" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="P&L Summary"'
-    f' --prop data=Start:1000,Revenue:500,Costs:-300,Tax:-100,Net:1100'
-    f' --prop increaseColor=70AD47'
-    f' --prop decreaseColor=FF0000'
-    f' --prop totalColor=4472C4'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop dataLabels=true')
+def chart(sheet, **props):
+    """One `add chart` item in batch-shape (props become --prop k=v)."""
+    return {"command": "add", "parent": f"/{sheet}", "type": "chart", "props": props}
 
-# --------------------------------------------------------------------------
-# Chart 2: Budget waterfall with blue/red/amber theme and legend
-#
-# officecli add charts-waterfall.xlsx "/1-Waterfall Fundamentals" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Budget vs Actual" \
-#   --prop data="Budget:5000,Sales:2000,Marketing:-800,Ops:-600,Net:5600" \
-#   --prop increaseColor=2E75B6 \
-#   --prop decreaseColor=C00000 \
-#   --prop totalColor=FFC000 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop legend=bottom
-#
-# Features: waterfall legend=bottom, alternative color palette (blue/red/amber)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/1-Waterfall Fundamentals" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Budget vs Actual"'
-    f' --prop data=Budget:5000,Sales:2000,Marketing:-800,Ops:-600,Net:5600'
-    f' --prop increaseColor=2E75B6'
-    f' --prop decreaseColor=C00000'
-    f' --prop totalColor=FFC000'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop legend=bottom')
 
-# --------------------------------------------------------------------------
-# Chart 3: Quarterly cash flow bridge with more data points
-#
-# officecli add charts-waterfall.xlsx "/1-Waterfall Fundamentals" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Quarterly Cash Flow" \
-#   --prop data="Opening:3000,Q1 Sales:1200,Q1 Costs:-500,Q2 Sales:1500,Q2 Costs:-700,Q3 Sales:800,Q3 Costs:-400,Q4 Sales:2000,Q4 Costs:-900,Closing:6000" \
-#   --prop increaseColor=70AD47 \
-#   --prop decreaseColor=ED7D31 \
-#   --prop totalColor=4472C4 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop dataLabels=true
-#
-# Features: waterfall with 10 categories (extended data points),
-#   quarterly granularity
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/1-Waterfall Fundamentals" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Quarterly Cash Flow"'
-    f' --prop "data=Opening:3000,Q1 Sales:1200,Q1 Costs:-500,Q2 Sales:1500,Q2 Costs:-700,Q3 Sales:800,Q3 Costs:-400,Q4 Sales:2000,Q4 Costs:-900,Closing:6000"'
-    f' --prop increaseColor=70AD47'
-    f' --prop decreaseColor=ED7D31'
-    f' --prop totalColor=4472C4'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop dataLabels=true')
+print(f"Building {FILE} ...")
 
-# --------------------------------------------------------------------------
-# Chart 4: Waterfall with custom title styling
-#
-# officecli add charts-waterfall.xlsx "/1-Waterfall Fundamentals" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Revenue Bridge" \
-#   --prop data="Base:2500,New Clients:800,Upsell:400,Churn:-600,Total:3100" \
-#   --prop increaseColor=548235 \
-#   --prop decreaseColor=BF0000 \
-#   --prop totalColor=2F5496 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop title.font=Georgia --prop title.size=16 \
-#   --prop title.color=1F4E79 --prop title.bold=true
-#
-# Features: title.font, title.size, title.color, title.bold
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/1-Waterfall Fundamentals" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Revenue Bridge"'
-    f' --prop "data=Base:2500,New Clients:800,Upsell:400,Churn:-600,Total:3100"'
-    f' --prop increaseColor=548235'
-    f' --prop decreaseColor=BF0000'
-    f' --prop totalColor=2F5496'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop title.font=Georgia --prop title.size=16'
-    f' --prop title.color=1F4E79 --prop title.bold=true')
+with officecli.create(FILE, "--force") as doc:
 
-# ==========================================================================
-# Sheet: 2-Waterfall Styling
-# ==========================================================================
-print("\n--- 2-Waterfall Styling ---")
-cli(f'add "{FILE}" / --type sheet --prop name="2-Waterfall Styling"')
+    # ======================================================================
+    # Sheet: 1-Waterfall Fundamentals
+    # ======================================================================
+    print("--- 1-Waterfall Fundamentals ---")
+    items = [add_sheet("1-Waterfall Fundamentals")]
 
-# --------------------------------------------------------------------------
-# Chart 1: Title styling with font, size, color, bold, and shadow
-#
-# officecli add charts-waterfall.xlsx "/2-Waterfall Styling" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Styled Title Demo" \
-#   --prop data="Start:800,Income:300,Expenses:-200,Net:900" \
-#   --prop increaseColor=70AD47 \
-#   --prop decreaseColor=FF0000 \
-#   --prop totalColor=4472C4 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop title.font=Trebuchet MS --prop title.size=18 \
-#   --prop title.color=833C0B --prop title.bold=true \
-#   --prop title.shadow=000000-3-315-2-30
-#
-# Features: title.font, title.size, title.color, title.bold, title.shadow
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/2-Waterfall Styling" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Styled Title Demo"'
-    f' --prop data=Start:800,Income:300,Expenses:-200,Net:900'
-    f' --prop increaseColor=70AD47'
-    f' --prop decreaseColor=FF0000'
-    f' --prop totalColor=4472C4'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop "title.font=Trebuchet MS" --prop title.size=18'
-    f' --prop title.color=833C0B --prop title.bold=true'
-    f' --prop title.shadow=000000-3-315-2-30')
+    # Chart 1: Basic P&L waterfall with increase/decrease/total colors
+    # Features: chartType=waterfall, data= name:value pairs, increaseColor,
+    #   decreaseColor, totalColor, dataLabels
+    items.append(chart("1-Waterfall Fundamentals",
+        chartType="waterfall",
+        title="P&L Summary",
+        data="Start:1000,Revenue:500,Costs:-300,Tax:-100,Net:1100",
+        increaseColor="70AD47",
+        decreaseColor="FF0000",
+        totalColor="4472C4",
+        x="0", y="0", width="12", height="18",
+        dataLabels="true"))
 
-# --------------------------------------------------------------------------
-# Chart 2: Series shadow, plotFill, chartFill, roundedCorners
-#
-# officecli add charts-waterfall.xlsx "/2-Waterfall Styling" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Shadow & Fill Effects" \
-#   --prop data="Baseline:1500,Growth:600,Decline:-400,Result:1700" \
-#   --prop increaseColor=2E75B6 \
-#   --prop decreaseColor=C00000 \
-#   --prop totalColor=FFC000 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop series.shadow=000000-4-315-2-30 \
-#   --prop plotFill=F0F0F0 \
-#   --prop chartFill=FAFAFA \
-#   --prop roundedCorners=true
-#
-# Features: series.shadow, plotFill, chartFill, roundedCorners
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/2-Waterfall Styling" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Shadow & Fill Effects"'
-    f' --prop data=Baseline:1500,Growth:600,Decline:-400,Result:1700'
-    f' --prop increaseColor=2E75B6'
-    f' --prop decreaseColor=C00000'
-    f' --prop totalColor=FFC000'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop series.shadow=000000-4-315-2-30'
-    f' --prop plotFill=F0F0F0'
-    f' --prop chartFill=FAFAFA'
-    f' --prop roundedCorners=true')
+    # Chart 2: Budget waterfall with blue/red/amber theme and legend
+    # Features: waterfall legend=bottom, alternative color palette (blue/red/amber)
+    items.append(chart("1-Waterfall Fundamentals",
+        chartType="waterfall",
+        title="Budget vs Actual",
+        data="Budget:5000,Sales:2000,Marketing:-800,Ops:-600,Net:5600",
+        increaseColor="2E75B6",
+        decreaseColor="C00000",
+        totalColor="FFC000",
+        x="13", y="0", width="12", height="18",
+        legend="bottom"))
 
-# --------------------------------------------------------------------------
-# Chart 3: Gridlines styling and axis font
-#
-# officecli add charts-waterfall.xlsx "/2-Waterfall Styling" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Gridlines & Axis Font" \
-#   --prop data="Open:2000,Add:750,Remove:-350,Close:2400" \
-#   --prop increaseColor=70AD47 \
-#   --prop decreaseColor=FF0000 \
-#   --prop totalColor=4472C4 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop gridlineColor=CCCCCC \
-#   --prop axisfont=10:333333:Calibri
-#
-# Features: gridlineColor, axisfont (size:color:font)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/2-Waterfall Styling" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Gridlines & Axis Font"'
-    f' --prop data=Open:2000,Add:750,Remove:-350,Close:2400'
-    f' --prop increaseColor=70AD47'
-    f' --prop decreaseColor=FF0000'
-    f' --prop totalColor=4472C4'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop gridlineColor=CCCCCC'
-    f' --prop axisfont=10:333333:Calibri')
+    # Chart 3: Quarterly cash flow bridge with more data points
+    # Features: waterfall with 10 categories (extended data points),
+    #   quarterly granularity
+    items.append(chart("1-Waterfall Fundamentals",
+        chartType="waterfall",
+        title="Quarterly Cash Flow",
+        data="Opening:3000,Q1 Sales:1200,Q1 Costs:-500,Q2 Sales:1500,Q2 Costs:-700,Q3 Sales:800,Q3 Costs:-400,Q4 Sales:2000,Q4 Costs:-900,Closing:6000",
+        increaseColor="70AD47",
+        decreaseColor="ED7D31",
+        totalColor="4472C4",
+        x="0", y="19", width="12", height="18",
+        dataLabels="true"))
 
-# --------------------------------------------------------------------------
-# Chart 4: Chart area border and plot area border
-#
-# officecli add charts-waterfall.xlsx "/2-Waterfall Styling" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Border Styling" \
-#   --prop data="Initial:1200,Gain:500,Loss:-300,Final:1400" \
-#   --prop increaseColor=548235 \
-#   --prop decreaseColor=BF0000 \
-#   --prop totalColor=2F5496 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop chartArea.border=4472C4:2 \
-#   --prop plotArea.border=A5A5A5:1
-#
-# Features: chartArea.border (color-width), plotArea.border
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/2-Waterfall Styling" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Border Styling"'
-    f' --prop data=Initial:1200,Gain:500,Loss:-300,Final:1400'
-    f' --prop increaseColor=548235'
-    f' --prop decreaseColor=BF0000'
-    f' --prop totalColor=2F5496'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop chartArea.border=4472C4:2'
-    f' --prop plotArea.border=A5A5A5:1')
+    # Chart 4: Waterfall with custom title styling
+    # Features: title.font, title.size, title.color, title.bold
+    items.append(chart("1-Waterfall Fundamentals",
+        chartType="waterfall",
+        title="Revenue Bridge",
+        data="Base:2500,New Clients:800,Upsell:400,Churn:-600,Total:3100",
+        increaseColor="548235",
+        decreaseColor="BF0000",
+        totalColor="2F5496",
+        x="13", y="19", width="12", height="18",
+        **{"title.font": "Georgia", "title.size": "16",
+           "title.color": "1F4E79", "title.bold": "true"}))
+    doc.batch(items)
 
-# ==========================================================================
-# Sheet: 3-Waterfall Labels & Axis
-# ==========================================================================
-print("\n--- 3-Waterfall Labels & Axis ---")
-cli(f'add "{FILE}" / --type sheet --prop name="3-Waterfall Labels & Axis"')
+    # ======================================================================
+    # Sheet: 2-Waterfall Styling
+    # ======================================================================
+    print("--- 2-Waterfall Styling ---")
+    items = [add_sheet("2-Waterfall Styling")]
 
-# --------------------------------------------------------------------------
-# Chart 1: Data labels with labelFont and numFmt
-#
-# officecli add charts-waterfall.xlsx "/3-Waterfall Labels & Axis" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Labels with NumFmt" \
-#   --prop data="Start:4500,Revenue:1800,COGS:-1200,SGA:-600,Net:4500" \
-#   --prop increaseColor=70AD47 \
-#   --prop decreaseColor=FF0000 \
-#   --prop totalColor=4472C4 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop dataLabels=true \
-#   --prop labelFont=10:333333:true \
-#   --prop dataLabels.numFmt=#,##0
-#
-# Features: dataLabels, labelFont (size:color:bold), dataLabels.numFmt
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/3-Waterfall Labels & Axis" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Labels with NumFmt"'
-    f' --prop data=Start:4500,Revenue:1800,COGS:-1200,SGA:-600,Net:4500'
-    f' --prop increaseColor=70AD47'
-    f' --prop decreaseColor=FF0000'
-    f' --prop totalColor=4472C4'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop dataLabels=true'
-    f' --prop labelFont=10:333333:true'
-    f' --prop dataLabels.numFmt=#,##0')
+    # Chart 1: Title styling with font, size, color, bold, and shadow
+    # Features: title.font, title.size, title.color, title.bold, title.shadow
+    items.append(chart("2-Waterfall Styling",
+        chartType="waterfall",
+        title="Styled Title Demo",
+        data="Start:800,Income:300,Expenses:-200,Net:900",
+        increaseColor="70AD47",
+        decreaseColor="FF0000",
+        totalColor="4472C4",
+        x="0", y="0", width="12", height="18",
+        **{"title.font": "Trebuchet MS", "title.size": "18",
+           "title.color": "833C0B", "title.bold": "true",
+           "title.shadow": "000000-3-315-2-30"}))
 
-# --------------------------------------------------------------------------
-# Chart 2: Axis min/max and majorUnit
-#
-# officecli add charts-waterfall.xlsx "/3-Waterfall Labels & Axis" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Custom Axis Range" \
-#   --prop data="Base:2000,Up:800,Down:-500,Total:2300" \
-#   --prop increaseColor=2E75B6 \
-#   --prop decreaseColor=C00000 \
-#   --prop totalColor=FFC000 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop axisMin=0 --prop axisMax=3500 --prop majorUnit=500
-#
-# Features: axisMin, axisMax, majorUnit
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/3-Waterfall Labels & Axis" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Custom Axis Range"'
-    f' --prop data=Base:2000,Up:800,Down:-500,Total:2300'
-    f' --prop increaseColor=2E75B6'
-    f' --prop decreaseColor=C00000'
-    f' --prop totalColor=FFC000'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop axisMin=0 --prop axisMax=3500 --prop majorUnit=500')
+    # Chart 2: Series shadow, plotFill, chartFill, roundedCorners
+    # Features: series.shadow, plotFill, chartFill, roundedCorners
+    items.append(chart("2-Waterfall Styling",
+        chartType="waterfall",
+        title="Shadow & Fill Effects",
+        data="Baseline:1500,Growth:600,Decline:-400,Result:1700",
+        increaseColor="2E75B6",
+        decreaseColor="C00000",
+        totalColor="FFC000",
+        x="13", y="0", width="12", height="18",
+        plotFill="F0F0F0",
+        chartFill="FAFAFA",
+        roundedCorners="true",
+        **{"series.shadow": "000000-4-315-2-30"}))
 
-# --------------------------------------------------------------------------
-# Chart 3: Legend positioning and legendfont
-#
-# officecli add charts-waterfall.xlsx "/3-Waterfall Labels & Axis" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Legend Styling" \
-#   --prop data="Begin:3000,Earned:1100,Spent:-700,End:3400" \
-#   --prop increaseColor=70AD47 \
-#   --prop decreaseColor=FF0000 \
-#   --prop totalColor=4472C4 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop legend=right \
-#   --prop legendfont=10:1F4E79:Helvetica
-#
-# Features: legend=right, legendfont (size:color:font)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/3-Waterfall Labels & Axis" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Legend Styling"'
-    f' --prop data=Begin:3000,Earned:1100,Spent:-700,End:3400'
-    f' --prop increaseColor=70AD47'
-    f' --prop decreaseColor=FF0000'
-    f' --prop totalColor=4472C4'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop legend=right'
-    f' --prop legendfont=10:1F4E79:Helvetica')
+    # Chart 3: Gridlines styling and axis font
+    # Features: gridlineColor, axisfont (size:color:font)
+    items.append(chart("2-Waterfall Styling",
+        chartType="waterfall",
+        title="Gridlines & Axis Font",
+        data="Open:2000,Add:750,Remove:-350,Close:2400",
+        increaseColor="70AD47",
+        decreaseColor="FF0000",
+        totalColor="4472C4",
+        x="0", y="19", width="12", height="18",
+        gridlineColor="CCCCCC",
+        axisfont="10:333333:Calibri"))
 
-# --------------------------------------------------------------------------
-# Chart 4: Manual layout with plotArea.x/y/w/h
-#
-# officecli add charts-waterfall.xlsx "/3-Waterfall Labels & Axis" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Manual Plot Layout" \
-#   --prop data="Start:1800,Add:600,Sub:-400,End:2000" \
-#   --prop increaseColor=548235 \
-#   --prop decreaseColor=BF0000 \
-#   --prop totalColor=2F5496 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop plotArea.x=0.15 --prop plotArea.y=0.15 \
-#   --prop plotArea.w=0.75 --prop plotArea.h=0.70
-#
-# Features: plotArea.x/y/w/h (manual layout, fractional coordinates)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/3-Waterfall Labels & Axis" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Manual Plot Layout"'
-    f' --prop data=Start:1800,Add:600,Sub:-400,End:2000'
-    f' --prop increaseColor=548235'
-    f' --prop decreaseColor=BF0000'
-    f' --prop totalColor=2F5496'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop plotArea.x=0.15 --prop plotArea.y=0.15'
-    f' --prop plotArea.w=0.75 --prop plotArea.h=0.70')
+    # Chart 4: Chart area border and plot area border
+    # Features: chartArea.border (color-width), plotArea.border
+    items.append(chart("2-Waterfall Styling",
+        chartType="waterfall",
+        title="Border Styling",
+        data="Initial:1200,Gain:500,Loss:-300,Final:1400",
+        increaseColor="548235",
+        decreaseColor="BF0000",
+        totalColor="2F5496",
+        x="13", y="19", width="12", height="18",
+        **{"chartArea.border": "4472C4:2",
+           "plotArea.border": "A5A5A5:1"}))
+    doc.batch(items)
 
-# ==========================================================================
-# Sheet: 4-Waterfall Advanced
-# ==========================================================================
-print("\n--- 4-Waterfall Advanced ---")
-cli(f'add "{FILE}" / --type sheet --prop name="4-Waterfall Advanced"')
+    # ======================================================================
+    # Sheet: 3-Waterfall Labels & Axis
+    # ======================================================================
+    print("--- 3-Waterfall Labels & Axis ---")
+    items = [add_sheet("3-Waterfall Labels & Axis")]
 
-# --------------------------------------------------------------------------
-# Chart 1: Waterfall with referenceLine
-#
-# officecli add charts-waterfall.xlsx "/4-Waterfall Advanced" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Reference Line" \
-#   --prop data="Start:2000,Revenue:900,Refunds:-300,Fees:-200,Net:2400" \
-#   --prop increaseColor=70AD47 \
-#   --prop decreaseColor=FF0000 \
-#   --prop totalColor=4472C4 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop referenceLine=2000:FF0000:Target:dash
-#
-# Features: referenceLine (value:label-color-dash-width)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/4-Waterfall Advanced" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Reference Line"'
-    f' --prop data=Start:2000,Revenue:900,Refunds:-300,Fees:-200,Net:2400'
-    f' --prop increaseColor=70AD47'
-    f' --prop decreaseColor=FF0000'
-    f' --prop totalColor=4472C4'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop referenceLine=2000:FF0000:Target:dash')
+    # Chart 1: Data labels with labelFont and numFmt
+    # Features: dataLabels, labelFont (size:color:bold), dataLabels.numFmt
+    items.append(chart("3-Waterfall Labels & Axis",
+        chartType="waterfall",
+        title="Labels with NumFmt",
+        data="Start:4500,Revenue:1800,COGS:-1200,SGA:-600,Net:4500",
+        increaseColor="70AD47",
+        decreaseColor="FF0000",
+        totalColor="4472C4",
+        x="0", y="0", width="12", height="18",
+        dataLabels="true",
+        labelFont="10:333333:true",
+        **{"dataLabels.numFmt": "#,##0"}))
 
-# --------------------------------------------------------------------------
-# Chart 2: Axis line and category axis line styling
-#
-# officecli add charts-waterfall.xlsx "/4-Waterfall Advanced" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Axis Line Styling" \
-#   --prop data="Open:1500,Deposit:700,Withdraw:-400,Close:1800" \
-#   --prop increaseColor=2E75B6 \
-#   --prop decreaseColor=C00000 \
-#   --prop totalColor=FFC000 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop axisLine=333333:2 \
-#   --prop catAxisLine=333333:2
-#
-# Features: axisLine (color-width), catAxisLine
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/4-Waterfall Advanced" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Axis Line Styling"'
-    f' --prop data=Open:1500,Deposit:700,Withdraw:-400,Close:1800'
-    f' --prop increaseColor=2E75B6'
-    f' --prop decreaseColor=C00000'
-    f' --prop totalColor=FFC000'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop axisLine=333333:2'
-    f' --prop catAxisLine=333333:2')
+    # Chart 2: Axis min/max and majorUnit
+    # Features: axisMin, axisMax, majorUnit
+    items.append(chart("3-Waterfall Labels & Axis",
+        chartType="waterfall",
+        title="Custom Axis Range",
+        data="Base:2000,Up:800,Down:-500,Total:2300",
+        increaseColor="2E75B6",
+        decreaseColor="C00000",
+        totalColor="FFC000",
+        x="13", y="0", width="12", height="18",
+        axisMin="0", axisMax="3500", majorUnit="500"))
 
-# --------------------------------------------------------------------------
-# Chart 3: Title glow and shadow effects
-#
-# officecli add charts-waterfall.xlsx "/4-Waterfall Advanced" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Glow & Shadow Effects" \
-#   --prop data="Base:3000,Inflow:1200,Outflow:-800,Balance:3400" \
-#   --prop increaseColor=70AD47 \
-#   --prop decreaseColor=FF0000 \
-#   --prop totalColor=4472C4 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop title.glow=4472C4-8 \
-#   --prop title.shadow=000000-3-315-2-30 \
-#   --prop title.size=16 --prop title.bold=true
-#
-# Features: title.glow (color-radius), title.shadow
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/4-Waterfall Advanced" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Glow & Shadow Effects"'
-    f' --prop data=Base:3000,Inflow:1200,Outflow:-800,Balance:3400'
-    f' --prop increaseColor=70AD47'
-    f' --prop decreaseColor=FF0000'
-    f' --prop totalColor=4472C4'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop title.glow=4472C4-8'
-    f' --prop title.shadow=000000-3-315-2-30'
-    f' --prop title.size=16 --prop title.bold=true')
+    # Chart 3: Legend positioning and legendfont
+    # Features: legend=right, legendfont (size:color:font)
+    items.append(chart("3-Waterfall Labels & Axis",
+        chartType="waterfall",
+        title="Legend Styling",
+        data="Begin:3000,Earned:1100,Spent:-700,End:3400",
+        increaseColor="70AD47",
+        decreaseColor="FF0000",
+        totalColor="4472C4",
+        x="0", y="19", width="12", height="18",
+        legend="right",
+        legendfont="10:1F4E79:Helvetica"))
 
-# --------------------------------------------------------------------------
-# Chart 4: Large dataset waterfall (8+ categories)
-#
-# officecli add charts-waterfall.xlsx "/4-Waterfall Advanced" --type chart \
-#   --prop chartType=waterfall \
-#   --prop title="Annual P&L Detail" \
-#   --prop data="Revenue:8500,COGS:-3400,Gross Profit:5100,R&D:-1200,Sales:-900,Marketing:-600,G&A:-500,EBITDA:1900,Depreciation:-300,Interest:-200,Tax:-350,Net Income:1050" \
-#   --prop increaseColor=548235 \
-#   --prop decreaseColor=C00000 \
-#   --prop totalColor=2F5496 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop dataLabels=true \
-#   --prop axisfont=8:333333:Calibri
-#
-# Features: large dataset (12 categories), axisfont with smaller size
-#   for readability
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/4-Waterfall Advanced" --type chart'
-    f' --prop chartType=waterfall'
-    f' --prop title="Annual P&L Detail"'
-    f' --prop "data=Revenue:8500,COGS:-3400,Gross Profit:5100,R&D:-1200,Sales:-900,Marketing:-600,G&A:-500,EBITDA:1900,Depreciation:-300,Interest:-200,Tax:-350,Net Income:1050"'
-    f' --prop increaseColor=548235'
-    f' --prop decreaseColor=C00000'
-    f' --prop totalColor=2F5496'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop dataLabels=true'
-    f' --prop axisfont=8:333333:Calibri')
+    # Chart 4: Manual layout with plotArea.x/y/w/h
+    # Features: plotArea.x/y/w/h (manual layout, fractional coordinates)
+    items.append(chart("3-Waterfall Labels & Axis",
+        chartType="waterfall",
+        title="Manual Plot Layout",
+        data="Start:1800,Add:600,Sub:-400,End:2000",
+        increaseColor="548235",
+        decreaseColor="BF0000",
+        totalColor="2F5496",
+        x="13", y="19", width="12", height="18",
+        **{"plotArea.x": "0.15", "plotArea.y": "0.15",
+           "plotArea.w": "0.75", "plotArea.h": "0.70"}))
+    doc.batch(items)
 
-# Remove blank default Sheet1 (all data is inline)
-cli(f'remove "{FILE}" /Sheet1')
+    # ======================================================================
+    # Sheet: 4-Waterfall Advanced
+    # ======================================================================
+    print("--- 4-Waterfall Advanced ---")
+    items = [add_sheet("4-Waterfall Advanced")]
 
-print(f"\nDone! Generated: {FILE}")
+    # Chart 1: Waterfall with referenceLine
+    # Features: referenceLine (value:label-color-dash-width)
+    items.append(chart("4-Waterfall Advanced",
+        chartType="waterfall",
+        title="Reference Line",
+        data="Start:2000,Revenue:900,Refunds:-300,Fees:-200,Net:2400",
+        increaseColor="70AD47",
+        decreaseColor="FF0000",
+        totalColor="4472C4",
+        x="0", y="0", width="12", height="18",
+        referenceLine="2000:FF0000:Target:dash"))
+
+    # Chart 2: Axis line and category axis line styling
+    # Features: axisLine (color-width), catAxisLine
+    items.append(chart("4-Waterfall Advanced",
+        chartType="waterfall",
+        title="Axis Line Styling",
+        data="Open:1500,Deposit:700,Withdraw:-400,Close:1800",
+        increaseColor="2E75B6",
+        decreaseColor="C00000",
+        totalColor="FFC000",
+        x="13", y="0", width="12", height="18",
+        axisLine="333333:2",
+        catAxisLine="333333:2"))
+
+    # Chart 3: Title glow and shadow effects
+    # Features: title.glow (color-radius), title.shadow
+    items.append(chart("4-Waterfall Advanced",
+        chartType="waterfall",
+        title="Glow & Shadow Effects",
+        data="Base:3000,Inflow:1200,Outflow:-800,Balance:3400",
+        increaseColor="70AD47",
+        decreaseColor="FF0000",
+        totalColor="4472C4",
+        x="0", y="19", width="12", height="18",
+        **{"title.glow": "4472C4-8",
+           "title.shadow": "000000-3-315-2-30",
+           "title.size": "16", "title.bold": "true"}))
+
+    # Chart 4: Large dataset waterfall (8+ categories)
+    # Features: large dataset (12 categories), axisfont with smaller size
+    #   for readability
+    items.append(chart("4-Waterfall Advanced",
+        chartType="waterfall",
+        title="Annual P&L Detail",
+        data="Revenue:8500,COGS:-3400,Gross Profit:5100,R&D:-1200,Sales:-900,Marketing:-600,G&A:-500,EBITDA:1900,Depreciation:-300,Interest:-200,Tax:-350,Net Income:1050",
+        increaseColor="548235",
+        decreaseColor="C00000",
+        totalColor="2F5496",
+        x="13", y="19", width="12", height="18",
+        dataLabels="true",
+        axisfont="8:333333:Calibri"))
+    doc.batch(items)
+
+    # Remove blank default Sheet1 (all data is inline)
+    doc.send({"command": "remove", "path": "/Sheet1"})
+
+    doc.send({"command": "save"})
+# context exit closes the resident, flushing the workbook to disk.
+
+print(f"Generated: {FILE}")
 print("  4 sheets (16 charts total)")
 print("  Sheet 1: Waterfall Fundamentals (4 charts)")
 print("  Sheet 2: Waterfall Styling (4 charts)")

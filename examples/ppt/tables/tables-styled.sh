@@ -3,8 +3,9 @@
 # Demonstrates: style= (medium1..4, light1..3, dark1..2, none),
 # firstRow/lastRow/firstCol/lastCol/bandedRows/bandedCols banding flags.
 
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 DIR="$(dirname "$0")"
 PPTX="$DIR/tables-styled.pptx"
 
@@ -16,7 +17,7 @@ DATA="Region,Q1,Q2,Q3,Q4;North,120,135,142,168;South,98,110,121,140;East,165,178
 
 add_slide () {
     local idx="$1" style="$2" title="$3"
-    officecli add "$PPTX" /presentation/slides --type slide
+    officecli add "$PPTX" / --type slide
     officecli add "$PPTX" "/slide[$idx]" --type shape \
         --prop text="$title" --prop size=28 --prop bold=true \
         --prop x=0.5in --prop y=0.3in --prop width=12in --prop height=0.6in
@@ -39,7 +40,7 @@ add_slide 8 dark1   "style=dark1"
 add_slide 9 dark2   "style=dark2"
 
 # Slide 10: banding flag combinations on a single style.
-officecli add "$PPTX" /presentation/slides --type slide
+officecli add "$PPTX" / --type slide
 officecli add "$PPTX" '/slide[10]' --type shape \
     --prop text="Banding Flags (style=medium2)" --prop size=28 --prop bold=true \
     --prop x=0.5in --prop y=0.3in --prop width=12in --prop height=0.6in
@@ -77,7 +78,7 @@ officecli add "$PPTX" '/slide[10]' --type table \
     --prop data="$DATA"
 
 # --- Slide 11: rowHeight (uniform) + name (stable @name addressing) ---
-officecli add "$PPTX" /presentation/slides --type slide
+officecli add "$PPTX" / --type slide
 officecli add "$PPTX" '/slide[11]' --type shape \
     --prop text="rowHeight + name= addressing" --prop size=28 --prop bold=true \
     --prop x=0.5in --prop y=0.3in --prop width=12in --prop height=0.6in

@@ -1,8 +1,9 @@
 #!/bin/bash
 # Generate a 3D morph presentation: "The Sun — Our Star"
 # 3D GLB model with morph transitions, dark cinematic backgrounds
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 DIR="$(cd "$(dirname "$0")" && pwd)"
 MODELS="$DIR/models"
 OUT="$DIR/3d-model.pptx"

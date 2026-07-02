@@ -2,444 +2,319 @@
 """
 Bubble Charts Showcase — bubble scale, size representation, and styling.
 
-Generates: charts-bubble.xlsx
+Generates: charts-bubble.xlsx — 4 chart sheets, 14 charts total
+exercising chartType=bubble (X;Y;Size data), bubbleScale, sizeRepresents,
+dataLabels, ARGB transparency, gridlines/axis styling, plot/chart fills,
+series shadow, secondaryAxis, referenceLine, log scale, trendline,
+shownegbubbles, and series1.bubbleSize range references.
+
+SDK twin of charts-bubble.sh (officecli CLI). Both produce an equivalent
+charts-bubble.xlsx. This one drives the **officecli Python SDK**
+(`pip install officecli-sdk`): one resident is started and every sheet,
+cell and chart is shipped over the named pipe — grouped per sheet into
+`doc.batch(...)` round-trips. Each item is the same
+`{"command","parent","type","props"}` dict you'd put in an `officecli
+batch` list.
 
 Usage:
+  pip install officecli-sdk          # plus the `officecli` binary on PATH
   python3 charts-bubble.py
 """
 
-import subprocess, sys, os, json, atexit
+import os
+import sys
 
-FILE = "charts-bubble.xlsx"
+# --- locate the SDK: prefer an installed `officecli-sdk`, else the in-repo copy
+try:
+    import officecli  # pip install officecli-sdk
+except ImportError:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "..", "..", "sdk", "python"))
+    import officecli
 
-def cli(cmd):
-    """Run: officecli <cmd>"""
-    r = subprocess.run(f"officecli {cmd}", shell=True, capture_output=True, text=True)
-    out = (r.stdout or "").strip()
-    if out:
-        for line in out.split("\n"):
-            if line.strip():
-                print(f"  {line.strip()}")
-    if r.returncode != 0:
-        err = (r.stderr or "").strip()
-        if err and "UNSUPPORTED" not in err and "process cannot access" not in err:
-            print(f"  ERROR: {err}")
+FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "charts-bubble.xlsx")
 
-if os.path.exists(FILE):
-    os.remove(FILE)
 
-cli(f'create "{FILE}"')
-cli(f'open "{FILE}"')
-atexit.register(lambda: cli(f'close "{FILE}"'))
+def sheet(name):
+    """One `add sheet` item in batch-shape."""
+    return {"command": "add", "parent": "/", "type": "sheet", "props": {"name": name}}
 
-# ==========================================================================
-# Sheet: 1-Bubble Fundamentals
-# ==========================================================================
-print("\n--- 1-Bubble Fundamentals ---")
-cli(f'add "{FILE}" / --type sheet --prop name="1-Bubble Fundamentals"')
 
-# --------------------------------------------------------------------------
-# Chart 1: Basic bubble chart with 2 series
-#
-# officecli add charts-bubble.xlsx "/1-Bubble Fundamentals" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="Market Analysis" \
-#   --prop series1="Enterprise:50,12,80;120,8,45;200,15,60" \
-#   --prop series2="Consumer:30,25,50;80,18,35;150,22,70" \
-#   --prop colors=4472C4,ED7D31 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop catTitle=Market Size --prop axisTitle=Growth Rate \
-#   --prop legend=bottom
-#
-# Features: chartType=bubble, X;Y;Size triplets, catTitle, axisTitle
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/1-Bubble Fundamentals" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="Market Analysis"'
-    f' --prop series1=Enterprise:80,45,60'
-    f' --prop series2=Consumer:50,35,70'
-    f' --prop colors=4472C4,ED7D31'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop "catTitle=Market Size" --prop "axisTitle=Growth Rate"'
-    f' --prop legend=bottom')
+def chart(parent, **props):
+    """One `add chart` item in batch-shape."""
+    return {"command": "add", "parent": parent, "type": "chart", "props": props}
 
-# --------------------------------------------------------------------------
-# Chart 2: bubbleScale=100 with dataLabels
-#
-# officecli add charts-bubble.xlsx "/1-Bubble Fundamentals" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="Product Portfolio" \
-#   --prop series1="Products:20,30,90;60,20,50;100,10,70;140,25,40" \
-#   --prop colors=2E75B6 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop bubbleScale=100 \
-#   --prop dataLabels=true --prop labelPos=center \
-#   --prop labelFont=9:FFFFFF:true \
-#   --prop legend=bottom
-#
-# Features: bubbleScale=100, dataLabels with center positioning
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/1-Bubble Fundamentals" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="Product Portfolio"'
-    f' --prop series1=Products:90,50,70,40'
-    f' --prop colors=2E75B6'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop bubbleScale=100'
-    f' --prop dataLabels=true --prop labelPos=center'
-    f' --prop labelFont=9:FFFFFF:true'
-    f' --prop legend=bottom')
 
-# --------------------------------------------------------------------------
-# Chart 3: bubbleScale=50 vs bubbleScale=200 comparison (small scale)
-#
-# officecli add charts-bubble.xlsx "/1-Bubble Fundamentals" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="Small Bubbles (Scale 50)" \
-#   --prop series1="Tech:40,15,60;90,22,80;160,10,45" \
-#   --prop series2="Finance:70,18,55;130,12,70;180,20,35" \
-#   --prop colors=70AD47,FFC000 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop bubbleScale=50 \
-#   --prop legend=bottom
-#
-# Features: bubbleScale=50 (smaller bubbles)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/1-Bubble Fundamentals" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="Small Bubbles (Scale 50)"'
-    f' --prop series1=Tech:60,80,45'
-    f' --prop series2=Finance:55,70,35'
-    f' --prop colors=70AD47,FFC000'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop bubbleScale=50'
-    f' --prop legend=bottom')
+def cell(parent, ref, value):
+    """One `add cell` item in batch-shape (matches the CLI's
+    `add ... --type cell --prop ref=.. --prop value=..`)."""
+    return {"command": "add", "parent": parent, "type": "cell",
+            "props": {"ref": ref, "value": value}}
 
-# --------------------------------------------------------------------------
-# Chart 4: sizeRepresents=width
-#
-# officecli add charts-bubble.xlsx "/1-Bubble Fundamentals" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="Size by Width" \
-#   --prop series1="Regions:35,28,70;85,15,40;140,20,55;190,30,85" \
-#   --prop colors=5B9BD5 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop sizeRepresents=width \
-#   --prop bubbleScale=100 \
-#   --prop legend=bottom
-#
-# Features: sizeRepresents=width (bubble diameter proportional to value)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/1-Bubble Fundamentals" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="Size by Width"'
-    f' --prop series1=Regions:70,40,55,85'
-    f' --prop colors=5B9BD5'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop sizeRepresents=width'
-    f' --prop bubbleScale=100'
-    f' --prop legend=bottom')
 
-# ==========================================================================
-# Sheet: 2-Bubble Styling
-# ==========================================================================
-print("\n--- 2-Bubble Styling ---")
-cli(f'add "{FILE}" / --type sheet --prop name="2-Bubble Styling"')
+print(f"Building {FILE} ...")
 
-# --------------------------------------------------------------------------
-# Chart 1: Title styling, legend positioning
-#
-# officecli add charts-bubble.xlsx "/2-Bubble Styling" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="Styled Bubble Chart" \
-#   --prop series1="Segment A:45,20,65;100,15,50;160,25,80" \
-#   --prop series2="Segment B:60,30,45;120,10,60;175,18,40" \
-#   --prop colors=1F4E79,C55A11 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop title.font=Georgia --prop title.size=16 \
-#   --prop title.color=1F4E79 --prop title.bold=true \
-#   --prop legend=right --prop legendfont=10:333333:Calibri
-#
-# Features: title.font/size/color/bold, legend=right, legendfont
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/2-Bubble Styling" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="Styled Bubble Chart"'
-    f' --prop series1=SegmentA:65,50,80'
-    f' --prop series2=SegmentB:45,60,40'
-    f' --prop colors=1F4E79,C55A11'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop title.font=Georgia --prop title.size=16'
-    f' --prop title.color=1F4E79 --prop title.bold=true'
-    f' --prop legend=right --prop legendfont=10:333333:Calibri')
+with officecli.create(FILE, "--force") as doc:
 
-# --------------------------------------------------------------------------
-# Chart 2: Series colors, transparency
-#
-# officecli add charts-bubble.xlsx "/2-Bubble Styling" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="Transparent Overlapping Bubbles" \
-#   --prop series1="Group X:30,25,75;70,30,60;110,15,90;150,22,50" \
-#   --prop series2="Group Y:50,20,65;90,28,55;130,18,80;170,12,45" \
-#   --prop colors=804472C4,80ED7D31 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop bubbleScale=120 \
-#   --prop legend=bottom
-#
-# Features: ARGB colors with alpha (80=50% transparency)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/2-Bubble Styling" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="Transparent Overlapping Bubbles"'
-    f' --prop series1=GroupX:75,60,90,50'
-    f' --prop series2=GroupY:65,55,80,45'
-    f' --prop colors=804472C4,80ED7D31'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop bubbleScale=120'
-    f' --prop legend=bottom')
+    # ======================================================================
+    # Sheet: 1-Bubble Fundamentals
+    # ======================================================================
+    print("\n--- 1-Bubble Fundamentals ---")
+    S1 = "/1-Bubble Fundamentals"
+    items = [
+        sheet("1-Bubble Fundamentals"),
 
-# --------------------------------------------------------------------------
-# Chart 3: gridlines, axisfont, axisLine
-#
-# officecli add charts-bubble.xlsx "/2-Bubble Styling" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="Grid & Axis Styling" \
-#   --prop series1="Division 1:25,35,55;65,20,70;115,28,45" \
-#   --prop series2="Division 2:40,15,60;80,25,40;130,30,75" \
-#   --prop colors=2E75B6,548235 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop gridlines=D9D9D9:0.5 \
-#   --prop axisfont=9:666666 \
-#   --prop axisLine=333333-1 \
-#   --prop legend=bottom
-#
-# Features: gridlines, axisfont, axisLine
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/2-Bubble Styling" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="Grid & Axis Styling"'
-    f' --prop series1=Div1:55,70,45'
-    f' --prop series2=Div2:60,40,75'
-    f' --prop colors=2E75B6,548235'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop gridlines=D9D9D9:0.5'
-    f' --prop axisfont=9:666666'
-    f' --prop axisLine=333333:1'
-    f' --prop legend=bottom')
+        # ------------------------------------------------------------------
+        # Chart 1: Basic bubble chart with 2 series
+        # Features: chartType=bubble, X;Y;Size triplets, catTitle, axisTitle
+        # ------------------------------------------------------------------
+        chart(S1,
+              chartType="bubble",
+              title="Market Analysis",
+              series1="Enterprise:80,45,60",
+              series2="Consumer:50,35,70",
+              colors="4472C4,ED7D31",
+              x="0", y="0", width="12", height="18",
+              catTitle="Market Size", axisTitle="Growth Rate",
+              legend="bottom"),
 
-# --------------------------------------------------------------------------
-# Chart 4: plotFill, chartFill, series.shadow
-#
-# officecli add charts-bubble.xlsx "/2-Bubble Styling" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="Shadow & Fill Effects" \
-#   --prop series1="Portfolio:35,22,80;75,28,55;120,16,65;165,32,45" \
-#   --prop colors=4472C4 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop plotFill=F0F4F8 --prop chartFill=FAFAFA \
-#   --prop series.shadow=000000-4-315-2-30 \
-#   --prop legend=bottom
-#
-# Features: plotFill, chartFill, series.shadow
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/2-Bubble Styling" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="Shadow & Fill Effects"'
-    f' --prop series1=Portfolio:80,55,65,45'
-    f' --prop colors=4472C4'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop plotFill=F0F4F8 --prop chartFill=FAFAFA'
-    f' --prop series.shadow=000000-4-315-2-30'
-    f' --prop legend=bottom')
+        # ------------------------------------------------------------------
+        # Chart 2: bubbleScale=100 with dataLabels
+        # Features: bubbleScale=100, dataLabels with center positioning
+        # ------------------------------------------------------------------
+        chart(S1,
+              chartType="bubble",
+              title="Product Portfolio",
+              series1="Products:90,50,70,40",
+              colors="2E75B6",
+              x="13", y="0", width="12", height="18",
+              bubbleScale="100",
+              dataLabels="true", labelPos="center",
+              labelFont="9:FFFFFF:true",
+              legend="bottom"),
 
-# ==========================================================================
-# Sheet: 3-Bubble Advanced
-# ==========================================================================
-print("\n--- 3-Bubble Advanced ---")
-cli(f'add "{FILE}" / --type sheet --prop name="3-Bubble Advanced"')
+        # ------------------------------------------------------------------
+        # Chart 3: bubbleScale=50 (smaller bubbles)
+        # Features: bubbleScale=50
+        # ------------------------------------------------------------------
+        chart(S1,
+              chartType="bubble",
+              title="Small Bubbles (Scale 50)",
+              series1="Tech:60,80,45",
+              series2="Finance:55,70,35",
+              colors="70AD47,FFC000",
+              x="0", y="19", width="12", height="18",
+              bubbleScale="50",
+              legend="bottom"),
 
-# --------------------------------------------------------------------------
-# Chart 1: secondaryAxis
-#
-# officecli add charts-bubble.xlsx "/3-Bubble Advanced" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="Dual-Axis Bubble" \
-#   --prop series1="Domestic:70,85,60,90" \
-#   --prop series2="International:45,55,80,65" \
-#   --prop categories=1,2,3,4 \
-#   --prop colors=4472C4,ED7D31 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop secondaryAxis=2 \
-#   --prop legend=bottom
-#
-# Features: secondaryAxis on bubble chart
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/3-Bubble Advanced" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="Dual-Axis Bubble"'
-    f' --prop series1=Domestic:70,85,60,90'
-    f' --prop series2=International:45,55,80,65'
-    f' --prop categories=1,2,3,4'
-    f' --prop colors=4472C4,ED7D31'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop secondaryAxis=2'
-    f' --prop legend=bottom')
+        # ------------------------------------------------------------------
+        # Chart 4: sizeRepresents=width
+        # Features: sizeRepresents=width (bubble diameter proportional to value)
+        # ------------------------------------------------------------------
+        chart(S1,
+              chartType="bubble",
+              title="Size by Width",
+              series1="Regions:70,40,55,85",
+              colors="5B9BD5",
+              x="13", y="19", width="12", height="18",
+              sizeRepresents="width",
+              bubbleScale="100",
+              legend="bottom"),
+    ]
+    doc.batch(items)
 
-# --------------------------------------------------------------------------
-# Chart 2: referenceLine
-#
-# officecli add charts-bubble.xlsx "/3-Bubble Advanced" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="Growth Threshold" \
-#   --prop series1="Products:60,80,45,55" \
-#   --prop categories=1,2,3,4 \
-#   --prop colors=70AD47 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop referenceLine=50:C00000:Target \
-#   --prop bubbleScale=80 \
-#   --prop legend=bottom
-#
-# Features: referenceLine on bubble chart
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/3-Bubble Advanced" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="Growth Threshold"'
-    f' --prop series1=Products:60,80,45,55'
-    f' --prop categories=1,2,3,4'
-    f' --prop colors=70AD47'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop "referenceLine=50:C00000:Target"'
-    f' --prop bubbleScale=80'
-    f' --prop legend=bottom')
+    # ======================================================================
+    # Sheet: 2-Bubble Styling
+    # ======================================================================
+    print("--- 2-Bubble Styling ---")
+    S2 = "/2-Bubble Styling"
+    items = [
+        sheet("2-Bubble Styling"),
 
-# --------------------------------------------------------------------------
-# Chart 3: axisMin/Max, logBase
-#
-# officecli add charts-bubble.xlsx "/3-Bubble Advanced" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="Log Scale Analysis" \
-#   --prop series1="Markets:5,15,50,120" \
-#   --prop categories=1,2,3,4 \
-#   --prop colors=2E75B6 \
-#   --prop x=0 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop axisMin=1 --prop axisMax=200 \
-#   --prop logBase=10 \
-#   --prop bubbleScale=80 \
-#   --prop legend=bottom
-#
-# Features: axisMin/Max, logBase=10 (logarithmic scale)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/3-Bubble Advanced" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="Log Scale Analysis"'
-    f' --prop series1=Markets:5,15,50,120'
-    f' --prop categories=1,2,3,4'
-    f' --prop colors=2E75B6'
-    f' --prop x=0 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop axisMin=1 --prop axisMax=200'
-    f' --prop logBase=10'
-    f' --prop bubbleScale=80'
-    f' --prop legend=bottom')
+        # ------------------------------------------------------------------
+        # Chart 1: Title styling, legend positioning
+        # Features: title.font/size/color/bold, legend=right, legendfont
+        # ------------------------------------------------------------------
+        chart(S2,
+              chartType="bubble",
+              title="Styled Bubble Chart",
+              series1="SegmentA:65,50,80",
+              series2="SegmentB:45,60,40",
+              colors="1F4E79,C55A11",
+              x="0", y="0", width="12", height="18",
+              **{"title.font": "Georgia", "title.size": "16",
+                 "title.color": "1F4E79", "title.bold": "true"},
+              legend="right", legendfont="10:333333:Calibri"),
 
-# --------------------------------------------------------------------------
-# Chart 4: chartArea.border, plotArea.border, trendline
-#
-# officecli add charts-bubble.xlsx "/3-Bubble Advanced" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="Trend & Borders" \
-#   --prop series1="Investments:20,55,95,140,180" \
-#   --prop categories=1,2,3,4,5 \
-#   --prop colors=4472C4 \
-#   --prop x=13 --prop y=19 --prop width=12 --prop height=18 \
-#   --prop chartArea.border=333333:1.5 \
-#   --prop plotArea.border=999999:0.75 \
-#   --prop trendline=linear \
-#   --prop legend=bottom
-#
-# Features: chartArea.border, plotArea.border, trendline=linear
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/3-Bubble Advanced" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="Trend & Borders"'
-    f' --prop series1=Investments:20,55,95,140,180'
-    f' --prop categories=1,2,3,4,5'
-    f' --prop colors=4472C4'
-    f' --prop x=13 --prop y=19 --prop width=12 --prop height=18'
-    f' --prop chartArea.border=333333:1.5'
-    f' --prop plotArea.border=999999:0.75'
-    f' --prop trendline=linear'
-    f' --prop legend=bottom')
+        # ------------------------------------------------------------------
+        # Chart 2: Series colors, transparency
+        # Features: ARGB colors with alpha (80=50% transparency)
+        # ------------------------------------------------------------------
+        chart(S2,
+              chartType="bubble",
+              title="Transparent Overlapping Bubbles",
+              series1="GroupX:75,60,90,50",
+              series2="GroupY:65,55,80,45",
+              colors="804472C4,80ED7D31",
+              x="13", y="0", width="12", height="18",
+              bubbleScale="120",
+              legend="bottom"),
 
-# ==========================================================================
-# Sheet: 4-Bubble Series Data
-# ==========================================================================
-print("\n--- 4-Bubble Series Data ---")
-cli(f'add "{FILE}" / --type sheet --prop name="4-Bubble Series Data"')
+        # ------------------------------------------------------------------
+        # Chart 3: gridlines, axisfont, axisLine
+        # Features: gridlines, axisfont, axisLine
+        # ------------------------------------------------------------------
+        chart(S2,
+              chartType="bubble",
+              title="Grid & Axis Styling",
+              series1="Div1:55,70,45",
+              series2="Div2:60,40,75",
+              colors="2E75B6,548235",
+              x="0", y="19", width="12", height="18",
+              gridlines="D9D9D9:0.5",
+              axisfont="9:666666",
+              axisLine="333333:1",
+              legend="bottom"),
 
-# --------------------------------------------------------------------------
-# Chart 1: shownegbubbles — render bubbles for negative size values
-#
-# officecli add charts-bubble.xlsx "/4-Bubble Series Data" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="shownegbubbles — negative sizes visible" \
-#   --prop series1="Data:60,30,90" \
-#   --prop series2="Neg:40,50,70" \
-#   --prop colors=4472C4,C00000 \
-#   --prop x=0 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop shownegbubbles=true \
-#   --prop bubbleScale=80 \
-#   --prop legend=bottom
-#
-# Features: shownegbubbles=true (render bubbles whose size value is negative
-#   by reflecting them — Excel hides them by default when false)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/4-Bubble Series Data" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="shownegbubbles — negative sizes visible"'
-    f' --prop series1=Data:60,30,90'
-    f' --prop series2=Neg:40,50,70'
-    f' --prop colors=4472C4,C00000'
-    f' --prop x=0 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop shownegbubbles=true'
-    f' --prop bubbleScale=80'
-    f' --prop legend=bottom')
+        # ------------------------------------------------------------------
+        # Chart 4: plotFill, chartFill, series.shadow
+        # Features: plotFill, chartFill, series.shadow
+        # ------------------------------------------------------------------
+        chart(S2,
+              chartType="bubble",
+              title="Shadow & Fill Effects",
+              series1="Portfolio:80,55,65,45",
+              colors="4472C4",
+              x="13", y="19", width="12", height="18",
+              plotFill="F0F4F8", chartFill="FAFAFA",
+              **{"series.shadow": "000000-4-315-2-30"},
+              legend="bottom"),
+    ]
+    doc.batch(items)
 
-# --------------------------------------------------------------------------
-# Chart 2: series1.bubbleSize (range ref) — sizes from worksheet cells
-#
-# Populate some size data first, then reference it.
-# This demonstrates the bubbleSize + bubbleSizeRef round-trip.
-#
-# officecli set charts-bubble.xlsx "/4-Bubble Series Data/A1" --prop value=10
-# officecli set charts-bubble.xlsx "/4-Bubble Series Data/A2" --prop value=25
-# officecli set charts-bubble.xlsx "/4-Bubble Series Data/A3" --prop value=40
-# officecli add charts-bubble.xlsx "/4-Bubble Series Data" --type chart \
-#   --prop chartType=bubble \
-#   --prop title="series1.bubbleSize — range ref" \
-#   --prop series1="Sizes:80,45,60" \
-#   --prop 'series1.bubbleSize=4-Bubble Series Data!$A$1:$A$3' \
-#   --prop colors=70AD47 \
-#   --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
-#   --prop bubbleScale=100 --prop legend=bottom
-#
-# Features: series1.bubbleSize=<range> (link bubble sizes to worksheet cells
-#   so Excel can re-compute when source data changes; bubbleSizeRef is emitted
-#   on Get alongside the cached literal bubbleSize values)
-# --------------------------------------------------------------------------
-cli(f'add "{FILE}" "/4-Bubble Series Data" --type cell --prop ref=A1 --prop value=10')
-cli(f'add "{FILE}" "/4-Bubble Series Data" --type cell --prop ref=A2 --prop value=25')
-cli(f'add "{FILE}" "/4-Bubble Series Data" --type cell --prop ref=A3 --prop value=40')
-cli(f'add "{FILE}" "/4-Bubble Series Data" --type chart'
-    f' --prop chartType=bubble'
-    f' --prop title="series1.bubbleSize — range ref"'
-    f' --prop series1=Sizes:80,45,60'
-    f" --prop 'series1.bubbleSize=4-Bubble Series Data!$A$1:$A$3'"
-    f' --prop colors=70AD47'
-    f' --prop x=13 --prop y=0 --prop width=12 --prop height=18'
-    f' --prop bubbleScale=100 --prop legend=bottom')
+    # ======================================================================
+    # Sheet: 3-Bubble Advanced
+    # ======================================================================
+    print("--- 3-Bubble Advanced ---")
+    S3 = "/3-Bubble Advanced"
+    items = [
+        sheet("3-Bubble Advanced"),
 
-# Remove blank default Sheet1 (all data is inline)
-cli(f'remove "{FILE}" /Sheet1')
+        # ------------------------------------------------------------------
+        # Chart 1: secondaryAxis
+        # Features: secondaryAxis on bubble chart
+        # ------------------------------------------------------------------
+        chart(S3,
+              chartType="bubble",
+              title="Dual-Axis Bubble",
+              series1="Domestic:70,85,60,90",
+              series2="International:45,55,80,65",
+              categories="1,2,3,4",
+              colors="4472C4,ED7D31",
+              x="0", y="0", width="12", height="18",
+              secondaryAxis="2",
+              legend="bottom"),
+
+        # ------------------------------------------------------------------
+        # Chart 2: referenceLine
+        # Features: referenceLine on bubble chart
+        # ------------------------------------------------------------------
+        chart(S3,
+              chartType="bubble",
+              title="Growth Threshold",
+              series1="Products:60,80,45,55",
+              categories="1,2,3,4",
+              colors="70AD47",
+              x="13", y="0", width="12", height="18",
+              referenceLine="50:C00000:Target",
+              bubbleScale="80",
+              legend="bottom"),
+
+        # ------------------------------------------------------------------
+        # Chart 3: axisMin/Max, logBase
+        # Features: axisMin/Max, logBase=10 (logarithmic scale)
+        # ------------------------------------------------------------------
+        chart(S3,
+              chartType="bubble",
+              title="Log Scale Analysis",
+              series1="Markets:5,15,50,120",
+              categories="1,2,3,4",
+              colors="2E75B6",
+              x="0", y="19", width="12", height="18",
+              axisMin="1", axisMax="200",
+              logBase="10",
+              bubbleScale="80",
+              legend="bottom"),
+
+        # ------------------------------------------------------------------
+        # Chart 4: chartArea.border, plotArea.border, trendline
+        # Features: chartArea.border, plotArea.border, trendline=linear
+        # ------------------------------------------------------------------
+        chart(S3,
+              chartType="bubble",
+              title="Trend & Borders",
+              series1="Investments:20,55,95,140,180",
+              categories="1,2,3,4,5",
+              colors="4472C4",
+              x="13", y="19", width="12", height="18",
+              **{"chartArea.border": "333333:1.5",
+                 "plotArea.border": "999999:0.75"},
+              trendline="linear",
+              legend="bottom"),
+    ]
+    doc.batch(items)
+
+    # ======================================================================
+    # Sheet: 4-Bubble Series Data
+    # ======================================================================
+    print("--- 4-Bubble Series Data ---")
+    S4 = "/4-Bubble Series Data"
+    items = [
+        sheet("4-Bubble Series Data"),
+
+        # ------------------------------------------------------------------
+        # Chart 1: shownegbubbles — render bubbles for negative size values
+        # Features: shownegbubbles=true (render bubbles whose size value is
+        #   negative by reflecting them — Excel hides them by default)
+        # ------------------------------------------------------------------
+        chart(S4,
+              chartType="bubble",
+              title="shownegbubbles — negative sizes visible",
+              series1="Data:60,30,90",
+              series2="Neg:40,50,70",
+              colors="4472C4,C00000",
+              x="0", y="0", width="12", height="18",
+              shownegbubbles="true",
+              bubbleScale="80",
+              legend="bottom"),
+
+        # ------------------------------------------------------------------
+        # Chart 2: series1.bubbleSize (range ref) — sizes from worksheet cells
+        #
+        # Populate some size data first, then reference it. Demonstrates the
+        # bubbleSize + bubbleSizeRef round-trip: Excel re-computes when the
+        # source cells change; bubbleSizeRef is emitted on Get alongside the
+        # cached literal bubbleSize values.
+        # ------------------------------------------------------------------
+        cell(S4, "A1", "10"),
+        cell(S4, "A2", "25"),
+        cell(S4, "A3", "40"),
+        chart(S4,
+              chartType="bubble",
+              title="series1.bubbleSize — range ref",
+              series1="Sizes:80,45,60",
+              **{"series1.bubbleSize": "4-Bubble Series Data!$A$1:$A$3"},
+              colors="70AD47",
+              x="13", y="0", width="12", height="18",
+              bubbleScale="100", legend="bottom"),
+    ]
+    doc.batch(items)
+
+    # Remove blank default Sheet1 (all data is inline)
+    doc.send({"command": "remove", "path": "/Sheet1"})
+
+    doc.send({"command": "save"})
+# context exit closes the resident, flushing the workbook to disk.
 
 print(f"\nDone! Generated: {FILE}")
-print("  5 sheets (4 chart sheets, 14 charts total)")
+print("  4 chart sheets, 14 charts total")

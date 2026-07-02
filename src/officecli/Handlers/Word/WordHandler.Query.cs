@@ -761,6 +761,21 @@ public partial class WordHandler
                 }
                 var hl = rPr.GetFirstChild<Highlight>();
                 if (hl?.Val != null) styleNode.Format["highlight"] = hl.Val.InnerText;
+                else
+                {
+                    // SDK-binding quirk: <w:highlight> under a STYLE's <w:rPr>
+                    // (StyleRunProperties) re-parses as an OpenXmlUnknownElement
+                    // on reopen — the strongly-typed Highlight child binding only
+                    // fires under a run's RunProperties, so GetFirstChild<Highlight>()
+                    // above misses it after a save→reopen (it sees it fine in the
+                    // freshly-built in-memory tree). The on-disk bytes are
+                    // well-formed and Word honors them; only our typed reader needs
+                    // the local-name fallback so a style highlight set via Set
+                    // round-trips through Get. (Surfaced by RoundTripPersistenceScanTests.)
+                    var hlUnknown = rPr.ChildElements.FirstOrDefault(c => c.LocalName == "highlight");
+                    var hlVal = hlUnknown?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+                    if (!string.IsNullOrEmpty(hlVal)) styleNode.Format["highlight"] = hlVal;
+                }
                 var shd = rPr.GetFirstChild<Shading>();
                 if (shd?.Fill?.Value != null) styleNode.Format["shading"] = ParseHelpers.FormatHexColor(shd.Fill.Value);
                 var vAlign = rPr.GetFirstChild<VerticalTextAlignment>();
@@ -1430,6 +1445,12 @@ public partial class WordHandler
         var beginChar = field.BeginRun.GetFirstChild<FieldChar>();
         var isDirty = beginChar?.Dirty?.Value == true;
         if (isDirty) node.Format["dirty"] = true;
+
+        // BUG-DUMP-R37-4: <w:fldChar w:fldLock="true"> on the begin fldChar locks
+        // the field against F9/recalc. Surface it on the collapsed complex-field
+        // node so `get /field[N]` reports the locked state (mirrors the fldSimple
+        // branches in Navigation). Only emit when locked.
+        if (beginChar?.FieldLock?.Value == true) node.Format["fldLock"] = true;
 
         // Cross-handler evaluated protocol: true whenever the caller can read
         // some value from the field — i.e. when a cached result run exists.

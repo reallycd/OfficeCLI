@@ -6,8 +6,9 @@
 # groups: metadata, calc engine, protection/display, theme. This is the CLI twin
 # of workbook-settings.py (which drives the same writes over the officecli SDK);
 # both produce an equivalent workbook-settings.xlsx.
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 FILE="$(dirname "$0")/workbook-settings.xlsx"
 echo "Building $FILE ..."
 rm -f "$FILE"

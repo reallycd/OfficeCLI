@@ -582,6 +582,15 @@ public partial class WordHandler
             if (hiddenDocPr != null) hiddenDocPr.Hidden = true;
         }
 
+        // Accessibility: mark the image decorative (screen readers skip it). Stored
+        // as an adec:decorative extension under <wp:docPr>. Word treats a decorative
+        // image's alt text as absent, which is expected.
+        if (properties.TryGetValue("decorative", out var decVal) && IsTruthy(decVal))
+        {
+            var decDocPr = imgRun.Descendants<DW.DocProperties>().FirstOrDefault();
+            if (decDocPr != null) SetPictureDecorative(decDocPr);
+        }
+
         // Wire the asvg:svgBlip extension after the run is built. Walking
         // the Drawing to find the Blip keeps CreateImageRun /
         // CreateAnchorImageRun signature-stable for non-SVG callers.

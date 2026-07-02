@@ -523,38 +523,13 @@ public partial class ExcelHandler
                 }
                 case "line" or "border":
                 {
-                    // CONSISTENCY(shape-line): mirror Add — accept "none" or "color[:width[:style]]".
+                    // CONSISTENCY(shape-line): "none" or "color[:width[:style]]"
+                    // via the shared BuildShapeOutline helper (same grammar as
+                    // Add and pptx shape line).
                     var spPr = shape.ShapeProperties;
                     if (spPr == null) break;
                     spPr.RemoveAllChildren<Drawing.Outline>();
-                    if (value.Equals("none", StringComparison.OrdinalIgnoreCase))
-                    {
-                        spPr.AppendChild(new Drawing.Outline(new Drawing.NoFill()));
-                        break;
-                    }
-                    var parts = value.Split(':');
-                    var outline = new Drawing.Outline(DrawingColorBuilder.BuildSolidFill(parts[0]));
-                    if (parts.Length > 1
-                        && double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
-                            System.Globalization.CultureInfo.InvariantCulture, out var wpt))
-                    {
-                        outline.Width = (int)Math.Round(wpt * EmuConverter.EmuPerPoint);
-                    }
-                    if (parts.Length > 2)
-                    {
-                        var dash = parts[2].ToLowerInvariant() switch
-                        {
-                            "dash" => Drawing.PresetLineDashValues.Dash,
-                            "dot" => Drawing.PresetLineDashValues.Dot,
-                            "dashdot" => Drawing.PresetLineDashValues.DashDot,
-                            "longdash" => Drawing.PresetLineDashValues.LargeDash,
-                            "solid" => Drawing.PresetLineDashValues.Solid,
-                            _ => (Drawing.PresetLineDashValues?)null
-                        };
-                        if (dash != null)
-                            outline.AppendChild(new Drawing.PresetDash { Val = dash });
-                    }
-                    spPr.AppendChild(outline);
+                    spPr.AppendChild(BuildShapeOutline(value));
                     break;
                 }
                 case "alt" or "alttext" or "descr" or "description":

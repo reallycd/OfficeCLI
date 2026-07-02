@@ -9,8 +9,9 @@
 # (caps/smallCaps), vertical align (super/subscript), color/size/highlight,
 # per-script fonts (latin/eastAsia/cs), text effects (emboss/imprint/outline/
 # shadow/vanish), character spacing/kerning/position, and language tagging.
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 DOCX="$(dirname "$0")/run-formatting.docx"
 echo "Building $DOCX ..."
 rm -f "$DOCX"

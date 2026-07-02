@@ -23,6 +23,18 @@
     "_shared/picture.docx-xlsx"
   ],
   "properties": {
+    "decorative": {
+      "type": "bool",
+      "description": "Mark the picture as decorative for accessibility. Stored as an adec:decorative extension under <wp:docPr> (uri {C183D7F6-DF14-4A22-8298-3B9A5F5C6C3B}). Screen readers skip decorative images; Word treats their alt text as absent.",
+      "add": true,
+      "set": true,
+      "get": true,
+      "examples": [
+        "--prop decorative=true"
+      ],
+      "readback": "true (only when the decorative ext is present)",
+      "enforcement": "report"
+    },
     "crop": {
       "type": "string",
       "description": "Crop rectangle in percent (0-100), 1 or 4 comma-separated values (left,top,right,bottom). Stored as <a:srcRect> inside <a:blipFill> (1000ths-of-a-percent). Get emits the canonical 4-value form (e.g. 12,6,18,9); the per-side keys (cropLeft/cropTop/cropRight/cropBottom) are accepted on add/set only.",

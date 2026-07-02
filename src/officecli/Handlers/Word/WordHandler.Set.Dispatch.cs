@@ -1099,9 +1099,12 @@ public partial class WordHandler
                     // TrySetSectionLayout — countBy can be set without
                     // touching restart mode. Auto-create LineNumberType with
                     // restart=continuous when it doesn't exist yet.
-                    if (!int.TryParse(value, out var ncb) || ncb < 1)
+                    // BUGFIX (NumericBoundaryScanTests): CountBy is an Int16; a
+                    // value above 32767 silently overflowed the (short) cast to a
+                    // negative number → schema-invalid w:countBy. Bound the range.
+                    if (!int.TryParse(value, out var ncb) || ncb < 1 || ncb > 32767)
                         throw new ArgumentException(
-                            $"Invalid lineNumberCountBy value: '{value}'. Must be a positive integer.");
+                            $"Invalid lineNumberCountBy value: '{value}'. Must be a positive integer (1-32767).");
                     var lnNum = sectPr.GetFirstChild<LineNumberType>();
                     if (lnNum == null)
                     {

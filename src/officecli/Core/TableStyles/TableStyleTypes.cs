@@ -125,7 +125,8 @@ public record ResolvedCell(
     ResolvedBorder? Top,
     ResolvedBorder? Bottom,
     ResolvedBorder? Left,
-    ResolvedBorder? Right);
+    ResolvedBorder? Right,
+    bool Bold = false);   // header/total/first-col/last-col emphasis bands render bold
 
 /// <summary>One resolved cell-edge border: colour + width + dash.</summary>
 public record ResolvedBorder(string Color, int WidthEmu, string Dash);

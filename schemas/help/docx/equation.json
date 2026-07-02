@@ -27,10 +27,11 @@
         "inline"
       ],
       "add": true,
-      "set": false,
+      "set": true,
       "get": true,
       "examples": [
-        "--prop mode=inline"
+        "--prop mode=inline",
+        "--prop mode=display"
       ],
       "readback": "display | inline",
       "enforcement": "report"

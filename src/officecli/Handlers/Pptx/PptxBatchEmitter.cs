@@ -171,6 +171,15 @@ public static partial class PptxBatchEmitter
         // may go stale on replay; UnsupportedWarning surfaces that risk.
         EmitPresentationExtras(ppt, items, ctx);
 
+        // Custom table-style catalogue (ppt/tableStyles.xml). A table references
+        // its style by GUID (<a:tableStyleId>); when that GUID names a CUSTOM
+        // style defined only in tableStyles.xml, dropping the part leaves the
+        // GUID unresolvable and PowerPoint falls back to a built-in style with
+        // different banding/header fills (sample09: a header row gained a solid
+        // dark-blue fill the source's custom style did not have). Carry the part
+        // verbatim with a pinned rel so the GUID resolves.
+        EmitTableStyles(ppt, items);
+
         // R12a aux-parts: surface a warning per package part the dump surface
         // does not round-trip (tableStyles, viewProps, handoutMasters,
         // printerSettings, customXml, embedded fonts, programmability tags,
@@ -253,6 +262,36 @@ public static partial class PptxBatchEmitter
             "show.loop", "show.narration", "show.animation", "show.useTimings",
         };
 
+    // Relationship / content types for the presentation's tableStyles part.
+    private const string TableStylesRelType =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles";
+    private const string TableStylesContentType =
+        "application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml";
+
+    private static void EmitTableStyles(PowerPointHandler ppt, List<BatchItem> items)
+    {
+        string xml;
+        try { xml = ppt.Raw("/ppt/tableStyles.xml"); }
+        catch { return; }
+        if (string.IsNullOrWhiteSpace(xml) || !xml.Contains("tblStyleLst", StringComparison.Ordinal))
+            return;
+        // Carry the part verbatim via a pinned extended-part relationship on the
+        // presentation. The blank replay deck has no tableStyles part, so this
+        // creates it; PowerPoint resolves each table's <a:tableStyleId> GUID
+        // against it. The rId is arbitrary (the presentation body does not
+        // reference tableStyles by id — PowerPoint discovers it via rel type).
+        items.Add(new BatchItem
+        {
+            Command = "add-part",
+            Parent = "/presentation",
+            Type = "tablestyles",
+            Props = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["xml"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(xml)),
+            },
+        });
+    }
+
     private static void EmitPresentationProps(PowerPointHandler ppt, List<BatchItem> items)
     {
         DocumentNode root;
@@ -269,10 +308,28 @@ public static partial class PptxBatchEmitter
         bool emittedPreset = false;
         if (!string.IsNullOrEmpty(slideSizeType)
             && !string.Equals(slideSizeType, "custom", StringComparison.OrdinalIgnoreCase)
-            && OfficeCli.Core.SlideSizeDefaults.Presets.ContainsKey(slideSizeType))
+            && OfficeCli.Core.SlideSizeDefaults.Presets.TryGetValue(slideSizeType!, out var presetDims))
         {
-            props["slidesize"] = slideSizeType!;
-            emittedPreset = true;
+            // Only emit the preset keyword when the deck's ACTUAL cx/cy match
+            // the preset's canonical dimensions. Get labels slideSize by aspect
+            // ratio, so a 4:3 deck with non-standard absolute dimensions (e.g.
+            // 10080625×7559675, the legacy "On-screen Show") is reported as
+            // "standard" though its cx/cy differ from the standard
+            // 9144000×6858000. `set slidesize=standard` sets cx/cy/type
+            // atomically — emitting the keyword would RESET cx/cy to the preset
+            // and silently resize the deck. Verify the dimensions first; on any
+            // mismatch fall through to the exact slideWidth/slideHeight emit.
+            bool dimsMatch =
+                OfficeCli.Core.EmuConverter.TryParseEmu(
+                    root.Format.TryGetValue("slideWidth", out var swObj) ? swObj as string ?? "" : "", out var actualCx)
+                && OfficeCli.Core.EmuConverter.TryParseEmu(
+                    root.Format.TryGetValue("slideHeight", out var shObj) ? shObj as string ?? "" : "", out var actualCy)
+                && actualCx == presetDims.Cx && actualCy == presetDims.Cy;
+            if (dimsMatch)
+            {
+                props["slidesize"] = slideSizeType!;
+                emittedPreset = true;
+            }
         }
         if (!emittedPreset)
         {
@@ -521,6 +578,23 @@ public static partial class PptxBatchEmitter
             Props = slideProps.Count > 0 ? slideProps : null,
         });
 
+        // showMasterShapes=false is a Set-only key (`add slide` doesn't
+        // consume it) — emit a follow-up set so <p:sld showMasterSp="0">
+        // survives replay (themes.pptx: master graphics reappeared over an
+        // overridden background).
+        if (slideProps.Remove("showMasterShapes"))
+        {
+            items.Add(new BatchItem
+            {
+                Command = "set",
+                Path = slidePath,
+                Props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["showMasterShapes"] = "false",
+                },
+            });
+        }
+
         // Picture-bullet image carrier. A paragraph/shape whose bullet glyph is an
         // image (<a:buBlip><a:blip r:embed="rIdN">) round-trips its bullet markup
         // verbatim via bulletRaw/lstStyleRaw, but the slide ImagePart it points at
@@ -739,6 +813,124 @@ public static partial class PptxBatchEmitter
         foreach (var (cxnChild, cxnOrdinal) in deferredConnectors)
             EmitConnector(ppt, cxnChild, slidePath, items, ctx, cxnOrdinal);
 
+        // SmartArt graphicFrames live in /p:sld/p:cSld/p:spTree but are
+        // skipped by NodeBuilder (table/chart-only routing). Phase 3b emits
+        // them as add-part smartart (creates the four diagram sub-parts with
+        // caller-pinned rIds) followed by raw-set rows that fill each part's
+        // XML, and a final raw-set append on /p:sld/p:cSld/p:spTree with the
+        // graphicFrame XML. Caller-pinned rIds make the graphicFrame's
+        // <dgm:relIds> round-trip byte-equal.
+        EmitSmartArtsForSlide(ppt, slideNum, slidePath, items, ctx);
+
+        // Phase 3c-media: video/audio <p:pic> hosts with their underlying
+        // MediaDataPart + thumbnail ImagePart, mirroring the SmartArt
+        // passthrough. The typed walk skipped video/audio children above.
+        EmitMediaForSlide(ppt, slideNum, slidePath, items, ctx);
+
+        // Phase 3c-media (legacy/external): <p:pic> video/audio hosts that are
+        // NOT modern embedded media (e.g. a PowerPoint 2007 external linked
+        // movie: <a:videoFile r:link> → TargetMode="External" file, with a
+        // local poster image). GetMediaOnSlide rejects these, and the typed
+        // walk skipped the video/audio child, so without this pass the whole
+        // picture is dropped. Round-trip it verbatim + its external link rel +
+        // poster image rel.
+        EmitExternalMediaForSlide(ppt, slideNum, slidePath, items, ctx);
+
+        // Bitmap glyph fills: any textFillRaw prop emitted for this slide's
+        // runs carries an <a:blipFill r:embed="rIdN"> whose ImagePart must be
+        // re-created with the pinned rId or the spliced XML dangles
+        // (sample10 WordArt picture fill). Scan the slide's raw XML for
+        // rPr-level blipFill embeds and carry each once.
+        try
+        {
+            var rawSlide = ppt.Raw(slidePath);
+            var tfRids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (System.Text.RegularExpressions.Match m in
+                     System.Text.RegularExpressions.Regex.Matches(rawSlide,
+                         @"<a:rPr[^>]*>(?:(?!</a:rPr>).)*?<a:blipFill[^>]*>(?:(?!</a:blipFill>).)*?r:embed=""(rId\d+)""",
+                         System.Text.RegularExpressions.RegexOptions.Singleline))
+                tfRids.Add(m.Groups[1].Value);
+            if (tfRids.Count > 0)
+            {
+                foreach (var img in ppt.GetSlideImagePartsByRelId(slideNum, tfRids))
+                    items.Add(new BatchItem
+                    {
+                        Command = "add-part",
+                        Parent = slidePath,
+                        Type = "image",
+                        Props = new Dictionary<string, string>
+                        {
+                            ["rid"] = img.RelId,
+                            ["content-type"] = img.ContentType,
+                            ["data"] = img.Base64Data,
+                        },
+                    });
+            }
+        }
+        catch { /* best-effort */ }
+
+        // Timing / transition SOUND relationships: <p:sndTgt r:embed> in the
+        // raw-passed-through <p:timing> tree (and <p:snd r:embed> in a
+        // <p:transition>) reference a bare `.../audio` rel that the media pass
+        // above does NOT recreate (it only handles <p:pic> media). Without the
+        // rel the literal rId in the timing slice dangles → PowerPoint refuses
+        // the deck (0x80070570). Recreate each with its pinned rId + bytes.
+        foreach (var ta in ppt.GetTimingAudioRels(slideNum))
+        {
+            items.Add(new BatchItem
+            {
+                Command = "add-part",
+                Parent = slidePath,
+                Type = "audio",
+                Props = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["rel-only"] = "true",
+                    ["audio-rid"] = ta.RelId,
+                    ["content-type"] = ta.ContentType,
+                    ["extension"] = ta.Extension,
+                    ["data"] = Convert.ToBase64String(ta.Data),
+                },
+            });
+        }
+
+        // ActiveX controls: <p:controls> in <p:cSld> (holding the controls +
+        // their fallback pics) + the activeX xml/bin parts + WMF fallback
+        // images. NodeBuilder surfaces none of this, so the whole block + parts
+        // were dropped → the slide replayed blank. Carry them verbatim.
+        EmitActiveXForSlide(ppt, slideNum, slidePath, items, ctx);
+
+        // Phase 3c-3d: am3d 3D-model AlternateContent blocks with their
+        // underlying ExtendedPart .glb + thumbnail ImagePart, mirroring
+        // the video/audio passthrough. The typed walk skipped
+        // 3dmodel/model3d children above.
+        EmitModel3dForSlide(ppt, slideNum, slidePath, items, ctx);
+
+        // Phase 3c-ole: <p:graphicFrame> hosting <p:oleObj> with the
+        // underlying EmbeddedPackagePart (OOXML containers) or
+        // EmbeddedObjectPart (generic binaries) + thumbnail icon ImagePart,
+        // mirroring the model3d passthrough. The typed walk skipped the
+        // OLE child above.
+        EmitOleForSlide(ppt, slideNum, slidePath, items, ctx);
+
+        // Generic <mc:AlternateContent> passthrough — covers AlternateContent
+        // blocks in spTree that don't match any of the specific emitters
+        // above (am3d:model3d in EmitModel3dForSlide, SmartArt in
+        // EmitSmartArtsForSlide, media in EmitMediaForSlide, OLE in
+        // EmitOleForSlide). NodeBuilder's typed walk explicitly skips the
+        // mc:AlternateContent wrapper (Choice + Fallback would otherwise
+        // double-count <p:sp> children), so without this catch-all every
+        // such block is silently dropped on dump→replay — meaningful for
+        // any emerging-feature wrapping the semantic walk doesn't model.
+        EmitGenericAlternateContentForSlide(ppt, slideNum, slidePath, items, ctx);
+
+        // NOTE: the exotic-slice block below (bg / clrMapOvr / transition /
+        // timing / extLst / hf) runs AFTER every shape-carrying pass
+        // (SmartArt / media / OLE / chartEx / generic AlternateContent) so
+        // ComputeEmittedShapeIds sees the FULL rebuilt slide before the
+        // timing prune. It used to run before the AlternateContent catch-all,
+        // so animations targeting AC-carried shapes (stress013's duplicate
+        // TextBox pair) were pruned as "dangling", leaving schema-invalid
+        // empty <p:childTnLst> wrappers that PowerPoint refused.
         // Raw-XML passthrough for exotic transition / timing content. Emitted
         // AFTER all shape/animation rows so they replace anything the semantic
         // emit produced (defensive — slideProps already stripped, animIndex
@@ -790,43 +982,6 @@ public static partial class PptxBatchEmitter
                 EmitRawSlideSlice(slidePath, "p:hf", hfXml, items, ctx);
         }
 
-        // SmartArt graphicFrames live in /p:sld/p:cSld/p:spTree but are
-        // skipped by NodeBuilder (table/chart-only routing). Phase 3b emits
-        // them as add-part smartart (creates the four diagram sub-parts with
-        // caller-pinned rIds) followed by raw-set rows that fill each part's
-        // XML, and a final raw-set append on /p:sld/p:cSld/p:spTree with the
-        // graphicFrame XML. Caller-pinned rIds make the graphicFrame's
-        // <dgm:relIds> round-trip byte-equal.
-        EmitSmartArtsForSlide(ppt, slideNum, slidePath, items, ctx);
-
-        // Phase 3c-media: video/audio <p:pic> hosts with their underlying
-        // MediaDataPart + thumbnail ImagePart, mirroring the SmartArt
-        // passthrough. The typed walk skipped video/audio children above.
-        EmitMediaForSlide(ppt, slideNum, slidePath, items, ctx);
-
-        // Phase 3c-3d: am3d 3D-model AlternateContent blocks with their
-        // underlying ExtendedPart .glb + thumbnail ImagePart, mirroring
-        // the video/audio passthrough. The typed walk skipped
-        // 3dmodel/model3d children above.
-        EmitModel3dForSlide(ppt, slideNum, slidePath, items, ctx);
-
-        // Phase 3c-ole: <p:graphicFrame> hosting <p:oleObj> with the
-        // underlying EmbeddedPackagePart (OOXML containers) or
-        // EmbeddedObjectPart (generic binaries) + thumbnail icon ImagePart,
-        // mirroring the model3d passthrough. The typed walk skipped the
-        // OLE child above.
-        EmitOleForSlide(ppt, slideNum, slidePath, items, ctx);
-
-        // Generic <mc:AlternateContent> passthrough — covers AlternateContent
-        // blocks in spTree that don't match any of the specific emitters
-        // above (am3d:model3d in EmitModel3dForSlide, SmartArt in
-        // EmitSmartArtsForSlide, media in EmitMediaForSlide, OLE in
-        // EmitOleForSlide). NodeBuilder's typed walk explicitly skips the
-        // mc:AlternateContent wrapper (Choice + Fallback would otherwise
-        // double-count <p:sp> children), so without this catch-all every
-        // such block is silently dropped on dump→replay — meaningful for
-        // any emerging-feature wrapping the semantic walk doesn't model.
-        EmitGenericAlternateContentForSlide(ppt, slideNum, slidePath, items, ctx);
 
         // Notes body content — stub for PR1. Notes part presence does not
         // surface in the slide subtree's children today (notes live under
@@ -1632,6 +1787,64 @@ public static partial class PptxBatchEmitter
     // pass as the slide-slice path; both passes need to be idempotent so
     // first emit (raw XML from source) and second emit (raw XML from
     // post-replay SDK-roundtripped doc) compare byte-equal.
+    // ActiveX controls carrier — see PowerPointHandler.GetActiveXOnSlide. Emit
+    // the activeX xml/bin parts + WMF fallback images (pinned rIds) first, then
+    // raw-set the <p:controls> block into <p:cSld> so its rIds resolve.
+    private static void EmitActiveXForSlide(PowerPointHandler ppt, int slideNum,
+                                            string slidePath, List<BatchItem> items,
+                                            SlideEmitContext ctx)
+    {
+        (string? controlsXml, var controls, var images) = ppt.GetActiveXOnSlide(slideNum);
+        if (controlsXml == null || controls.Count == 0) return;
+
+        const string ImageRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+
+        foreach (var c in controls)
+        {
+            var props = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["rid"] = c.ControlRid,
+                ["xml"] = Convert.ToBase64String(c.Xml),
+            };
+            if (c.BinRid != null && c.Bin != null)
+            {
+                props["bin-rid"] = c.BinRid;
+                props["bin"] = Convert.ToBase64String(c.Bin);
+            }
+            items.Add(new BatchItem { Command = "add-part", Parent = slidePath, Type = "activex", Props = props });
+        }
+
+        foreach (var img in images)
+        {
+            items.Add(new BatchItem
+            {
+                Command = "add-part",
+                Parent = slidePath,
+                Type = "extpart",
+                Props = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["rid"] = img.Rid,
+                    ["rel-type"] = ImageRelType,
+                    ["content-type"] = img.ContentType,
+                    ["ext"] = img.Ext,
+                    ["data"] = Convert.ToBase64String(img.Bytes),
+                },
+            });
+        }
+
+        string controlsCanon;
+        try { controlsCanon = NormalizeSlideRawSlice(controlsXml); }
+        catch { controlsCanon = controlsXml; }
+        items.Add(new BatchItem
+        {
+            Command = "raw-set",
+            Part = slidePath,
+            Xpath = "/p:sld/p:cSld",
+            Action = "append",
+            Xml = controlsCanon,
+        });
+    }
+
     private static void EmitSmartArtsForSlide(PowerPointHandler ppt, int slideNum,
                                               string slidePath, List<BatchItem> items,
                                               SlideEmitContext ctx)
@@ -1707,14 +1920,48 @@ public static partial class PptxBatchEmitter
             string gfCanon;
             try { gfCanon = NormalizeSlideRawSlice(sa.GraphicFrameXml); }
             catch { gfCanon = sa.GraphicFrameXml; }
-            items.Add(new BatchItem
+            // Z-order: a SmartArt that sat BEHIND a later shape must not land on
+            // top. When the source has a stable following sibling, insert the
+            // graphicFrame BEFORE it (anchored by that sibling's cNvPr id, which
+            // survives round-trip); otherwise append into the parent as before.
+            if (sa.InsertBeforeSegment is { Length: > 0 } anchorSeg)
             {
-                Command = "raw-set",
-                Part = slidePath,
-                Xpath = "/p:sld/p:cSld/p:spTree",
-                Action = "append",
-                Xml = gfCanon,
-            });
+                // Group-nested: positional sibling anchor (group-descendant
+                // cNvPr ids are reassigned on replay, so @id can't match).
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = slidePath,
+                    Xpath = sa.ParentXpath + anchorSeg,
+                    Action = "insertbefore",
+                    Xml = gfCanon,
+                });
+            }
+            else if (sa.InsertBeforeShapeId is { Length: > 0 } anchorId)
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = slidePath,
+                    Xpath = $"{sa.ParentXpath}/*[descendant::p:cNvPr[@id='{anchorId}']]",
+                    Action = "insertbefore",
+                    Xml = gfCanon,
+                });
+            }
+            else
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = slidePath,
+                    // Append into the SmartArt's source parent (top-level spTree
+                    // or, for a group-nested SmartArt, the enclosing <p:grpSp>)
+                    // so the group's transform/scaling is preserved on replay.
+                    Xpath = sa.ParentXpath,
+                    Action = "append",
+                    Xml = gfCanon,
+                });
+            }
         }
     }
 

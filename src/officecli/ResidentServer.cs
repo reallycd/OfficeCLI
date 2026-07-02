@@ -762,7 +762,7 @@ public class ResidentServer : IDisposable
                 //   - stderr contains UNSUPPORTED (unsupported_property) -> 2
                 //   - otherwise                                      -> 0
                 int jsonExitCode = 0;
-                if (stderr.Contains("UNSUPPORTED"))
+                if (stderr.Contains("UNSUPPORTED") || stderr.Contains(UnrecognizedLatexMarker))
                     jsonExitCode = 2;
                 else if (!EnvelopeSuccess(envelope) || batchFailure || validateFailure || stderr.Contains("VALIDATION:"))
                     jsonExitCode = 1;
@@ -772,7 +772,7 @@ public class ResidentServer : IDisposable
             // BUG-DUMP12-01: surface stderr "VALIDATION:" token (emitted by
             // ExecuteRawSet / ExecuteAddPart when the SDK validator gains new
             // errors) as exit 1 so callers can detect rejected raw mutations.
-            int exitCode = stderr.Contains("UNSUPPORTED") ? 2
+            int exitCode = (stderr.Contains("UNSUPPORTED") || stderr.Contains(UnrecognizedLatexMarker)) ? 2
                 : ((batchFailure || validateFailure || stderr.Contains("VALIDATION:")) ? 1 : 0);
             return MakeResponse(exitCode, stdout, stderr);
         }
@@ -887,7 +887,15 @@ public class ResidentServer : IDisposable
         return lines.Select(line =>
         {
             var warning = new CliWarning { Message = line.Trim() };
-            if (line.Contains("UNSUPPORTED")) warning.Code = "unsupported_property";
+            if (line.Contains(UnrecognizedLatexMarker))
+            {
+                warning.Code = "unrecognized_latex_command";
+                // Strip any "WARNING:" prefix so the envelope message matches the
+                // one-shot CLI's form ("unrecognized_latex_command: \foo").
+                var idx = line.IndexOf(UnrecognizedLatexMarker, StringComparison.Ordinal);
+                warning.Message = line.Substring(idx).Trim();
+            }
+            else if (line.Contains("UNSUPPORTED")) warning.Code = "unsupported_property";
             else if (line.Contains("VALIDATION")) warning.Code = "validation_error";
             // CONSISTENCY(dump-warning-code): mirror the
             // unsupported_element code emitted by CommandBuilder.Dump.cs so
@@ -1097,9 +1105,16 @@ public class ResidentServer : IDisposable
         var prevDefer = deferHandler?.DeferSave ?? false;
         if (deferHandler != null) deferHandler.DeferSave = true;
         List<BatchResult> results;
+        // BUG-BT2: collect per-item unrecognized-LaTeX tokens across the whole
+        // batch so the resident surfaces the same unrecognized_latex_command
+        // warning + exit 2 the one-shot path does (the handler resets
+        // LastUnrecognizedLatex per item, so a post-loop read would only see
+        // the last item's tokens).
+        var batchUnrecognizedLatex = new List<string>();
         try
         {
-            results = CommandBuilder.ApplyBatchItems(_handler, items, stopOnError, json, skipResidentOnlyCommands: true);
+            results = CommandBuilder.ApplyBatchItems(_handler, items, stopOnError, json,
+                skipResidentOnlyCommands: true, unrecognizedLatex: batchUnrecognizedLatex);
         }
         finally
         {
@@ -1123,6 +1138,11 @@ public class ResidentServer : IDisposable
         // path.
         _lastBatchHadFailure = results.Any(r => !r.Success);
         CommandBuilder.PrintBatchResults(results, json, items.Count);
+        // BUG-BT2: emit the collected unrecognized-LaTeX markers so the
+        // dispatcher maps them to exit 2 and the envelope warning code, exactly
+        // as the single-shot resident add/set path (EmitUnrecognizedLatex) does.
+        foreach (var tok in batchUnrecognizedLatex)
+            Console.Error.WriteLine($"  WARNING: {UnrecognizedLatexMarker} {tok}");
     }
 
     // ==================== Watch notification helpers ====================
@@ -1258,24 +1278,30 @@ public class ResidentServer : IDisposable
             {
                 // CONSISTENCY(view-html-stdout): mirror CommandBuilder.View.cs — default
                 // mode writes HTML to stdout so `officecli view file html > out.html`
-                // captures actual content. Only --browser writes a temp file and opens it.
+                // captures actual content. --out writes to the requested path; --browser
+                // writes a temp file (or --out, if given) and opens it.
                 var browser = req.GetArgOrNull("browser");
                 var wantBrowser = browser != null && (browser == "true" || browser == "1");
-                if (wantBrowser)
+                var outArg = req.GetArgOrNull("out");
+                if (outArg != null || wantBrowser)
                 {
-                    // SECURITY: include a random token so the preview path is not predictable.
-                    // Without it, a predictable path enables a symlink pre-placement attack that
-                    // causes File.WriteAllText to clobber an arbitrary victim file. See
-                    // CommandBuilder.View.cs for the same fix.
-                    var htmlPath = Path.Combine(Path.GetTempPath(), $"officecli_preview_{Path.GetFileNameWithoutExtension(_filePath)}_{DateTime.Now:HHmmss}_{Guid.NewGuid():N}.html");
+                    // SECURITY: when falling back to a temp file, include a random token so
+                    // the preview path is not predictable. Without it, a predictable path
+                    // enables a symlink pre-placement attack that causes File.WriteAllText
+                    // to clobber an arbitrary victim file. See CommandBuilder.View.cs for
+                    // the same fix.
+                    var htmlPath = outArg ?? Path.Combine(Path.GetTempPath(), $"officecli_preview_{Path.GetFileNameWithoutExtension(_filePath)}_{DateTime.Now:HHmmss}_{Guid.NewGuid():N}.html");
                     File.WriteAllText(htmlPath, html);
-                    Console.WriteLine(htmlPath);
-                    try
+                    Console.WriteLine(Path.GetFullPath(htmlPath));
+                    if (wantBrowser)
                     {
-                        var psi = new System.Diagnostics.ProcessStartInfo(htmlPath) { UseShellExecute = true };
-                        System.Diagnostics.Process.Start(psi);
+                        try
+                        {
+                            var psi = new System.Diagnostics.ProcessStartInfo(htmlPath) { UseShellExecute = true };
+                            System.Diagnostics.Process.Start(psi);
+                        }
+                        catch { /* silently ignore if browser can't be opened */ }
                     }
-                    catch { /* silently ignore if browser can't be opened */ }
                 }
                 else
                 {
@@ -1867,8 +1893,11 @@ public class ResidentServer : IDisposable
                 _ => null
             };
 
+        // R4-bt-1: report the post-move resolvable path for equation mode
+        // switches (oMathPara ⇄ oMath), consistent with the non-resident path.
+        var reportPath = (_handler as WordHandler)?.LastSetNewPath ?? path;
         var message = applied.Count > 0
-            ? $"Updated {path}: {string.Join(", ", applied.Select(kv => $"{kv.Key}={kv.Value}"))}"
+            ? $"Updated {reportPath}: {string.Join(", ", applied.Select(kv => $"{kv.Key}={kv.Value}"))}"
               + (findMatchCount.HasValue ? $" ({findMatchCount.Value} matched)" : "")
               + (selectorCount > 1 ? $" ({selectorCount} elements matched)" : "")
             : (unsupported.Count > 0 ? $"No properties applied to {path}" : $"Updated {path}");
@@ -1928,6 +1957,10 @@ public class ResidentServer : IDisposable
             }
         }
 
+        // Unrecognized LaTeX from an equation Set (formula=). Same emission as
+        // ExecuteAdd — distinctive stderr line drives exit 2 + envelope code.
+        EmitUnrecognizedLatex(_handler);
+
         if (unsupported.Count > 0)
         {
             // /styles/<id> on Word: targeted curated hints, no raw-set push.
@@ -1949,6 +1982,26 @@ public class ResidentServer : IDisposable
     // alternative props (e.g. "fill (valid slide props: background, ...)"), the
     // generic "use raw-set instead" prefix misdirects the user away from the
     // real fix. Drop the prefix in that case and let the handler hint stand.
+    // Stderr marker for unrecognized LaTeX commands/environments. Doubles as
+    // the user-facing warning text (same string the one-shot CLI emits) AND
+    // the token the dispatcher keys off (alongside UNSUPPORTED) to set exit 2
+    // and that BuildWarnings maps to the unrecognized_latex_command envelope
+    // code — keeping the resident path's UX identical to CommandBuilder.Add/Set.
+    internal const string UnrecognizedLatexMarker = "unrecognized_latex_command:";
+
+    private static void EmitUnrecognizedLatex(IDocumentHandler handler)
+    {
+        var tokens = handler switch
+        {
+            WordHandler wlx => wlx.LastUnrecognizedLatex,
+            PowerPointHandler plx => plx.LastUnrecognizedLatex,
+            _ => null,
+        };
+        if (tokens is not { Count: > 0 }) return;
+        foreach (var tok in tokens)
+            Console.Error.WriteLine($"  WARNING: {UnrecognizedLatexMarker} {tok}");
+    }
+
     private static string FormatUnsupportedLine(List<string> unsupported, string? scope = null)
     {
         bool hasNamedAlternative = unsupported.Any(u => u.Contains("(valid ", StringComparison.Ordinal));
@@ -2006,6 +2059,12 @@ public class ResidentServer : IDisposable
                 foreach (var w in residWh.LastAddWarnings)
                     Console.Error.WriteLine($"  WARNING: {w}");
             }
+
+            // Unrecognized LaTeX commands/environments from an equation parse.
+            // Emit a distinctive stderr line so the dispatcher maps it to
+            // exit 2 and the envelope to the unrecognized_latex_command code,
+            // mirroring the one-shot CLI path (CommandBuilder.Add).
+            EmitUnrecognizedLatex(_handler);
 
             if (allUnsupported.Count > 0)
             {

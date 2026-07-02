@@ -44,6 +44,7 @@ public static partial class PptxBatchEmitter
     private static readonly HashSet<string> AuxKnownEmittedExact = new(StringComparer.OrdinalIgnoreCase)
     {
         "/ppt/presentation.xml",
+        "/ppt/tableStyles.xml",          // custom table-style catalogue — EmitTableStyles
         // OPC auto-managed
         "/docProps/core.xml",            // restamped by OfficeCliMetadata
         "/docProps/app.xml",             // restamped by OfficeCliMetadata

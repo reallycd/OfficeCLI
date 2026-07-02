@@ -100,6 +100,10 @@ public static partial class PptxBatchEmitter
         // onto the paragraph set bag and silently broadcasting to every
         // run in the paragraph.
         "textOutline", "textOutline.color", "textOutline.width",
+        // Verbatim <a:ln> companion of textOutline — same run-only scope.
+        "textOutlineRaw",
+        // Bitmap glyph fill — run-only scope too.
+        "textFillRaw",
     };
 
     // Pull a `link=slide[N]` prop out of the bag and queue a deferred `set`
@@ -130,6 +134,52 @@ public static partial class PptxBatchEmitter
             Command = "set",
             Path = replayPath,
             Props = deferredProps,
+        });
+    }
+
+    // Build the spTree-rooted xpath for a shape/placeholder replay path,
+    // walking each <p:grpSp> ancestor, with `suffix` appended after the final
+    // p:sp[N] (e.g. "/p:spPr/a:blipFill/a:stretch"). Returns null when the
+    // path isn't a slide/group shape path.
+    private static string? BuildShapeSpXpath(string replayPath, int spOrdinal, string suffix)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(replayPath,
+            @"^/slide\[\d+\]((?:/group\[\d+\])*)/(?:shape|textbox|title|equation|placeholder)\[\d+\]$");
+        if (!m.Success) return null;
+        var xp = new System.Text.StringBuilder("/p:sld/p:cSld/p:spTree");
+        foreach (System.Text.RegularExpressions.Match gm in
+                 System.Text.RegularExpressions.Regex.Matches(m.Groups[1].Value, @"/group\[(\d+)\]"))
+            xp.Append($"/p:grpSp[{gm.Groups[1].Value}]");
+        xp.Append($"/p:sp[{spOrdinal}]{suffix}");
+        return xp.ToString();
+    }
+
+    // Re-inject a tiled image fill: ApplyShapeImageFill always writes
+    // <a:stretch>, so replace it with the source <a:tile> when the shape's
+    // image fill tiled. No-op when the fill isn't tiled or the path can't be
+    // mapped. Shared by EmitShape and EmitPlaceholder.
+    private static void EmitBlipTileReplace(PowerPointHandler ppt, string? nodePath,
+                                            string replayPath, List<BatchItem> items)
+    {
+        if (string.IsNullOrEmpty(nodePath)) return;
+        var tile = ppt.GetShapeBlipTileXmlWithOrdinal(nodePath);
+        if (!tile.HasValue) return;
+        var xpath = BuildShapeSpXpath(replayPath, tile.Value.SpOrdinal,
+            "/p:spPr/a:blipFill/a:stretch");
+        if (xpath == null) return;
+        var slideRoot = System.Text.RegularExpressions.Regex.Match(
+            replayPath, @"^/slide\[\d+\]").Value;
+        // Empty Xml marks the bare-blipFill form (no <a:tile>, no <a:stretch>
+        // — PowerPoint renders it tiled): remove the <a:stretch> the replay's
+        // ApplyShapeImageFill wrote instead of replacing it with a tile.
+        var bareBlip = string.IsNullOrEmpty(tile.Value.Xml);
+        items.Add(new BatchItem
+        {
+            Command = "raw-set",
+            Part = slideRoot,
+            Xpath = xpath,
+            Action = bareBlip ? "remove" : "replace",
+            Xml = bareBlip ? null : tile.Value.Xml,
         });
     }
 
@@ -247,6 +297,25 @@ public static partial class PptxBatchEmitter
             _ => "textbox",
         };
 
+        // Probe the <p:style> block BEFORE the add op so we can signal
+        // styledLine: when the style will be carried and the dump surfaced no
+        // explicit line colour, the lineWidth setter must not inject its
+        // default black fill (it would override lnRef's theme tint —
+        // stress013's grey/orange borders replayed black).
+        var shStyleMatch = System.Text.RegularExpressions.Regex.Match(replayPath,
+            @"^/slide\[\d+\]((?:/group\[\d+\])*)/(?:shape|textbox|title|equation|placeholder)\[(\d+)\]$");
+        uint? shStyleExpectId = fullShape.Format.TryGetValue("id", out var shIdObj)
+            && uint.TryParse(shIdObj?.ToString(), out var shIdVal) ? shIdVal : null;
+        var shapeStyleProbe = shStyleMatch.Success
+            ? ppt.GetShapeStyleXmlWithOrdinal(shapeNode.Path ?? "", shStyleExpectId)
+            : null;
+        if (shapeStyleProbe.HasValue
+            && !shapeProps.ContainsKey("line") && !shapeProps.ContainsKey("lineColor")
+            && !shapeProps.ContainsKey("line.color") && !shapeProps.ContainsKey("line.gradient"))
+        {
+            shapeProps["styledLine"] = "true";
+        }
+
         items.Add(new BatchItem
         {
             Command = "add",
@@ -265,24 +334,42 @@ public static partial class PptxBatchEmitter
         // shapes only (mirrors the picture clrChange xpath scope); group-
         // nested shapes fall through unchanged — the xpath form would need
         // to walk <p:grpSp> ancestors, deferred to a follow-up.
-        if (System.Text.RegularExpressions.Regex.Match(replayPath,
-                @"^/slide\[\d+\]/(?:shape|textbox|title|equation|placeholder)\[(\d+)\]$")
-            is { Success: true } shStyleM)
+        // Handles both slide-root shapes and group-nested shapes: the xpath
+        // walks each <p:grpSp> ancestor before the final <p:sp>, and the
+        // raw-set Part is the owning slide (the group path in parentSlidePath
+        // is not itself a document part).
+        if (shStyleMatch is { Success: true } shStyleM)
         {
-            var styleProbe = ppt.GetShapeStyleXmlWithOrdinal(shapeNode.Path ?? "");
+            var styleProbe = shapeStyleProbe;
             if (styleProbe.HasValue)
             {
                 var (styleXml, spOrd) = styleProbe.Value;
+                var slideRoot = System.Text.RegularExpressions.Regex.Match(
+                    replayPath, @"^/slide\[\d+\]").Value;
+                var styleXpath = new System.Text.StringBuilder("/p:sld/p:cSld/p:spTree");
+                foreach (System.Text.RegularExpressions.Match gm in
+                         System.Text.RegularExpressions.Regex.Matches(
+                             shStyleM.Groups[1].Value, @"/group\[(\d+)\]"))
+                    styleXpath.Append($"/p:grpSp[{gm.Groups[1].Value}]");
+                // Schema: p:sp children order is nvSpPr, spPr, style, txBody.
+                // Replayed shapes always carry a seeded <p:txBody>, so append
+                // would land the style AFTER it — schema-invalid, PowerPoint
+                // refuses some such decks (bnc889755). Insert before txBody.
+                styleXpath.Append($"/p:sp[{spOrd}]/p:txBody");
                 items.Add(new BatchItem
                 {
                     Command = "raw-set",
-                    Part = parentSlidePath,
-                    Xpath = $"/p:sld/p:cSld/p:spTree/p:sp[{spOrd}]",
-                    Action = "append",
+                    Part = slideRoot,
+                    Xpath = styleXpath.ToString(),
+                    Action = "insertbefore",
                     Xml = styleXml,
                 });
             }
         }
+
+        // Restore a tiled image fill (must run after the add op above created
+        // the stretched blipFill on replay).
+        EmitBlipTileReplace(ppt, shapeNode.Path, replayPath, items);
 
         // Equation shapes' text body is AlternateContent (a14:m + readable
         // fallback run); the math content is fully captured by `formula`.
@@ -308,6 +395,32 @@ public static partial class PptxBatchEmitter
         var full = ppt.Get(phNode.Path, depth: 3);
         var props = FilterEmittableProps(full.Format);
         DeferSlideJumpLink(props, replayPath, ctx);
+
+        // Placeholder image fill (blipFill) — mirrors the EmitShape image-fill
+        // hook. NodeBuilder emits the marker `image=true` for a placeholder
+        // carrying a <a:blipFill>; FilterEmittableProps drops the marker, so
+        // resolve the embedded bytes here and re-emit `image=data:...base64`.
+        // AddPlaceholder forwards `image` through Set → ApplyShapeImageFill,
+        // rebuilding the blipFill on replay. Without this, a body placeholder
+        // filled with a (tiled) picture round-trips to no fill at all.
+        if (full.Format.TryGetValue("image", out var phImgMarker)
+            && string.Equals(phImgMarker?.ToString(), "true", StringComparison.OrdinalIgnoreCase)
+            && !props.ContainsKey("image"))
+        {
+            var phBinary = ppt.GetShapeImageFillBinary(phNode.Path ?? "");
+            if (phBinary.HasValue)
+            {
+                var (bytes, contentType) = phBinary.Value;
+                props["image"] = $"data:{contentType};base64,{Convert.ToBase64String(bytes)}";
+            }
+            else
+            {
+                ctx.Unsupported.Add(new UnsupportedWarning(
+                    Element: "placeholder",
+                    SlidePath: parentSlidePath,
+                    Reason: "placeholder blipFill has no resolvable embedded image part"));
+            }
+        }
 
         // CONSISTENCY(shape-id-high-range): preserve the source cNvPr.Id
         // verbatim. AcquireShapeId's auto-assign base is 100000+ (well above
@@ -335,12 +448,80 @@ public static partial class PptxBatchEmitter
             Props = props.Count > 0 ? props : null,
         });
 
+        // CONSISTENCY(shape-style-rawset), placeholder variant: a slide
+        // placeholder may carry its own <p:style> theme-reference block
+        // (lnRef/fillRef/effectRef/fontRef) — e.g. a body placeholder styled
+        // fillRef→accent2 with fontRef→lt1 white text. EmitShape has this hook
+        // but placeholders route through here, so the block was silently
+        // dropped and the placeholder replayed with no fill and default-dark
+        // text. Same raw-set append as EmitShape's.
+        if (System.Text.RegularExpressions.Regex.Match(replayPath,
+                @"^/slide\[\d+\]((?:/group\[\d+\])*)/(?:shape|textbox|title|equation|placeholder)\[(\d+)\]$")
+            is { Success: true } phStyleM)
+        {
+            uint? phStyleExpectId = full.Format.TryGetValue("id", out var phIdObj)
+                && uint.TryParse(phIdObj?.ToString(), out var phIdVal) ? phIdVal : null;
+            var phStyleProbe = ppt.GetShapeStyleXmlWithOrdinal(phNode.Path ?? "", phStyleExpectId);
+            if (phStyleProbe.HasValue)
+            {
+                var (phStyleXml, phSpOrd) = phStyleProbe.Value;
+                var phSlideRoot = System.Text.RegularExpressions.Regex.Match(
+                    replayPath, @"^/slide\[\d+\]").Value;
+                var phStyleXpath = new System.Text.StringBuilder("/p:sld/p:cSld/p:spTree");
+                foreach (System.Text.RegularExpressions.Match gm in
+                         System.Text.RegularExpressions.Regex.Matches(
+                             phStyleM.Groups[1].Value, @"/group\[(\d+)\]"))
+                    phStyleXpath.Append($"/p:grpSp[{gm.Groups[1].Value}]");
+                // Same schema-order rationale as the shape hook above: insert
+                // before the seeded <p:txBody> (style must precede it).
+                phStyleXpath.Append($"/p:sp[{phSpOrd}]/p:txBody");
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = phSlideRoot,
+                    Xpath = phStyleXpath.ToString(),
+                    Action = "insertbefore",
+                    Xml = phStyleXml,
+                });
+            }
+        }
+
+        // Restore a tiled image fill (must run after the add op above created
+        // the stretched blipFill on replay).
+        EmitBlipTileReplace(ppt, phNode.Path, replayPath, items);
+
         // AddPlaceholder seeds the first paragraph with <a:endParaRPr> only —
         // no <a:r>. Emitting the first run via `set run[1]` (the shape/textbox
         // path) targets a non-existent run and fails the batch. Tell
         // EmitTextBody the seeded paragraph has zero runs so it issues `add
         // run` for the first run instead.
         EmitTextBody(ppt, full, replayPath, items, seededFirstParaHasRun: false, ctx: ctx);
+
+        // Re-inject <a:fld> field runs (slide-number / date / footer) that
+        // EmitTextBody's run walk skips. Insert each before its paragraph's
+        // <a:endParaRPr> (AddPlaceholder seeds one) so schema order holds and
+        // the field renders its value. Without this a sldNum placeholder
+        // round-trips empty (no page number).
+        var phFields = ppt.GetShapeParagraphFieldXmls(phNode.Path ?? "");
+        if (phFields.HasValue)
+        {
+            var slideRoot = System.Text.RegularExpressions.Regex.Match(
+                replayPath, @"^/slide\[\d+\]").Value;
+            foreach (var (paraOrd, fldXml) in phFields.Value.Fields)
+            {
+                var fXpath = BuildShapeSpXpath(replayPath, phFields.Value.SpOrdinal,
+                    $"/p:txBody/a:p[{paraOrd}]/a:endParaRPr");
+                if (fXpath == null) continue;
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = slideRoot,
+                    Xpath = fXpath,
+                    Action = "insertbefore",
+                    Xml = fldXml,
+                });
+            }
+        }
     }
 
     private static void EmitConnector(PowerPointHandler ppt, DocumentNode cxnNode, string parentSlidePath,
@@ -351,6 +532,22 @@ public static partial class PptxBatchEmitter
         // read the run's text + char-prop bag.
         var full = ppt.Get(cxnNode.Path, depth: 3);
         var props = FilterEmittableProps(full.Format);
+
+        // The <p:style> theme-reference block round-trips via a raw-set append
+        // below (see CONSISTENCY(shape-style-rawset), connector variant). Probe
+        // it up front: when the connector carries a style AND the dump surfaced
+        // no explicit line colour/width, signal AddConnector to skip its default
+        // black 1pt stroke — otherwise the forced <a:solidFill srgbClr=000000>
+        // overrides the style's lnRef (e.g. accent1) and the line replays black.
+        var cxnStyleProbe = ppt.GetConnectorStyleXmlWithOrdinal(cxnNode.Path ?? "");
+        if (cxnStyleProbe.HasValue
+            && !props.ContainsKey("color") && !props.ContainsKey("line")
+            && !props.ContainsKey("lineColor") && !props.ContainsKey("line.color")
+            && !props.ContainsKey("lineWidth") && !props.ContainsKey("line.width")
+            && !props.ContainsKey("line.gradient"))
+        {
+            props["styledLine"] = "true";
+        }
 
         // R57 bt-4: PowerPoint allows a <p:txBody> child on <p:cxnSp> to render
         // an in-line label between the connector's endpoints. NodeBuilder
@@ -450,6 +647,40 @@ public static partial class PptxBatchEmitter
                 Path = replayPath,
                 Props = deferredArrows,
             });
+        }
+
+        // CONSISTENCY(shape-style-rawset), connector variant: the <p:style>
+        // theme-reference block (<a:lnRef>/<a:fillRef>/<a:effectRef>/<a:fontRef>)
+        // sits between <p:spPr> and <p:txBody> under <p:cxnSp> and has no typed
+        // Add/Set vocabulary. Without this, a connector whose line colour comes
+        // from lnRef (e.g. accent1) replayed with the theme's default near-black
+        // stroke. Pull the verbatim block and raw-set append it onto the freshly
+        // added connector — emitted BEFORE the text-body walk below so the child
+        // order stays spPr → style → txBody. Mirrors EmitShape's style hook.
+        if (System.Text.RegularExpressions.Regex.Match(parentSlidePath + $"/connector[{connectorOrdinal}]",
+                @"^/slide\[\d+\]((?:/group\[\d+\])*)/connector\[(\d+)\]$")
+            is { Success: true } cxnStyleM)
+        {
+            if (cxnStyleProbe.HasValue)
+            {
+                var (cxnStyleXml, cxnOrd) = cxnStyleProbe.Value;
+                var slideRoot = System.Text.RegularExpressions.Regex.Match(
+                    parentSlidePath, @"^/slide\[\d+\]").Value;
+                var cxnStyleXpath = new System.Text.StringBuilder("/p:sld/p:cSld/p:spTree");
+                foreach (System.Text.RegularExpressions.Match gm in
+                         System.Text.RegularExpressions.Regex.Matches(
+                             cxnStyleM.Groups[1].Value, @"/group\[(\d+)\]"))
+                    cxnStyleXpath.Append($"/p:grpSp[{gm.Groups[1].Value}]");
+                cxnStyleXpath.Append($"/p:cxnSp[{cxnOrd}]");
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = slideRoot,
+                    Xpath = cxnStyleXpath.ToString(),
+                    Action = "append",
+                    Xml = cxnStyleXml,
+                });
+            }
         }
 
         // R57 bt-4: emit follow-up paragraph/run ops for connector labels that
@@ -892,11 +1123,18 @@ public static partial class PptxBatchEmitter
                 // precede it in source. The `--index` arg is not required
                 // because AddLineBreak appends, and we're walking children
                 // in source order — each linebreak lands where it was.
+                // Carry the break's own <a:rPr> (empty-line height) when the
+                // source break has one — see NodeBuilder's linebreak rPrRaw.
+                Dictionary<string, string>? brProps = null;
+                if (child.Format.TryGetValue("rPrRaw", out var brRPrRaw)
+                    && brRPrRaw is string brRPrStr && brRPrStr.Length > 0)
+                    brProps = new Dictionary<string, string> { ["rPrRaw"] = brRPrStr };
                 items.Add(new BatchItem
                 {
                     Command = "add",
                     Parent = paraParent,
                     Type = "linebreak",
+                    Props = brProps,
                 });
             }
         }

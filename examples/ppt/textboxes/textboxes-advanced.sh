@@ -7,8 +7,9 @@
 #   slide 4 — per-run typography (font / size / spacing / kern / lang) inside one paragraph
 #   slide 5 — subscript / superscript convenience aliases vs canonical baseline=
 
-set -e
-
+# NOTE: intentionally NO `set -e`. Like the SDK twin's doc.batch, this script
+# tolerates forward-compat 'UNSUPPORTED props' warnings (officecli exit 2) and
+# keeps building so the full document is produced.
 DIR="$(dirname "$0")"
 PPTX="$DIR/textboxes-advanced.pptx"
 

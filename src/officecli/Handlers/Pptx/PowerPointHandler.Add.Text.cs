@@ -36,8 +36,10 @@ public partial class PowerPointHandler
                 var eqShapeId = AcquireShapeId(eqShapeTree, properties);
                 var eqShapeName = properties.GetValueOrDefault("name", $"Equation {eqShapeTree.Elements<Shape>().Count() + 1}");
 
-                // Parse formula to OMML
-                var mathContent = FormulaParser.Parse(eqFormula);
+                // Parse formula to OMML. R3-fuzz-1: lenient — a too-deep/
+                // unparseable formula records a warning (exit 2) and writes a
+                // placeholder instead of throwing (exit 1 / whole-batch failure).
+                var mathContent = FormulaParser.ParseLenient(eqFormula, LastUnrecognizedLatex);
                 M.OfficeMath oMath;
                 if (mathContent is M.OfficeMath directMath)
                     oMath = directMath;
@@ -276,7 +278,7 @@ public partial class PowerPointHandler
                 if (properties.TryGetValue("bulletRaw", out var pBulletRaw) || properties.TryGetValue("bulletraw", out pBulletRaw))
                     ApplyBulletRaw(pProps, pBulletRaw);
                 else if (properties.TryGetValue("list", out var pList) || properties.TryGetValue("liststyle", out pList))
-                    ApplyListStyle(pProps, pList);
+                    ApplyListStyle(pProps, pList, preserveIndent: properties.ContainsKey("indent") || properties.ContainsKey("marginLeft") || properties.ContainsKey("marginleft") || properties.ContainsKey("marL") || properties.ContainsKey("marl"));
                 // Paragraph-level default run properties (verbatim). Bare runs
                 // inherit size/bold/font from here; see ApplyDefRPrRaw.
                 if (properties.TryGetValue("defRPrRaw", out var pDefRPrRaw) || properties.TryGetValue("defrprraw", out pDefRPrRaw))
@@ -423,6 +425,21 @@ public partial class PowerPointHandler
                         Text = MakePreservingText(seg)
                     });
                 }
+                else if (paraText.Length == 0)
+                {
+                    // Empty paragraph (spacer line): real PowerPoint computes
+                    // an empty line's height from <a:endParaRPr>, NOT from an
+                    // empty run's rPr — a `<a:r><a:rPr sz="800"/><a:t/></a:r>`
+                    // still renders at the inherited body size, inflating
+                    // designer spacer paragraphs (8pt gap → 22pt gap). Write
+                    // the collected run properties as endParaRPr instead.
+                    var endPr = new Drawing.EndParagraphRunProperties();
+                    foreach (var attr in rProps.GetAttributes())
+                        endPr.SetAttribute(attr);
+                    foreach (var child in rProps.ChildElements)
+                        endPr.AppendChild(child.CloneNode(true));
+                    newPara.Append(endPr);
+                }
                 else
                 {
                     newRun.RunProperties = rProps;
@@ -539,6 +556,15 @@ public partial class PowerPointHandler
         }
 
         var br = new Drawing.Break();
+        // Verbatim <a:rPr> on the break — controls the empty line's height
+        // (a bare <a:br/> inherits the paragraph size instead). Emitted by
+        // the dump as rPrRaw when the source break carries one.
+        if (properties != null
+            && (properties.TryGetValue("rPrRaw", out var brRPrRaw) || properties.TryGetValue("rprraw", out brRPrRaw))
+            && !string.IsNullOrWhiteSpace(brRPrRaw))
+        {
+            br.AppendChild(new Drawing.RunProperties(brRPrRaw));
+        }
         if (index.HasValue)
         {
             var children = targetPara.ChildElements.ToList();
@@ -750,7 +776,29 @@ public partial class PowerPointHandler
                 // Symmetric with the Set branch in ShapeProperties.cs. Schema
                 // order is enforced by ReorderDrawingRunProperties at the end
                 // of this method (already invoked for endParaRPr inheritance).
-                if (properties.TryGetValue("textOutline", out var rTextOutline)
+                // Verbatim <a:blipFill> glyph fill (WordArt picture fill).
+                if ((properties.TryGetValue("textFillRaw", out var rTfRaw)
+                        || properties.TryGetValue("textfillraw", out rTfRaw))
+                    && !string.IsNullOrWhiteSpace(rTfRaw))
+                {
+                    rProps.RemoveAllChildren<Drawing.SolidFill>();
+                    rProps.RemoveAllChildren<Drawing.GradientFill>();
+                    rProps.RemoveAllChildren<Drawing.BlipFill>();
+                    rProps.RemoveAllChildren<Drawing.PatternFill>();
+                    InsertFillInRunProperties(rProps, new Drawing.BlipFill(rTfRaw));
+                }
+
+                // Verbatim <a:ln> (dash pattern / gradient stroke / cap-join —
+                // everything the width:color compound can't express). Wins over
+                // the semantic keys; the emitter suppresses them when present.
+                if ((properties.TryGetValue("textOutlineRaw", out var rToRaw)
+                        || properties.TryGetValue("textoutlineraw", out rToRaw))
+                    && !string.IsNullOrWhiteSpace(rToRaw))
+                {
+                    rProps.RemoveAllChildren<Drawing.Outline>();
+                    rProps.PrependChild(new Drawing.Outline(rToRaw));
+                }
+                else if (properties.TryGetValue("textOutline", out var rTextOutline)
                     || properties.TryGetValue("textoutline", out rTextOutline))
                 {
                     if (!rTextOutline.Equals("none", StringComparison.OrdinalIgnoreCase)
