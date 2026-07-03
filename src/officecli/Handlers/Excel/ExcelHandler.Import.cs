@@ -192,7 +192,7 @@ public partial class ExcelHandler
             if (sheetViews == null)
             {
                 sheetViews = new SheetViews();
-                ws.InsertAt(sheetViews, 0);
+                InsertSheetViewsInSchemaOrder(ws, sheetViews);
             }
             var sheetView = sheetViews.GetFirstChild<SheetView>();
             if (sheetView == null)
