@@ -618,15 +618,31 @@ public partial class PowerPointHandler
         pProps.RemoveAllChildren<Drawing.PictureBullet>();
 
         if (string.IsNullOrWhiteSpace(rawXml)) return;
+        // Reject non-XML input up front: a free-form string ("buFont=Wingdings")
+        // survived the wrap-parse as TEXT CONTENT of <a:pPr> — an element with
+        // no text model — producing a file schema validation passes but real
+        // PowerPoint refuses to open (0x80070570).
+        if (!rawXml.TrimStart().StartsWith("<"))
+            throw new ArgumentException(
+                $"Invalid 'bulletRaw' value: '{rawXml}'. Expected verbatim bullet-group XML " +
+                "(e.g. <a:buChar char=\"•\"/> or <a:buAutoNum type=\"arabicPeriod\"/>) " +
+                "as emitted by Get; use list= for keyword bullets.");
         // Wrap in a throwaway pPr that declares the a: namespace so each child
         // fragment parses with its prefix bound; then lift the parsed children.
         const string aNs = "http://schemas.openxmlformats.org/drawingml/2006/main";
         var wrapped = $"<a:pPr xmlns:a=\"{aNs}\">{rawXml}</a:pPr>";
         Drawing.ParagraphProperties parsed;
         try { parsed = new Drawing.ParagraphProperties(wrapped); }
-        catch { return; }
+        catch (Exception ex)
+        {
+            throw new ArgumentException($"Invalid 'bulletRaw' XML: '{rawXml}' ({ex.Message}).", ex);
+        }
         foreach (var child in parsed.ChildElements.ToList())
         {
+            if (child is OpenXmlUnknownElement || child is OpenXmlMiscNode)
+                throw new ArgumentException(
+                    $"Invalid 'bulletRaw' XML: unrecognized fragment '{child.OuterXml}'. " +
+                    "Expected a:bu* bullet-group elements.");
             child.Remove();
             InsertPPrChild(pProps, child);
         }
@@ -644,13 +660,23 @@ public partial class PowerPointHandler
     {
         pProps.RemoveAllChildren<Drawing.DefaultRunProperties>();
         if (string.IsNullOrWhiteSpace(rawXml)) return;
+        // Mirror ApplyBulletRaw: reject non-XML input instead of silently
+        // no-opping (silent-accept hides the caller's mistake).
+        if (!rawXml.TrimStart().StartsWith("<"))
+            throw new ArgumentException(
+                $"Invalid 'defRPrRaw' value: '{rawXml}'. Expected verbatim <a:defRPr .../> XML as emitted by Get.");
         const string aNs = "http://schemas.openxmlformats.org/drawingml/2006/main";
         var wrapped = $"<a:pPr xmlns:a=\"{aNs}\">{rawXml}</a:pPr>";
         Drawing.ParagraphProperties parsed;
         try { parsed = new Drawing.ParagraphProperties(wrapped); }
-        catch { return; }
+        catch (Exception ex)
+        {
+            throw new ArgumentException($"Invalid 'defRPrRaw' XML: '{rawXml}' ({ex.Message}).", ex);
+        }
         var defRPr = parsed.GetFirstChild<Drawing.DefaultRunProperties>();
-        if (defRPr == null) return;
+        if (defRPr == null)
+            throw new ArgumentException(
+                $"Invalid 'defRPrRaw' value: '{rawXml}'. No <a:defRPr> element found in the fragment.");
         defRPr.Remove();
         InsertPPrChild(pProps, defRPr);
     }
