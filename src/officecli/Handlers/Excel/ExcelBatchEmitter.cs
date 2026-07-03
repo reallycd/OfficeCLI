@@ -406,6 +406,10 @@ public static partial class ExcelBatchEmitter
             if (colNode.Format.TryGetValue("outlineLevel", out var colv)) cp["outline"] = FormatValue(colv);
             if (colNode.Format.TryGetValue("collapsed", out var cc) && cc is bool ccb && ccb) cp["collapsed"] = "true";
             if (colNode.Format.TryGetValue("bestFit", out var cbf) && IsTruthyFormatValue(cbf)) cp["bestFit"] = "true";
+            // Column-level number format (col @s -> cellXf -> numFmt). Set's
+            // col[X] handler accepts numberformat and re-registers the style.
+            if (colNode.Format.TryGetValue("numberformat", out var cnf) && cnf is string cnfS && cnfS.Length > 0)
+                cp["numberformat"] = cnfS;
             if (cp.Count > 0)
                 items.Add(new BatchItem { Command = "set", Path = colNode.Path, Props = cp });
         }

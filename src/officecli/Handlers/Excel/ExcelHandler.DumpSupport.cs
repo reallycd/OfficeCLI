@@ -274,6 +274,24 @@ public partial class ExcelHandler
                 if (col.OutlineLevel?.Value is { } ol && ol > 0)
                     node.Format["outlineLevel"] = (int)ol;
                 if (col.Collapsed?.Value == true) node.Format["collapsed"] = true;
+                // Column-level number format lives on a style reference
+                // (<col s="N">), NOT a CT_Col attribute. Resolve it to the
+                // canonical `numberformat` code so the emitter can replay it
+                // via `set col[X] --prop numberformat=...` (mirrors the column
+                // Get reader in ExcelHandler.Query.cs).
+                if (col.Style?.Value is uint colStyleIdx && colStyleIdx != 0)
+                {
+                    var (colNumFmtId, colFmtCode) = ExcelDataFormatter.GetCellFormat(
+                        new Cell { StyleIndex = colStyleIdx }, _doc.WorkbookPart);
+                    if (colNumFmtId > 0)
+                    {
+                        var colCode = !string.IsNullOrEmpty(colFmtCode)
+                            ? colFmtCode
+                            : ExcelDataFormatter.ResolveBuiltInFormatCode(colNumFmtId);
+                        if (!string.IsNullOrEmpty(colCode))
+                            node.Format["numberformat"] = colCode;
+                    }
+                }
                 if (node.Format.Count > 0) nodes.Add(node);
             }
         }
