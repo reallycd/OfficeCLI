@@ -328,6 +328,65 @@ public partial class ExcelHandler
         return $"/{chartSheetName}/chart[{chartIdx}]";
     }
 
+    // BUG-002: `add /SheetName/chart[N] --type chart-series` — append a data
+    // series to an existing chart. Mirrors PowerPointHandler.AddChartSeries
+    // (R22-1); additionally resolves xlsx cell-range values/categories into
+    // numRef/strRef + cached snapshot, matching what chart Add emits for
+    // range-referenced series (CONSISTENCY(chart-series-rangeref-cache)).
+    private string AddChartSeries(string parentPath, Dictionary<string, string> properties)
+    {
+        var m = Regex.Match(parentPath, @"^/([^/]+)/chart\[(\d+)\]$");
+        if (!m.Success)
+            throw new ArgumentException(
+                "series must be added to a chart parent: /SheetName/chart[N]");
+        var sheetName = m.Groups[1].Value;
+        var chartIdx = int.Parse(m.Groups[2].Value);
+        var worksheet = FindWorksheet(sheetName)
+            ?? throw new ArgumentException($"Sheet not found: {sheetName}");
+        var drawingsPart = worksheet.DrawingsPart
+            ?? throw new ArgumentException("Sheet has no drawings/charts");
+        var excelCharts = GetExcelCharts(drawingsPart);
+        if (chartIdx < 1 || chartIdx > excelCharts.Count)
+            throw new ArgumentException($"Chart {chartIdx} not found (total: {excelCharts.Count})");
+        var chartInfo = excelCharts[chartIdx - 1];
+        if (chartInfo.StandardPart == null)
+            throw new ArgumentException(
+                $"Chart at {parentPath} is not a standard chart (extended cx charts do not support add series).");
+        var chartPart = chartInfo.StandardPart;
+
+        // Resolve range-reference values/categories against the workbook so
+        // AddSeries seeds literal data (which becomes the cached snapshot).
+        var addProps = new Dictionary<string, string>(properties, StringComparer.OrdinalIgnoreCase);
+        string? valuesRef = null, categoriesRef = null;
+        List<string>? cachedCats = null;
+        if (addProps.TryGetValue("values", out var valRaw) && ChartHelper.IsRangeReference(valRaw))
+        {
+            valuesRef = ChartHelper.NormalizeRangeReference(valRaw, sheetName);
+            var cells = ResolveRangeToCellValues(valRaw, sheetName);
+            if (cells != null)
+                addProps["values"] = string.Join(",", cells.Select(v =>
+                    double.TryParse(v, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0));
+            else
+                addProps.Remove("values");
+        }
+        if (addProps.TryGetValue("categories", out var catRaw))
+        {
+            addProps.Remove("categories"); // ChartHelper.AddSeries doesn't consume it
+            if (ChartHelper.IsRangeReference(catRaw))
+            {
+                categoriesRef = ChartHelper.NormalizeRangeReference(catRaw, sheetName);
+                cachedCats = ResolveRangeToCellValues(catRaw, sheetName);
+            }
+        }
+
+        var newIdx = ChartHelper.AddSeries(chartPart, addProps);
+        if (newIdx == 0)
+            throw new ArgumentException(
+                "Cannot add a series: the chart has no existing series to derive structure from. Recreate the chart with the desired series instead.");
+        ChartHelper.ApplySeriesRangeRefs(chartPart, newIdx, valuesRef, categoriesRef, cachedCats);
+        return $"/{sheetName}/chart[{chartIdx}]/series[{newIdx}]";
+    }
+
     private string AddDefault(string parentPath, string type, InsertPosition? position, Dictionary<string, string> properties)
     {
         var index = position?.Index;

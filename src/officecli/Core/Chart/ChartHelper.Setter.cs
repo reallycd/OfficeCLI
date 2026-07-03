@@ -76,9 +76,92 @@ internal static partial class ChartHelper
             else newSer.AppendChild(new C.Values(numLit));
         }
 
-        chartTypeEl.AppendChild(newSer);
+        // BUG-002: insert directly after the last existing <c:ser>, not at the
+        // end of the chart-type element — CT_*Chart is an ordered sequence and
+        // a ser appended after <c:marker>/<c:axId> fails OOXML validation.
+        chartTypeEl.InsertAfter(newSer, existing[^1]);
         chartPart.ChartSpace!.Save();
         return (int)newIdx + 1;
+    }
+
+    /// <summary>
+    /// BUG-002: rewrite the literal values/categories of series[seriesIdx]
+    /// (1-based) into range references (c:numRef / c:strRef), preserving the
+    /// literal data as the cached snapshot — the same shape
+    /// ApplySeriesReferences emits at chart-Add time. Used by xlsx
+    /// `add --type chart-series` where series data is normally supplied as
+    /// cell ranges. cachedCategories seeds the strCache when the cloned
+    /// series carried no literal categories to convert.
+    /// </summary>
+    internal static void ApplySeriesRangeRefs(
+        ChartPart chartPart, int seriesIdx, string? valuesRef, string? categoriesRef,
+        IReadOnlyList<string>? cachedCategories = null)
+    {
+        if (string.IsNullOrEmpty(valuesRef) && string.IsNullOrEmpty(categoriesRef)) return;
+        var plotArea = chartPart.ChartSpace?.GetFirstChild<C.Chart>()?.GetFirstChild<C.PlotArea>();
+        if (plotArea == null) return;
+        var sers = plotArea.Descendants<OpenXmlCompositeElement>()
+            .Where(e => e.LocalName == "ser").ToList();
+        if (seriesIdx < 1 || seriesIdx > sers.Count) return;
+        var ser = sers[seriesIdx - 1];
+
+        if (!string.IsNullOrEmpty(valuesRef))
+        {
+            OpenXmlCompositeElement? valEl = ser.GetFirstChild<C.Values>()
+                ?? (OpenXmlCompositeElement?)ser.GetFirstChild<C.YValues>();
+            if (valEl != null)
+            {
+                var numCache = BuildNumberingCacheFromLiteral(valEl.GetFirstChild<C.NumberLiteral>());
+                valEl.RemoveAllChildren();
+                var numRef = new C.NumberReference(new C.Formula(valuesRef));
+                if (numCache != null) numRef.AppendChild(numCache);
+                valEl.AppendChild(numRef);
+            }
+        }
+
+        // CONSISTENCY(scatter-bubble-no-cat): scatter/bubble series carry
+        // x-data in <c:xVal>, not <c:cat>; skip the cat rewrite for them.
+        if (!string.IsNullOrEmpty(categoriesRef)
+            && ser is not (C.ScatterChartSeries or C.BubbleChartSeries))
+        {
+            C.StringCache? BuildCacheFromLabels() =>
+                cachedCategories is { Count: > 0 }
+                    ? BuildStringCacheFromLabels(cachedCategories)
+                    : null;
+
+            var catEl = ser.GetFirstChild<C.CategoryAxisData>();
+            if (catEl != null)
+            {
+                // The clone may carry a strLit, or a strRef copied from the
+                // source series (whose cache is still valid category text).
+                var strCache = BuildStringCacheFromLiteral(catEl.GetFirstChild<C.StringLiteral>())
+                    ?? catEl.GetFirstChild<C.StringReference>()?.GetFirstChild<C.StringCache>()?.CloneNode(true) as C.StringCache
+                    ?? BuildCacheFromLabels();
+                catEl.RemoveAllChildren();
+                var strRef = new C.StringReference(new C.Formula(categoriesRef));
+                if (strCache != null) strRef.AppendChild(strCache);
+                catEl.AppendChild(strRef);
+            }
+            else
+            {
+                var strRef = new C.StringReference(new C.Formula(categoriesRef));
+                var strCache = BuildCacheFromLabels();
+                if (strCache != null) strRef.AppendChild(strCache);
+                var newCat = new C.CategoryAxisData(strRef);
+                var valAnchor = ser.GetFirstChild<C.Values>();
+                if (valAnchor != null) valAnchor.InsertBeforeSelf(newCat);
+                else ser.AppendChild(newCat);
+            }
+        }
+        chartPart.ChartSpace!.Save();
+    }
+
+    private static C.StringCache BuildStringCacheFromLabels(IReadOnlyList<string> labels)
+    {
+        var cache = new C.StringCache(new C.PointCount { Val = (uint)labels.Count });
+        for (int i = 0; i < labels.Count; i++)
+            cache.AppendChild(new C.StringPoint(new C.NumericValue(labels[i])) { Index = (uint)i });
+        return cache;
     }
 
     /// <summary>
