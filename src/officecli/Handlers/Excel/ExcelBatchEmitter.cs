@@ -96,6 +96,9 @@ public static partial class ExcelBatchEmitter
         "calc.fullCalcOnLoad", "calc.refMode",
         "activeTab", "firstSheet",
         "workbook.lockStructure", "workbook.lockWindows",
+        // Core document properties. lastModifiedBy / timestamps excluded:
+        // save-time stamping would flip them every replay cycle.
+        "title", "author", "subject", "description", "keywords", "category",
     };
 
     /// <summary>Emit a full Excel workbook as a sequence of BatchItem rows.</summary>

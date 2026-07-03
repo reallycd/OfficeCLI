@@ -96,7 +96,8 @@ public partial class ExcelHandler
             var (numFmtId, formatCode) = ExcelDataFormatter.GetCellFormat(cell, _doc.WorkbookPart);
             if (numFmtId > 0)
             {
-                var formatted = ExcelDataFormatter.TryFormat(numVal, numFmtId, formatCode);
+                var is1904 = _doc.WorkbookPart?.Workbook?.WorkbookProperties?.Date1904?.Value == true;
+                var formatted = ExcelDataFormatter.TryFormat(numVal, numFmtId, formatCode, is1904);
                 if (formatted != null) return formatted;
             }
         }

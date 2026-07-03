@@ -73,12 +73,16 @@ internal static class ExcelDataFormatter
     /// Format a raw numeric cell value using its number format.
     /// Returns null if no formatting is needed (raw value is fine as-is).
     /// </summary>
-    public static string? TryFormat(double value, uint numFmtId, string? customFormatCode)
+    public static string? TryFormat(double value, uint numFmtId, string? customFormatCode, bool date1904 = false)
     {
         var formatCode = customFormatCode ?? (BuiltInFormats.TryGetValue(numFmtId, out var b) ? b : null);
 
         if (IsDateFormat(numFmtId, formatCode))
-            return FormatDate(value, formatCode);
+            // 1904 date system: serials count from 1904-01-01, which is
+            // exactly 1462 days after the 1900 system's 1899-12-30 epoch
+            // that FromOADate assumes. Without the shift a date1904
+            // workbook's cells read back four years early.
+            return FormatDate(date1904 ? value + 1462 : value, formatCode);
 
         if (IsPercentFormat(formatCode))
             return FormatPercent(value, formatCode!);

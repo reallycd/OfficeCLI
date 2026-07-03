@@ -29,6 +29,17 @@ public partial class ExcelHandler
     {
         var node = new DocumentNode { Path = "/workbook", Type = "workbook" };
         PopulateWorkbookSettings(node);
+        // Core document properties (settable via `set / --prop title=…`):
+        // the dump silently dropped them. Timestamps and lastModifiedBy are
+        // deliberately excluded — save-time stamping would flip them every
+        // replay cycle and break dump idempotency.
+        var pkgProps = _doc.PackageProperties;
+        if (!string.IsNullOrEmpty(pkgProps.Title)) node.Format["title"] = pkgProps.Title!;
+        if (!string.IsNullOrEmpty(pkgProps.Creator)) node.Format["author"] = pkgProps.Creator!;
+        if (!string.IsNullOrEmpty(pkgProps.Subject)) node.Format["subject"] = pkgProps.Subject!;
+        if (!string.IsNullOrEmpty(pkgProps.Description)) node.Format["description"] = pkgProps.Description!;
+        if (!string.IsNullOrEmpty(pkgProps.Keywords)) node.Format["keywords"] = pkgProps.Keywords!;
+        if (!string.IsNullOrEmpty(pkgProps.Category)) node.Format["category"] = pkgProps.Category!;
         return node;
     }
 
