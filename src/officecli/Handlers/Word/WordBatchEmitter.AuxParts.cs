@@ -72,6 +72,10 @@ public static partial class WordBatchEmitter
         "/word/footer",            // footer1.xml etc
         "/word/fonts/",            // BUG-DUMP-R45-1: embedded fonts (.odttf) — EmitFontTableRaw embed-binary
         "/word/media/",            // images — picture run emit
+        "/media/",                 // package-root media (some picture add paths
+                                   // land here) — round-tripped by the same
+                                   // picture data-URI carrier; warning was a
+                                   // false alarm (source/replay MD5 identical)
         "/word/charts/",           // chart XML + embedded xlsx — chart run emit
         "/word/embeddings/",       // OLE payloads — warning already raised per-run
         "/word/diagrams/",         // SmartArt — partial coverage via shape emit

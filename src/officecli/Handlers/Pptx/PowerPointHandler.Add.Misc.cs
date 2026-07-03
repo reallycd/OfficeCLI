@@ -1497,7 +1497,10 @@ public partial class PowerPointHandler
                 var animMatch = System.Text.RegularExpressions.Regex.Match(parentPath, @"^/slide\[(\d+)\]/shape\[(\d+)\]$");
                 var animChartMatch = System.Text.RegularExpressions.Regex.Match(parentPath, @"^/slide\[(\d+)\]/chart\[(\d+)\]$");
                 if (!animMatch.Success && !animChartMatch.Success)
-                    throw new ArgumentException("Animations must be added to a shape or chart: /slide[N]/shape[M] or /slide[N]/chart[M]");
+                    throw new ArgumentException(
+                        "Animations must be added to a top-level shape or chart: /slide[N]/shape[M] or /slide[N]/chart[M]. "
+                        + "Shapes inside a group cannot be animated individually (PowerPoint animates the group as a whole) — "
+                        + "animate the group or ungroup first.");
 
                 SlidePart animSlidePart;
                 DocumentFormat.OpenXml.OpenXmlElement animTarget;

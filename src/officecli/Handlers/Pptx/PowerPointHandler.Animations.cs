@@ -1853,14 +1853,22 @@ public partial class PowerPointHandler
     {
         if (string.IsNullOrEmpty(path)) return (null, null);
         var canon = System.Text.RegularExpressions.Regex.Replace(path.Trim(), @"\s+", " ");
+        // Prefer the direction-qualified key: the bare "line"/"arc" entries
+        // share their path with "-right", so a first-match walk returned
+        // ("line", null) and direction=right was the ONLY direction that
+        // vanished on readback. Directional presets now always surface their
+        // direction (an add without direction= reads back as right — the
+        // documented default — keeping the enum symmetric).
         foreach (var (key, val) in _motionPresetPaths)
         {
-            if (val == canon)
-            {
-                var dash = key.IndexOf('-');
-                if (dash < 0) return (key, null);
+            var dash = key.IndexOf('-');
+            if (dash >= 0 && val == canon)
                 return (key[..dash], key[(dash + 1)..]);
-            }
+        }
+        foreach (var (key, val) in _motionPresetPaths)
+        {
+            if (key.IndexOf('-') < 0 && val == canon)
+                return (key, null);
         }
         return (null, null);
     }

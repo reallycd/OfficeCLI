@@ -61,6 +61,7 @@ public static partial class PptxBatchEmitter
         "/ppt/notesMasters/",     // EmitNotesMasterRaw
         "/ppt/notesSlides/",      // EmitNotes per-slide
         "/ppt/media/",            // picture/media embed — EmitPicture / EmitMediaForSlide
+        "/media/",                // package-root media — same picture/media carriers
         "/ppt/embeddings/",       // chart xlsx / OLE payloads — EmitChart / EmitOleForSlide
         "/ppt/charts/",           // chart XML — EmitChart
         "/ppt/diagrams/",         // SmartArt — EmitSmartArtsForSlide
