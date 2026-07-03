@@ -638,6 +638,14 @@ public partial class ExcelHandler
                     cell.RemoveAllChildren<InlineString>();
                     break;
                 }
+                case "ref":
+                    // Consumed by the arrayformula case above (spill range via
+                    // GetValueOrDefault); without this case the key itself
+                    // fell to default → a false "UNSUPPORTED props: ref" on
+                    // every dump replay of an array-formula cell.
+                    if (!properties.Keys.Any(k => k.Equals("arrayformula", StringComparison.OrdinalIgnoreCase)))
+                        unsupported.Add("ref (only valid alongside arrayformula=)");
+                    break;
                 // CONSISTENCY(xlsx-hyperlink-cell-backed): `query hyperlink` emits
                 // the backing cell path with Format["url"]; accept `url` as an
                 // alias for the canonical cell `link` so that query result round-

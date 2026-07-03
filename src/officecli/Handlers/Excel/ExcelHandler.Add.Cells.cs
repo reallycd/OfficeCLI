@@ -490,6 +490,11 @@ public partial class ExcelHandler
                 cell.RemoveAllChildren<InlineString>();
                 cell.CellFormula = new CellFormula(Core.PivotTableHelper.SanitizeXmlText(Core.ModernFunctionQualifier.Qualify(Core.ModernFunctionQualifier.AutoQuoteSheetRefs(value.TrimStart('=')))));
                 cell.CellValue = null;
+                // CONSISTENCY(cell-formula-calc): Set and import both stamp
+                // fullCalcOnLoad when writing a formula; Add skipping it made
+                // the first dump→replay cycle non-idempotent (the flag
+                // appeared only after replay).
+                EnsureFullCalcOnLoad();
             }
             else
             {
@@ -574,6 +579,7 @@ public partial class ExcelHandler
             cell.RemoveAllChildren<InlineString>();
             cell.CellFormula = addCellFormula;
             cell.CellValue = null;
+            EnsureFullCalcOnLoad(); // CONSISTENCY(cell-formula-calc): see value-branch note.
         }
         // CE1: allow `runs=<json>` without an explicit `type=richtext`.
         if (!properties.ContainsKey("type") && properties.ContainsKey("runs"))
@@ -693,6 +699,7 @@ public partial class ExcelHandler
                 FormulaType = CellFormulaValues.Array,
                 Reference = arrRef
             };
+            EnsureFullCalcOnLoad(); // CONSISTENCY(cell-formula-calc)
             cell.CellValue = null;
         }
 
