@@ -102,8 +102,16 @@ public partial class PowerPointHandler
             double boxH = hasH ? ParseEmu(hs) / CmToEmu : slideH - 2 * margin;
             double fit = Math.Min(boxW / natW, boxH / natH);
             sc = (hasW || hasH) ? fit : Math.Min(1.0, fit); // explicit box fills; default shrinks-only
-            ox = hasX ? ParseEmu(xs) / CmToEmu : (slideW - natW * sc) / 2;
-            oy = hasY ? ParseEmu(ys) / CmToEmu : (slideH - natH * sc) / 2;
+            // Uniform scale leaves slack on one axis; CENTRE the fitted diagram in
+            // its box (slack split evenly) rather than pinning it to the top-left.
+            // Mirrors the image path (AddDiagramAsImage) so native and PNG place
+            // identically, and honours the "centred" contract for the default
+            // (no-position) box: boxX=margin, boxW=slideW-2margin →
+            // margin+(boxW-natW*sc)/2 == (slideW-natW*sc)/2, unchanged.
+            double boxX = hasX ? ParseEmu(xs) / CmToEmu : margin;
+            double boxY = hasY ? ParseEmu(ys) / CmToEmu : margin;
+            ox = boxX + (boxW - natW * sc) / 2;
+            oy = boxY + (boxH - natH * sc) / 2;
         }
 
         uint nextId = AcquireShapeId(shapeTree, new Dictionary<string, string>());
