@@ -592,6 +592,13 @@ public partial class PowerPointHandler
         {
             switch (key.ToLowerInvariant())
             {
+                case "ungroup":
+                    // Structural + terminal: dissolve the group, promoting members
+                    // back onto the slide with transforms flattened to absolute
+                    // coordinates. Inverse of AddGroup; ignores any sibling props.
+                    if (IsTruthy(value))
+                        return UngroupGroup(grp, shapeTree, slidePart);
+                    break;
                 case "name":
                     var nvGrpPr = grp.NonVisualGroupShapeProperties?.NonVisualDrawingProperties;
                     if (nvGrpPr != null)
@@ -666,7 +673,7 @@ public partial class PowerPointHandler
                     if (!GenericXmlQuery.SetGenericAttribute(grp, key, value))
                     {
                         if (unsupported.Count == 0)
-                            unsupported.Add($"{key} (valid group props: x, y, width, height, rotation, name, link, tooltip)");
+                            unsupported.Add($"{key} (valid group props: x, y, width, height, rotation, name, link, tooltip, ungroup)");
                         else
                             unsupported.Add(key);
                     }
@@ -698,6 +705,63 @@ public partial class PowerPointHandler
         }
         GetSlide(slidePart).Save();
         return unsupported;
+    }
+
+    // Dissolve a group: flatten each member's transform from the group's child
+    // coordinate space into slide-absolute coordinates, promote the members onto
+    // the slide (preserving z-order, just before where the group sat), then drop
+    // the empty group. Inverse of AddGroup. Groups this handler creates use an
+    // identity child space (chOff==off, chExt==ext), so members keep their exact
+    // coordinates; groups scaled/moved after creation flatten through the affine.
+    private List<string> UngroupGroup(GroupShape grp, ShapeTree tree, SlidePart slidePart)
+    {
+        var warnings = new List<string>();
+        var xf = grp.GroupShapeProperties?.TransformGroup;
+        long ox = xf?.Offset?.X ?? 0, oy = xf?.Offset?.Y ?? 0;
+        long ecx = xf?.Extents?.Cx ?? 0, ecy = xf?.Extents?.Cy ?? 0;
+        long cox = xf?.ChildOffset?.X ?? ox, coy = xf?.ChildOffset?.Y ?? oy;
+        long ccx = xf?.ChildExtents?.Cx ?? ecx, ccy = xf?.ChildExtents?.Cy ?? ecy;
+        double sx = ccx != 0 ? (double)ecx / ccx : 1.0;
+        double sy = ccy != 0 ? (double)ecy / ccy : 1.0;
+        if ((xf?.Rotation?.Value ?? 0) != 0)
+            warnings.Add("ungroup (group has rotation; member positions flattened without rotation compensation)");
+
+        var members = grp.Elements()
+            .Where(e => e is Shape or Picture or ConnectionShape or GraphicFrame or GroupShape)
+            .ToList();
+        foreach (var member in members)
+        {
+            FlattenChildTransform(member, ox, oy, cox, coy, sx, sy);
+            member.Remove();
+            grp.InsertBeforeSelf(member); // promote in order, keeping the group's z-slot
+        }
+        grp.Remove();
+        GetSlide(slidePart).Save();
+        return warnings;
+    }
+
+    // Map a group member's (offset, extents) from the group's child coordinate
+    // space to slide-absolute: abs = off + (child − chOff) · scale, size · scale.
+    private static void FlattenChildTransform(OpenXmlElement member,
+        long ox, long oy, long cox, long coy, double sx, double sy)
+    {
+        void Apply(Drawing.Offset? off, Drawing.Extents? ext)
+        {
+            if (off == null || ext == null) return;
+            long cx = off.X ?? 0, cy = off.Y ?? 0, cw = ext.Cx ?? 0, ch = ext.Cy ?? 0;
+            off.X = ox + (long)Math.Round((cx - cox) * sx);
+            off.Y = oy + (long)Math.Round((cy - coy) * sy);
+            ext.Cx = (long)Math.Round(cw * sx);
+            ext.Cy = (long)Math.Round(ch * sy);
+        }
+        switch (member)
+        {
+            case Shape s: Apply(s.ShapeProperties?.Transform2D?.Offset, s.ShapeProperties?.Transform2D?.Extents); break;
+            case Picture p: Apply(p.ShapeProperties?.Transform2D?.Offset, p.ShapeProperties?.Transform2D?.Extents); break;
+            case ConnectionShape c: Apply(c.ShapeProperties?.Transform2D?.Offset, c.ShapeProperties?.Transform2D?.Extents); break;
+            case GraphicFrame gf: Apply(gf.Transform?.Offset, gf.Transform?.Extents); break;
+            case GroupShape g: Apply(g.GroupShapeProperties?.TransformGroup?.Offset, g.GroupShapeProperties?.TransformGroup?.Extents); break;
+        }
     }
 
     // Multiply every descendant run's font size by <paramref name="ratio"/>

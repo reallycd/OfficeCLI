@@ -23,6 +23,14 @@
       "readback": "n/a (structural)",
       "enforcement": "report"
     },
+    "ungroup": {
+      "type": "boolean",
+      "description": "dissolve the group: promote its members back onto the slide with transforms flattened to slide-absolute coordinates, then remove the empty group. Set-only, terminal (other props on the same command are ignored). Inverse of add-group.",
+      "add": false, "set": true, "get": false,
+      "examples": ["--prop ungroup=true"],
+      "readback": "n/a (structural)",
+      "enforcement": "report"
+    },
     "name": {
       "type": "string",
       "description": "group name. Defaults to 'Group N'.",
