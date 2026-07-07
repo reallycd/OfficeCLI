@@ -350,7 +350,25 @@ public partial class ExcelHandler
     /// Returns series data and populates properties with cell references for chart building.
     /// First row = category labels + series names, remaining rows = data.
     /// </summary>
-    private (List<(string name, double[] values)> seriesData, string[]? categories) ParseDataRangeForChart(
+    /// <summary>
+    /// Host-range geometry of a parsed dataRange, for consumers that must emit
+    /// their own cell formulas against the HOST workbook (the chartEx path —
+    /// issue #176: ChartExBuilder hardcodes the embedded-xlsx Sheet1!$A$2 layout,
+    /// which is correct for PPT/Word but must be remapped to these coordinates
+    /// on an xlsx host). Column/row values are 1-based.
+    /// </summary>
+    internal sealed record ChartRangeGeometry(
+        string SheetName,
+        int CatColIdx,
+        int FirstSeriesColIdx,
+        int HeaderRow,
+        int DataStartRow,
+        int EndRow,
+        bool HasHeaderRow,
+        bool HasExplicitCategories,
+        string? ExplicitCategoriesRef);
+
+    private (List<(string name, double[] values)> seriesData, string[]? categories, ChartRangeGeometry geometry) ParseDataRangeForChart(
         string dataRange, string defaultSheetName, Dictionary<string, string> properties)
     {
         // CONSISTENCY(defined-name-range): if dataRange has no '!' and no ':' and
@@ -555,7 +573,10 @@ public partial class ExcelHandler
             seriesIdx++;
         }
 
-        return (seriesData, categories.ToArray());
+        var geometry = new ChartRangeGeometry(
+            rangeSheetName, startColIdx, firstSeriesCol, startRow, dataStartRow,
+            endRow, hasHeaderRow, hasExplicitCategories, explicitCategoriesRef);
+        return (seriesData, categories.ToArray(), geometry);
     }
 
     /// <summary>

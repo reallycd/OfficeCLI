@@ -39,9 +39,10 @@ public partial class ExcelHandler
         string? dataRangeStr = null;
         if (properties.TryGetValue("datarange", out var dr) || properties.TryGetValue("range", out dr))
             dataRangeStr = dr;
+        ChartRangeGeometry? dataRangeGeometry = null;
         if (!string.IsNullOrEmpty(dataRangeStr))
         {
-            (seriesData, categories) = ParseDataRangeForChart(dataRangeStr, chartSheetName, properties);
+            (seriesData, categories, dataRangeGeometry) = ParseDataRangeForChart(dataRangeStr, chartSheetName, properties);
         }
         else
         {
@@ -156,20 +157,32 @@ public partial class ExcelHandler
             // tries to resolve rId1 against this chart's rels and errors out.
             var extData = cxChartSpace.Descendants<CX.ExternalData>().FirstOrDefault();
             extData?.Remove();
-            // Rewrite cx:f Sheet1 references to the actual host sheet name
-            // (BuildExtendedChartSpace hardcodes "Sheet1" — fine for the
-            // PPT/Word embedded xlsx but breaks here when the chart sits
-            // on a different sheet).
-            if (!string.IsNullOrEmpty(dataRangeStr) || chartSheetName != "Sheet1")
+            // Rewrite cx:f references to the actual host cells.
+            // BuildExtendedChartSpace hardcodes the embedded-xlsx layout
+            // (Sheet1!$A$2:… — correct for PPT/Word, whose chart data lives in
+            // an embedded workbook whose sheet really is Sheet1). On an xlsx
+            // host the formulas must reference the HOST workbook instead:
+            //  - dataRange given: remap sheet name AND coordinates to the
+            //    user's range (issue #176 — the old code skipped this case
+            //    entirely, so a renamed sheet produced Sheet1! references
+            //    that Excel resolves as an external-workbook link: "cannot
+            //    update links" prompt + #REF! category axis + empty plot;
+            //    a non-A1-anchored range additionally pointed at the wrong
+            //    rows even on a sheet that happened to be named Sheet1).
+            //  - inline data (no dataRange): cells were just written to the
+            //    host sheet in the embedded A1-anchored layout, so only the
+            //    sheet name needs replacing.
+            if (dataRangeGeometry != null)
             {
-                var refSheet = !string.IsNullOrEmpty(dataRangeStr) ? null : chartSheetName;
-                if (refSheet != null)
+                RemapChartExFormulasToHostRange(cxChartSpace, dataRangeGeometry);
+            }
+            else if (chartSheetName != "Sheet1")
+            {
+                var quoted = Core.ModernFunctionQualifier.QuoteSheetNameForRef(chartSheetName);
+                foreach (var f in cxChartSpace.Descendants<CX.Formula>())
                 {
-                    foreach (var f in cxChartSpace.Descendants<CX.Formula>())
-                    {
-                        if (f.Text.StartsWith("Sheet1!", StringComparison.Ordinal))
-                            f.Text = refSheet + f.Text.Substring("Sheet1".Length);
-                    }
+                    if (f.Text.StartsWith("Sheet1!", StringComparison.Ordinal))
+                        f.Text = quoted + f.Text.Substring("Sheet1".Length);
                 }
             }
             var extChartPart = drawingsPart.AddNewPart<ExtendedChartPart>();
@@ -475,6 +488,66 @@ public partial class ExcelHandler
         var sb = new System.Text.StringBuilder();
         while (idx > 0) { idx--; sb.Insert(0, (char)('A' + idx % 26)); idx /= 26; }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Remap the embedded-xlsx cx:f formulas ChartExBuilder emits
+    /// (Sheet1!$A$2:$A$N cats / Sheet1!$B$2… values / Sheet1!$B$1 series name)
+    /// onto the HOST worksheet cells named by dataRange — issue #176. Column
+    /// translation: embedded col A = the dataRange's category column, embedded
+    /// col B+i = the i-th series column. Rows translate to the dataRange's
+    /// data window (header row excluded). A series-name formula is dropped
+    /// (cached literal kept) when the range has no header row; a category
+    /// formula follows the explicit `categories=` ref when one was given,
+    /// and is dropped for an inline literal list.
+    /// </summary>
+    private static void RemapChartExFormulasToHostRange(
+        CX.ChartSpace cxChartSpace, ChartRangeGeometry geo)
+    {
+        var sheet = Core.ModernFunctionQualifier.QuoteSheetNameForRef(geo.SheetName);
+        var pattern = new System.Text.RegularExpressions.Regex(
+            @"^Sheet1!\$([A-Z]+)\$(\d+)(?::\$([A-Z]+)\$(\d+))?$");
+        foreach (var f in cxChartSpace.Descendants<CX.Formula>().ToList())
+        {
+            var m = pattern.Match(f.Text ?? "");
+            if (!m.Success) continue;
+            var embCol = ColumnNameToIndex(m.Groups[1].Value);   // 1-based: A=1
+            bool isRange = m.Groups[3].Success;
+
+            if (!isRange && m.Groups[2].Value == "1")
+            {
+                // Series-name header cell (embedded row 1, col B+i).
+                if (!geo.HasHeaderRow) { f.Remove(); continue; }
+                var col = ColumnIndexToName(geo.FirstSeriesColIdx + embCol - 2);
+                f.Text = $"{sheet}!${col}${geo.HeaderRow}";
+                continue;
+            }
+            if (embCol == 1)
+            {
+                // Category column (embedded col A).
+                if (geo.HasExplicitCategories)
+                {
+                    if (geo.ExplicitCategoriesRef is string catRef)
+                    {
+                        var bang = catRef.LastIndexOf('!');
+                        f.Text = bang > 0
+                            ? Core.ModernFunctionQualifier.QuoteSheetNameForRef(catRef[..bang].Trim('\'')) + catRef[bang..]
+                            : catRef;
+                    }
+                    else
+                    {
+                        f.Remove();   // inline literal list — cached labels only
+                    }
+                    continue;
+                }
+                var catCol = ColumnIndexToName(geo.CatColIdx);
+                f.Text = $"{sheet}!${catCol}${geo.DataStartRow}:${catCol}${geo.EndRow}";
+                continue;
+            }
+            // Series values (embedded col B+i).
+            var valCol = ColumnIndexToName(geo.FirstSeriesColIdx + embCol - 2);
+            f.Text = $"{sheet}!${valCol}${geo.DataStartRow}:${valCol}${geo.EndRow}";
+        }
     }
 
     /// <summary>Every chart prop key whose value may be a cell-range
