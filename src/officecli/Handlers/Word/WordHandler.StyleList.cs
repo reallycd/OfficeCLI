@@ -798,6 +798,13 @@ public partial class WordHandler
 
     private (int NumId, int Ilvl)? ResolveNumPrFromStyle(Paragraph para)
     {
+        // numId and ilvl inherit PER-PROPERTY through the pPr cascade (issue
+        // #180): Word's multilevel-list-linked heading styles routinely declare
+        // only <w:ilvl> on a child style and inherit <w:numId> from its basedOn
+        // parent. Track the two independently — the first-seen (closest) value
+        // of each wins, and they may come from different links in the chain.
+        int? ilvl = null;
+
         // 1. Direct numPr on the paragraph wins.
         var numProps = para.ParagraphProperties?.NumberingProperties;
         if (numProps != null)
@@ -807,8 +814,9 @@ public partial class WordHandler
             // any inherited list reference, so stop here rather than walking the
             // style chain (which would resurrect the based-on style's numbering).
             if (nid == 0) return null;
+            ilvl = numProps.NumberingLevelReference?.Val?.Value;
             if (nid != null)
-                return (nid.Value, numProps.NumberingLevelReference?.Val?.Value ?? 0);
+                return (nid.Value, ilvl ?? 0);
         }
 
         // 2. Walk the style chain through BasedOn references.
@@ -832,8 +840,9 @@ public partial class WordHandler
                 // that opts out of the heading's auto-number). Stop the walk so
                 // the based-on style's numbering is not inherited.
                 if (nid == 0) return null;
+                ilvl ??= styleNumPr.NumberingLevelReference?.Val?.Value;
                 if (nid != null)
-                    return (nid.Value, styleNumPr.NumberingLevelReference?.Val?.Value ?? 0);
+                    return (nid.Value, ilvl ?? 0);
             }
 
             styleId = style.BasedOn?.Val?.Value;
