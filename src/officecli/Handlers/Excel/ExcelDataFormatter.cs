@@ -141,6 +141,15 @@ internal static class ExcelDataFormatter
         var stripped = Regex.Replace(formatCode, "\"[^\"]*\"", "");
         stripped = BracketCodeRegex.Replace(stripped, "");
 
+        // A date/time format never mixes date tokens with numeric
+        // placeholders (0/#) — the only exception is fractional seconds
+        // (ss.00), normalized away first. Without this, a garbage custom
+        // format like Y0.00 tripped the date heuristic and Get displayed the
+        // numeric value 5000 as the date string 1913-09-08.
+        var noSecondsFraction = Regex.Replace(stripped, @"s\.0+", "s", RegexOptions.IgnoreCase);
+        if (noSecondsFraction.IndexOfAny(new[] { '0', '#' }) >= 0)
+            return false;
+
         return DateTokenRegex.IsMatch(stripped);
     }
 
