@@ -4652,6 +4652,27 @@ public static partial class WordBatchEmitter
         // text emit. Full rel preservation is a separate, larger effort.
         if (HasExternalRelRef(rawXml!))
         {
+            // Ship the SDT through the inlined-parts carrier (verbatim sdtXml +
+            // part{N}/ext{N} data, rel ids rewritten on replay) — same shape as
+            // the block-level EmitSdt and cell-level EmitCellSdt carriers, so
+            // an inline picture control keeps its image. The replay `add sdt`
+            // targets the host paragraph just added by EmitParagraph
+            // (p[last()]), where AddSdt injects a run-level SdtRun. Body host
+            // only: header/footer/cell hosts route through their own emitters.
+            if (parentPath == "/body" && word.GetSdtEmitData(sdt.Path) is { } inlineSdtData)
+            {
+                var carrierProps = PackInlinedPartsProps(inlineSdtData);
+                carrierProps["sdtXml"] = WordHandler.StripVerbatimCommentMarkers(carrierProps["runXml"]);
+                carrierProps.Remove("runXml");
+                items.Add(new BatchItem
+                {
+                    Command = "add",
+                    Parent = "/body/p[last()]",
+                    Type = "sdt",
+                    Props = carrierProps,
+                });
+                return true;
+            }
             ctx?.Warnings.Add(new DocxUnsupportedWarning(
                 Element: "sdt.richContent",
                 Path: sdt.Path,

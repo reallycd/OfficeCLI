@@ -1056,8 +1056,13 @@ public partial class WordHandler : IDocumentHandler, Rendering.IRenderModelHost
         OpenXmlElement? element;
         try { element = NavigateToElement(ParsePath(sdtPath)); }
         catch { return null; }
-        if (element is not SdtBlock sdt) return null;
-        return GuardCarrierContentTypes(CollectInlinedPartsEmitData(sdt, sdt));
+        // Block AND inline (run-level) content controls — an inline SDT
+        // wrapping a picture (w:sdt inside w:p) needs the same carrier.
+        if (element is SdtBlock sdtBlock)
+            return GuardCarrierContentTypes(CollectInlinedPartsEmitData(sdtBlock, sdtBlock));
+        if (element is SdtRun sdtRun)
+            return GuardCarrierContentTypes(CollectInlinedPartsEmitData(sdtRun, sdtRun));
+        return null;
     }
 
     /// <summary>

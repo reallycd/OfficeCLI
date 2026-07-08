@@ -2152,6 +2152,17 @@ public partial class WordHandler
         {
             var carrierHost = ResolveImageHostPart(parent);
             var rewrite = MaterializeInlinedParts(carrierHost, properties, "sdt");
+            // A paragraph host means a run-level (inline) control — the same
+            // <w:sdt> XML, but the typed wrapper must be SdtRun so the SDK
+            // object model matches CT_P's particle (an inline picture control
+            // shipped by the dump carrier lands here with parent = p[last()]).
+            if (parent is Paragraph)
+            {
+                var sdtRun = new SdtRun(rewrite(sdtCarrierXml));
+                AppendToParent(parent, sdtRun);
+                var sdtRunIdx = PathIndex.FromArrayIndex(parent.Elements<SdtRun>().ToList().IndexOf(sdtRun));
+                return $"{parentPath}/sdt[{sdtRunIdx}]";
+            }
             var sdtBlock = new SdtBlock(rewrite(sdtCarrierXml));
             AppendToParent(parent, sdtBlock);
             var sdtIdx2 = PathIndex.FromArrayIndex(parent.Elements<SdtBlock>().ToList().IndexOf(sdtBlock));
