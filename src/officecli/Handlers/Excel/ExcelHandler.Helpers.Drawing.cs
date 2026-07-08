@@ -1333,10 +1333,12 @@ public partial class ExcelHandler
         if (!m.Success) return false;
         fromCol = ColumnNameToIndex(m.Groups[1].Value) - 1;
         fromRow = int.Parse(m.Groups[2].Value) - 1;
+        ValidateAnchorCell(fromCol, fromRow, value!.Split(':')[0]);
         if (m.Groups[3].Success)
         {
             toCol = ColumnNameToIndex(m.Groups[3].Value) - 1;
             toRow = int.Parse(m.Groups[4].Value) - 1;
+            ValidateAnchorCell(toCol, toRow, value.Split(':')[1]);
             // Inverted ranges (D4:B2) written verbatim produce a twoCellAnchor
             // whose from exceeds to; real Excel refuses the file (0x800A03EC)
             // while schema validation stays green. Normalize per axis, same
@@ -1351,6 +1353,21 @@ public partial class ExcelHandler
     {
         if (toCol >= 0 && toCol < fromCol) (fromCol, toCol) = (toCol, fromCol);
         if (toRow >= 0 && toRow < fromRow) (fromRow, toRow) = (toRow, fromRow);
+    }
+
+    /// <summary>
+    /// Bounds-check a parsed 0-based anchor cell against Excel's real grid
+    /// (A1..XFD1048576). Row 0 (A0) parses to -1 and columns past XFD wrap
+    /// into indices Excel refuses (0x800A03EC) while schema validation stays
+    /// green — reject at parse time instead.
+    /// </summary>
+    internal static void ValidateAnchorCell(int col0, int row0, string original)
+    {
+        const int MaxCol0 = 16383;      // XFD
+        const int MaxRow0 = 1048575;    // 1,048,576 rows, 0-based
+        if (col0 < 0 || col0 > MaxCol0 || row0 < 0 || row0 > MaxRow0)
+            throw new ArgumentException(
+                $"Anchor cell '{original}' is outside Excel's grid (A1..XFD1048576).");
     }
 
     /// <summary>

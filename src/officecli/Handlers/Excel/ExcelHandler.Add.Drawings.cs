@@ -133,10 +133,12 @@ public partial class ExcelHandler
             // ColumnNameToIndex returns 1-based, so subtract 1 here.
             oleFromCol = ColumnNameToIndex(m.Groups[1].Value) - 1;
             oleFromRow = int.Parse(m.Groups[2].Value) - 1;
+            ValidateAnchorCell(oleFromCol, oleFromRow, oleAnchorStr.Split(':')[0]);
             if (m.Groups[3].Success)
             {
                 oleToCol = ColumnNameToIndex(m.Groups[3].Value) - 1;
                 oleToRow = int.Parse(m.Groups[4].Value) - 1;
+                ValidateAnchorCell(oleToCol, oleToRow, oleAnchorStr.Split(':')[1]);
                 NormalizeAnchorRect(ref oleFromCol, ref oleFromRow, ref oleToCol, ref oleToRow);
             }
             else

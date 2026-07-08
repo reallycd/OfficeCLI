@@ -220,11 +220,13 @@ public partial class ExcelHandler
                     if (fromMAnc == null || toMAnc == null) { oleUnsupportedSet.Add(key); break; }
                     int newFromCol = ColumnNameToIndex(anchorM.Groups[1].Value) - 1;
                     int newFromRow = int.Parse(anchorM.Groups[2].Value) - 1;
+                    ValidateAnchorCell(newFromCol, newFromRow, (value ?? "").Split(':')[0]);
                     int newToCol, newToRow;
                     if (anchorM.Groups[3].Success)
                     {
                         newToCol = ColumnNameToIndex(anchorM.Groups[3].Value) - 1;
                         newToRow = int.Parse(anchorM.Groups[4].Value) - 1;
+                        ValidateAnchorCell(newToCol, newToRow, (value ?? "").Split(':')[1]);
                         NormalizeAnchorRect(ref newFromCol, ref newFromRow, ref newToCol, ref newToRow);
                     }
                     else
