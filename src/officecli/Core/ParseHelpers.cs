@@ -480,7 +480,12 @@ internal static class ParseHelpers
     /// </summary>
     public static double SafeParseDouble(string value, string propertyName)
     {
-        if (!double.TryParse(value, CultureInfo.InvariantCulture, out var result) || double.IsNaN(result) || double.IsInfinity(result))
+        // NumberStyles.Float (NOT the default Float|AllowThousands) — matches every
+        // other numeric parser in this file. AllowThousands would silently strip a
+        // decimal comma ("45,5" -> 455), producing a 10x/1000x-wrong value from a
+        // comma-decimal-locale input instead of rejecting it.
+        if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var result)
+            || double.IsNaN(result) || double.IsInfinity(result))
             throw new ArgumentException($"Invalid '{propertyName}' value '{value}'. Expected a finite number.");
         return result;
     }
