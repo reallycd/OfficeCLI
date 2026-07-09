@@ -171,6 +171,11 @@ public partial class ExcelHandler
         // (e.g. a SUMIFS authored before its data was imported). Runs before the
         // dirty-part flush so cells it touches are picked up by the loop below.
         RefreshStaleFormulaCaches();
+        // Re-seed chart numCache/strCache from current cell values so offline
+        // consumers (dump/batch, view html) don't read stale series data and
+        // dump→replay stays idempotent. Runs after the formula sweep so charts
+        // referencing formula cells see the reconciled values.
+        RefreshStaleChartCaches();
         foreach (var part in _dirtyWorksheets)
         {
             ReorderWorksheetChildren(GetSheet(part));

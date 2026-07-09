@@ -297,6 +297,14 @@ public partial class ExcelHandler
             GetSheet(worksheet).Append(sheetData);
         }
 
+        // Did the cell exist before this Set? If not, FindOrCreateCell
+        // materializes it, and a mid-Set validation throw must remove it
+        // entirely — restoring an empty clone (below) would leave a ghost
+        // <c> stub behind on a failed create (exit 1 must mean no change).
+        var cellPreExisted = sheetData.Elements<Row>()
+            .SelectMany(r => r.Elements<Cell>())
+            .Any(c => string.Equals(c.CellReference?.Value, cellRef, StringComparison.OrdinalIgnoreCase));
+
         var cell = FindOrCreateCell(sheetData, cellRef);
 
         // Clone cell for rollback on failure (atomic: no partial modifications)
@@ -308,8 +316,13 @@ public partial class ExcelHandler
         }
         catch
         {
-            // Rollback: restore cell to pre-modification state
-            cell.Parent?.ReplaceChild(cellBackup, cell);
+            if (cellPreExisted)
+                // Rollback: restore cell to pre-modification state.
+                cell.Parent?.ReplaceChild(cellBackup, cell);
+            else
+                // Newly created by this Set — remove it so a failed create
+                // leaves no ghost cell.
+                cell.Remove();
             throw;
         }
     }
@@ -420,8 +433,17 @@ public partial class ExcelHandler
                         Console.Error.WriteLine(
                             "Warning: Both value= and formula= supplied — using formula, value ignored.");
                     }
-                    // Auto-detect formula: value starting with '=' is treated as formula
-                    if (effectiveValue.StartsWith('=') && effectiveValue.Length > 1)
+                    // Auto-detect formula: value starting with '=' is treated as
+                    // formula — UNLESS the caller forced text via the leading
+                    // apostrophe (quotePrefixForce) or an explicit type=string.
+                    // Without the gate, '=TEXT and type=string both got coerced
+                    // into a #NAME? formula, and dump→batch replay of any string
+                    // cell starting with '=' (which the emitter pins via the
+                    // apostrophe idiom) reproduced the corruption.
+                    var setForcedString = quotePrefixForce
+                        || (properties.TryGetValue("type", out var setTypeVal)
+                            && setTypeVal.Equals("string", StringComparison.OrdinalIgnoreCase));
+                    if (!setForcedString && effectiveValue.StartsWith('=') && effectiveValue.Length > 1)
                         goto case "formula";
                     // CONSISTENCY(text-escape-boundary): \n / \t resolution is
                     // applied at the CLI --prop parse boundary
@@ -453,9 +475,15 @@ public partial class ExcelHandler
                     if (cell.DataType?.Value == CellValues.Boolean)
                     {
                         var bv = cellValue.Trim().ToLowerInvariant();
-                        if (bv is "true" or "yes") cell.CellValue = new CellValue("1");
-                        else if (bv is "false" or "no") cell.CellValue = new CellValue("0");
-                        else cell.CellValue = new CellValue(cellValue);
+                        if (bv is "true" or "yes" or "1") cell.CellValue = new CellValue("1");
+                        else if (bv is "false" or "no" or "0") cell.CellValue = new CellValue("0");
+                        else
+                            // A t="b" cell whose value isn't 0/1 makes Excel
+                            // refuse the whole file (0x800A03EC). Reject rather
+                            // than write garbage into the existing boolean cell.
+                            throw new ArgumentException(
+                                $"Cannot store '{cellValue}' in a boolean cell; value must be true/false, yes/no, or 1/0. " +
+                                "Set type=string first to store literal text.");
                     }
                     else
                     {
@@ -498,7 +526,7 @@ public partial class ExcelHandler
                                 throw new ArgumentException(
                                     $"Cannot store '{cellValue}' as date; Excel does not support dates before 1900-01-01 " +
                                     $"(serial epoch is 1899-12-30). Use type=string to keep the literal text.");
-                            cell.CellValue = new CellValue(dt.ToOADate().ToString(System.Globalization.CultureInfo.InvariantCulture));
+                            cell.CellValue = new CellValue(ExcelDataFormatter.ToExcelSerial(dt).ToString(System.Globalization.CultureInfo.InvariantCulture));
                             cell.DataType = null;
                             if (!properties.ContainsKey("numberformat") && !properties.ContainsKey("numfmt") && !properties.ContainsKey("format"))
                                 styleProps["numberformat"] = "yyyy-mm-dd";
@@ -641,8 +669,12 @@ public partial class ExcelHandler
                     if (value.ToLowerInvariant() is "boolean" or "bool" && cell.CellValue != null)
                     {
                         var cv = cell.CellValue.Text.Trim().ToLowerInvariant();
-                        if (cv is "true" or "yes") cell.CellValue = new CellValue("1");
-                        else if (cv is "false" or "no") cell.CellValue = new CellValue("0");
+                        if (cv is "true" or "yes" or "1") cell.CellValue = new CellValue("1");
+                        else if (cv is "false" or "no" or "0") cell.CellValue = new CellValue("0");
+                        else if (!string.IsNullOrEmpty(cv))
+                            throw new ArgumentException(
+                                $"Cannot store '{cell.CellValue.Text}' as boolean; value must be true/false, yes/no, or 1/0. " +
+                                "Use type=string to keep the literal text.");
                     }
                     // For date type, apply a default date number format unless caller already specifies one
                     if (value.Equals("date", StringComparison.OrdinalIgnoreCase)
@@ -735,7 +767,11 @@ public partial class ExcelHandler
                         // <x:hyperlinks/> behind — schema-invalid (>=1 child
                         // required), so real Excel refused the file even
                         // though the set itself was correctly rejected.
-                        var isInternalTarget = TryParseInternalHyperlinkLocation(value) != null;
+                        // Reject XML-illegal control chars up front — otherwise
+                        // the value is accepted into the DOM and only blows up
+                        // at close ("save failed — data may be lost").
+                        Core.ParseHelpers.ValidateXmlText(value, "link");
+                        var isInternalTarget = ResolveInternalHyperlinkLocation(value) != null;
                         if (!isInternalTarget)
                             Core.HyperlinkUriValidator.RequireSafeScheme(value, "link");
                         if (hyperlinksEl == null)
@@ -752,10 +788,14 @@ public partial class ExcelHandler
                             ?? properties.GetValueOrDefault("screentip");
                         // H2b: optional display= friendly text (OOXML @display).
                         var setHlDisplay = properties.GetValueOrDefault("display");
+                        // These land in @tooltip/@display attributes — reject
+                        // XML-illegal control chars up front, same as link.
+                        Core.ParseHelpers.ValidateXmlText(setHlTip, "tooltip");
+                        Core.ParseHelpers.ValidateXmlText(setHlDisplay, "display");
                         // R37-B: also accept bare `SheetName!Cell` (no '#' prefix)
                         // and quoted `'Multi Word'!Cell` as internal targets.
                         // CONSISTENCY(internal-hyperlink): same detection used in Add.Cells.cs.
-                        var internalLoc = TryParseInternalHyperlinkLocation(value);
+                        var internalLoc = ResolveInternalHyperlinkLocation(value);
                         if (internalLoc != null)
                         {
                             // Internal target (sheet cell or named range) is
@@ -1296,6 +1336,9 @@ public partial class ExcelHandler
                         // as printarea/freeze.
                         foreach (var afCell in trimmed.Replace("$", "").Split(':'))
                             ParseCellReference(afCell.Trim());
+                        // Canonicalize inverted input (D5:A1) like the rest of
+                        // the range family.
+                        trimmed = NormalizeA1Range(trimmed);
                         // CONSISTENCY(autofilter-table-dup): a Table already owns
                         // its own <autoFilter>; layering a sheet-level filter over
                         // the same range validates green but real Excel refuses to
@@ -1488,6 +1531,19 @@ public partial class ExcelHandler
                             // Unknown value — fall back to truthiness on hidden semantics
                             wbSheet.State = ParseHelpers.IsTruthy(v) ? SheetStateValues.Hidden : null;
                         }
+                        // Excel requires at least one visible sheet; a workbook
+                        // with none passes schema validation but real Excel
+                        // refuses the file (0x800A03EC). Reject the transition
+                        // that would hide the last visible sheet.
+                        static bool IsHiddenState(Sheet s) =>
+                            s.State?.Value == SheetStateValues.Hidden || s.State?.Value == SheetStateValues.VeryHidden;
+                        if (IsHiddenState(wbSheet) && wbSheets!.Elements<Sheet>().All(IsHiddenState))
+                        {
+                            wbSheet.State = null;
+                            throw new ArgumentException(
+                                $"Cannot hide sheet '{sheetName}': a workbook must keep at least one visible sheet, " +
+                                "or Excel refuses to open the file. Unhide another sheet first.");
+                        }
                         GetWorkbook().Save();
                     }
                     break;
@@ -1540,6 +1596,43 @@ public partial class ExcelHandler
                     }
                     break;
                 }
+                // Verbatim hash write-back — the dump emitter surfaces the
+                // stored hashes (legacy `password` attr / modern algorithm
+                // set) so replay preserves protection strength. Values are
+                // written as-is, never re-hashed.
+                case "passwordhash":
+                {
+                    var spH = ws.GetFirstChild<SheetProtection>();
+                    if (spH == null)
+                    {
+                        spH = new SheetProtection { Sheet = true, Objects = true, Scenarios = true };
+                        InsertSheetProtectionInOrder(ws, spH);
+                    }
+                    spH.Password = string.IsNullOrEmpty(value) ? null : HexBinaryValue.FromString(value);
+                    break;
+                }
+                case "protection.algorithm":
+                case "protection.hash":
+                case "protection.salt":
+                case "protection.spincount":
+                {
+                    var spM = ws.GetFirstChild<SheetProtection>();
+                    if (spM == null)
+                    {
+                        spM = new SheetProtection { Sheet = true, Objects = true, Scenarios = true };
+                        InsertSheetProtectionInOrder(ws, spM);
+                    }
+                    switch (key.ToLowerInvariant())
+                    {
+                        case "protection.algorithm": spM.AlgorithmName = value; break;
+                        case "protection.hash": spM.HashValue = value; break;
+                        case "protection.salt": spM.SaltValue = value; break;
+                        case "protection.spincount":
+                            spM.SpinCount = uint.TryParse(value, out var spin) ? spin : null;
+                            break;
+                    }
+                    break;
+                }
 
                 // ==================== Print Settings ====================
                 case "printarea":
@@ -1583,6 +1676,25 @@ public partial class ExcelHandler
                         // strings) but makes real Excel fail to render.
                         foreach (var paCell in paRange.Replace("$", "").Split(':'))
                             ParseCellReference(paCell.Trim());
+                        // Canonicalize an inverted range (D10:A1) — stored
+                        // verbatim it passes validation and round-trips, but
+                        // real Excel fails to render the sheet. Same per-axis
+                        // swap as anchor/table/sqref.
+                        var paParts = paRange.Replace("$", "").Split(':');
+                        if (paParts.Length == 2)
+                        {
+                            var (paC1, paR1) = ParseCellReference(paParts[0].Trim());
+                            var (paC2, paR2) = ParseCellReference(paParts[1].Trim());
+                            int paI1 = ColumnNameToIndex(paC1), paI2 = ColumnNameToIndex(paC2);
+                            if (paI2 < paI1 || paR2 < paR1)
+                            {
+                                // Only rewrite when actually inverted, so a
+                                // well-formed input keeps its $ anchors.
+                                if (paI2 < paI1) (paC1, paC2) = (paC2, paC1);
+                                if (paR2 < paR1) (paR1, paR2) = (paR2, paR1);
+                                paRange = $"{paC1}{paR1}:{paC2}{paR2}";
+                            }
+                        }
                         var dn = new DefinedName($"{Core.ModernFunctionQualifier.QuoteSheetNameForRef(sheetName)}!{paRange}") { Name = "_xlnm.Print_Area" };
                         if (sheetIdx >= 0) dn.LocalSheetId = (uint)sheetIdx;
                         definedNames.AppendChild(dn);
@@ -1732,6 +1844,19 @@ public partial class ExcelHandler
                     bool isWxH = fitParts.Length == 2
                         && uint.TryParse(fitParts[0], out fw)
                         && uint.TryParse(fitParts[1], out fh);
+                    // A value that LOOKS like the WxH form but fails to parse
+                    // must not fall through to the boolean parser — the
+                    // resulting "Invalid boolean value" message pointed users
+                    // at true/false instead of the actual format.
+                    if (!isWxH && fitParts.Length == 2)
+                        throw new ArgumentException(
+                            $"Invalid fitToPage value '{value}'. Expected WIDTHxHEIGHT with non-negative integers (e.g. 1x1, 2x0), or false/none to clear.");
+                    // ECMA-376 caps fitToWidth/fitToHeight at 32767; larger
+                    // values save fine and pass most validation but real Excel
+                    // refuses the file (0x800A03EC). Mirror the margin guard.
+                    if (isWxH && (fw > 32767 || fh > 32767))
+                        throw new ArgumentException(
+                            $"fitToPage value '{value}' is out of range: width and height must each be 0-32767 pages.");
                     bool clearing = !isWxH
                         && (string.IsNullOrEmpty(value)
                             || value.Equals("none", StringComparison.OrdinalIgnoreCase)
@@ -1791,6 +1916,10 @@ public partial class ExcelHandler
                 }
                 case "header":
                 {
+                    // Reject XML-illegal control chars up front — otherwise the
+                    // value is accepted and only fails at save ("data may be
+                    // lost"). Same guard every other text property gets.
+                    Core.ParseHelpers.ValidateXmlText(value, "header");
                     var hf = ws.GetFirstChild<HeaderFooter>();
                     if (hf == null)
                     {
@@ -1802,6 +1931,7 @@ public partial class ExcelHandler
                 }
                 case "footer":
                 {
+                    Core.ParseHelpers.ValidateXmlText(value, "footer");
                     var hf = ws.GetFirstChild<HeaderFooter>();
                     if (hf == null)
                     {
@@ -3086,6 +3216,84 @@ public partial class ExcelHandler
 
         SaveWorksheet(worksheet);
         return unsupported;
+    }
+
+    /// <summary>
+    /// Column names of the table whose data rows contain row N (empty when the
+    /// row is a header/totals row or outside every table). Used to enrich the
+    /// unsupported-key message for a mistyped column name.
+    /// </summary>
+    private List<string> GetTableColumnsForDataRow(WorksheetPart worksheet, int rowIdx)
+    {
+        foreach (var tdp in worksheet.TableDefinitionParts)
+        {
+            var tbl = tdp.Table;
+            if (tbl?.Reference?.Value == null) continue;
+            if (!TryParseRange(tbl.Reference.Value, out var rng)) continue;
+            bool headerRow = (tbl.HeaderRowCount?.Value ?? 1) != 0;
+            bool totalRow = (tbl.TotalsRowCount?.Value ?? 0) > 0 || (tbl.TotalsRowShown?.Value ?? false);
+            int dataR1 = rng.r1 + (headerRow ? 1 : 0);
+            int dataR2 = rng.r2 - (totalRow ? 1 : 0);
+            if (rowIdx < dataR1 || rowIdx > dataR2) continue;
+            return tbl.GetFirstChild<TableColumns>()?.Elements<TableColumn>()
+                .Select(c => c.Name?.Value ?? "").Where(n => n.Length > 0).ToList()
+                ?? new List<string>();
+        }
+        return new List<string>();
+    }
+
+    /// <summary>
+    /// Resolve a Set key on row[N] to a cell reference via the tables whose
+    /// data rows contain row N: a table column NAME maps to its column, and a
+    /// bare column LETTER within a table's span maps directly. Header and
+    /// totals rows never resolve. Returns null when no table claims the key.
+    /// </summary>
+    private string? TryResolveRowColumnCellRef(WorksheetPart worksheet, int rowIdx, string key)
+    {
+        foreach (var tdp in worksheet.TableDefinitionParts)
+        {
+            var tbl = tdp.Table;
+            if (tbl?.Reference?.Value == null) continue;
+            if (!TryParseRange(tbl.Reference.Value, out var rng)) continue;
+            bool headerRow = (tbl.HeaderRowCount?.Value ?? 1) != 0;
+            bool totalRow = (tbl.TotalsRowCount?.Value ?? 0) > 0 || (tbl.TotalsRowShown?.Value ?? false);
+            int dataR1 = rng.r1 + (headerRow ? 1 : 0);
+            int dataR2 = rng.r2 - (totalRow ? 1 : 0);
+            if (rowIdx < dataR1 || rowIdx > dataR2) continue;
+            var colNames = tbl.GetFirstChild<TableColumns>()?.Elements<TableColumn>()
+                .Select(c => c.Name?.Value ?? "").ToList() ?? new List<string>();
+            var nameIdx = colNames.FindIndex(n => n.Equals(key, StringComparison.OrdinalIgnoreCase));
+            if (nameIdx >= 0)
+                return $"{IndexToColumnName(rng.c1 + nameIdx)}{rowIdx}";
+            if (Regex.IsMatch(key, "^[A-Za-z]{1,3}$"))
+            {
+                var ci = ColumnNameToIndex(key.ToUpperInvariant());
+                if (ci >= rng.c1 && ci <= rng.c2)
+                    return $"{key.ToUpperInvariant()}{rowIdx}";
+            }
+        }
+        return null;
+    }
+
+    // Literal cell write with number/string type detection — small shared
+    // shim over the import-time writer for the row-column Set path.
+    private static void WriteCellLiteralWithTypeDetection(Cell cell, string value)
+    {
+        if (double.TryParse(value, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out _))
+        {
+            cell.DataType = null;
+            cell.RemoveAllChildren<InlineString>();
+            cell.CellFormula = null;
+            cell.CellValue = new CellValue(value);
+        }
+        else
+        {
+            cell.DataType = CellValues.String;
+            cell.RemoveAllChildren<InlineString>();
+            cell.CellFormula = null;
+            cell.CellValue = new CellValue(value);
+        }
     }
 
     // ==================== AutoFilter Set ====================

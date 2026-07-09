@@ -624,6 +624,22 @@ internal static class AttributeFilter
             return (true, val?.ToString() ?? "");
         }
 
+        // Revision synthetic nodes namespace every key (revision.type,
+        // revision.author, revision.id, revision.date). The Word handler's
+        // selector pre-filter (MatchesFilter in Set.Revision) accepts the short
+        // names, so `query revision[@type=ins]` matched at the handler only to
+        // be dropped here — `type` fell through to the node.Type fallback below
+        // ("revision" != "ins") and `author` resolved as unknown key. Map the
+        // short name onto its namespaced Format key, gated on the revision node
+        // type (same gating precedent as the cell `value` fallback below).
+        if (string.Equals(node.Type, "revision", StringComparison.OrdinalIgnoreCase))
+        {
+            var nsKey = node.Format.Keys.FirstOrDefault(k =>
+                string.Equals(k, "revision." + key, StringComparison.OrdinalIgnoreCase));
+            if (nsKey != null)
+                return (true, node.Format[nsKey]?.ToString() ?? "");
+        }
+
         // "text" falls back to node.Text if not in Format
         if (string.Equals(key, "text", StringComparison.OrdinalIgnoreCase))
         {
@@ -941,32 +957,24 @@ internal static class AttributeFilter
         string selector, Func<string, List<DocumentNode>> query, Func<string, string>? keyResolver = null,
         bool applyAll = true)
     {
-        // CSS comma-list union (CONSISTENCY(comma-union)). Split top-level commas
-        // and evaluate each part independently, then union by node identity.
-        // Doing it HERE — the shared query/set/remove chokepoint — is the only
-        // correct place: ParseExpr below AND-merges every bracket block across a
-        // comma, so `row[Dept=Sales],row[Dept=Marketing]` would otherwise collapse
-        // to Dept=Sales AND Dept=Marketing and match nothing. Positional unions
-        // (`shape[1], shape[3]`) already survived because numeric brackets are
-        // skipped by ParseExpr; predicate unions did not, across every handler.
-        if (SelectorCommaSplit.ContainsTopLevelComma(selector))
+        // CSS-style comma union: `row[Dept=Sales],row[Dept=Marketing]` runs
+        // each part and unions the results (deduped by Path). Commas INSIDE
+        // brackets are value text, never separators.
+        var unionParts = SplitTopLevelCommas(selector);
+        if (unionParts.Count > 1)
         {
-            var union = new List<DocumentNode>();
+            var unionResults = new List<DocumentNode>();
             var unionWarnings = new List<FilterDiagnostic>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var part in SelectorCommaSplit.SplitTopLevelCommas(selector))
+            var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var part in unionParts)
             {
-                var trimmed = part.Trim();
-                if (trimmed.Length == 0) continue;
-                var (partResults, partWarnings) = FilterSelector(trimmed, query, keyResolver, applyAll);
-                foreach (var n in partResults)
-                {
-                    var key = (n.Path ?? "") + "\x00" + (n.Type ?? "");
-                    if (seen.Add(key)) union.Add(n);
-                }
-                unionWarnings.AddRange(partWarnings);
+                var (r, w) = FilterSelector(part.Trim(), query, keyResolver, applyAll);
+                foreach (var n in r)
+                    if (n.Path == null || seenPaths.Add(n.Path))
+                        unionResults.Add(n);
+                unionWarnings.AddRange(w);
             }
-            return (union, unionWarnings);
+            return (unionResults, unionWarnings);
         }
 
         var expr = ParseExpr(selector);
@@ -1006,12 +1014,12 @@ internal static class AttributeFilter
         // stripped) so a missing key is always reported and a near-miss value is
         // suggested regardless of operator. Error path only — successful queries keep
         // their existing warning set untouched.
-        // Skip this for elements that resolve their OWN virtual attributes
-        // (Excel row/col table-column predicates): those keys exist only on the
-        // handler's predicate-resolved result, never on a bracket-stripped bare
-        // `row`, so DiagnoseEmptyResult would falsely report the real column as
-        // an "unknown key" on a legitimately empty result (`row[Dept=法务]` with
-        // no matching row). A genuine 0-match must stay a clean empty result.
+        // Skip for selectors whose element resolves its own virtual attributes
+        // (Excel row/col table-column predicates): the bare stripped query
+        // returns nodes WITHOUT those virtual keys, so a legitimate zero-match
+        // (row[Header='x'] matching nothing) mis-diagnosed as
+        // "unknown key 'Header'". The handler already throws its own rich
+        // not_found error for genuinely unknown columns.
         if (results.Count == 0 && leafConds.Count > 0 && !ElementResolvesOwnBoolean(selector))
         {
             try
@@ -1105,6 +1113,30 @@ internal static class AttributeFilter
     {
         var s = Regex.Replace((selector ?? "").TrimStart(), @"^(?:[^/!\[]+!|/[^/]+/)", "");
         return Regex.IsMatch(s, @"^(?:row|col|column)\[", RegexOptions.IgnoreCase);
+    }
+
+    // Split a selector on commas at bracket depth 0 (outside quotes).
+    private static List<string> SplitTopLevelCommas(string selector)
+    {
+        var parts = new List<string>();
+        int depth = 0, start = 0;
+        bool inQuote = false;
+        char quoteChar = '"';
+        for (int i = 0; i < selector.Length; i++)
+        {
+            var c = selector[i];
+            if (inQuote) { if (c == quoteChar) inQuote = false; continue; }
+            if (c is '"' or '\'') { inQuote = true; quoteChar = c; continue; }
+            if (c == '[') depth++;
+            else if (c == ']') depth = Math.Max(0, depth - 1);
+            else if (c == ',' && depth == 0)
+            {
+                parts.Add(selector[start..i]);
+                start = i + 1;
+            }
+        }
+        parts.Add(selector[start..]);
+        return parts.Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
     }
 
     /// <summary>Wrap a flat condition list as an expression (single predicate or AND).</summary>

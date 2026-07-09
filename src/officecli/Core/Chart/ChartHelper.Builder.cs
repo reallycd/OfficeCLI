@@ -2170,9 +2170,14 @@ internal static partial class ChartHelper
         // reference (e.g. "Sheet1!A1"), emit <c:tx><c:strRef> so Excel resolves
         // the cell on open. Same fix family as R17-B1 (series name strRef).
         // Applies to chart title and cat/val axis titles (R18-B1/B2).
-        if (IsCellReference(titleText))
+        // Accept the natural Excel spelling with a leading '=' (=Sheet1!A1);
+        // without the strip it fell through to the literal-text branch and
+        // the chart displayed the formula string verbatim.
+        var titleRef = titleText.TrimStart();
+        if (titleRef.StartsWith('=')) titleRef = titleRef[1..];
+        if (IsCellReference(titleRef))
         {
-            var formula = NormalizeCellReference(titleText);
+            var formula = NormalizeCellReference(titleRef);
             return new C.Title(
                 new C.ChartText(
                     new C.StringReference(new C.Formula(formula))

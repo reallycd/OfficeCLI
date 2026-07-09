@@ -158,7 +158,34 @@ static partial class CommandBuilder
             // command that already had --commands set. Reject the
             // combination loudly. (Detect stdin via Console.IsInputRedirected
             // to avoid spurious failures from interactive terminals.)
+            // IsInputRedirected alone is true for every non-interactive
+            // invocation (cron, CI, `< /dev/null`, systemd), so the warning
+            // below fired on effectively all scripted batch runs with only
+            // one source supplied. Refine: a seekable stdin (regular file or
+            // /dev/null redirect) with zero length carries no second payload
+            // — skip the warning. Pipes (CanSeek=false) still warn: someone
+            // is actively piping data that will be ignored.
             bool stdinHasInput = Console.IsInputRedirected;
+            if (stdinHasInput)
+            {
+                // Peek with a short timeout: /dev/null and closed stdin hit
+                // EOF instantly (no payload → no warning); a pipe carrying a
+                // real second payload has data ready (warn); an open-but-idle
+                // pipe times out and is treated as no payload — batch never
+                // reads stdin on this path anyway, so nothing is lost. The
+                // possibly-blocked Peek thread is abandoned; the process
+                // exits normally.
+                try
+                {
+                    var stdinPeek = System.Threading.Tasks.Task.Run(() =>
+                    {
+                        try { return Console.In.Peek() != -1; }
+                        catch { return false; }
+                    });
+                    stdinHasInput = stdinPeek.Wait(TimeSpan.FromMilliseconds(50)) && stdinPeek.Result;
+                }
+                catch { /* keep IsInputRedirected verdict */ }
+            }
             if (inlineCommands != null && inputFile != null)
                 throw new ArgumentException(
                     "batch: --commands and --input are mutually exclusive. Pick one source.");
