@@ -1770,9 +1770,10 @@ public partial class ExcelHandler
                 {
                     bool forcedCol = Regex.IsMatch(lc.Key, @"^col(?:umn)?\.", RegexOptions.IgnoreCase);
                     if (!forcedCol && int.TryParse(lc.Key, out _))
-                        throw new ArgumentException(
+                        throw new Core.CliException(
                             $"row[{lc.Key} …] is ambiguous: a bare number is the row index, not a column filter. " +
-                            $"Use 'col.{lc.Key}' to filter a column named '{lc.Key}', or 'row[{lc.Key}]' (no operator) for that row.");
+                            $"Use 'col.{lc.Key}' to filter a column named '{lc.Key}', or 'row[{lc.Key}]' (no operator) for that row.")
+                            { Code = "invalid_selector" };
                     if (!forcedCol && (atForced.Contains(lc.Key) || RowAttributeKeys.Contains(lc.Key)))
                     {
                         attrCount++;
@@ -1784,12 +1785,14 @@ public partial class ExcelHandler
                 }
                 foreach (var ak in collisionCandidates)
                     if (RowKeyCollidesWithColumn(ak, parsed.Sheet))
-                        throw new ArgumentException(
+                        throw new Core.CliException(
                             $"row[{ak} …] is ambiguous: '{ak}' names both a row property and a table column. " +
-                            $"Use 'col.{ak}' to match the column, or '@{ak}' to match the row property.");
+                            $"Use 'col.{ak}' to match the column, or '@{ak}' to match the row property.")
+                            { Code = "invalid_selector" };
                 if (colCount > 0 && attrCount > 0)
-                    throw new ArgumentException(
-                        "row[...] cannot mix table columns and row properties in one expression. Split into separate queries.");
+                    throw new Core.CliException(
+                        "row[...] cannot mix table columns and row properties in one expression. Split into separate queries.")
+                        { Code = "invalid_selector" };
                 if (colCount > 0)
                     return QueryRowsByColumnPredicate(parsed.Sheet, rowExpr);
                 // pure row properties → fall through to the generic post-filter.
