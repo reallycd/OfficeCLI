@@ -434,9 +434,13 @@ public partial class ExcelHandler
             var name = m.Groups[1].Value.Replace("''", "'");
             if (!names.Contains(name)) return true;
         }
-        // Bare form: Name! — letters/digits/underscore/period (Excel allows these unquoted)
+        // Bare form: Name! — letters/digits/underscore/period (Excel allows these
+        // unquoted). '#' in the lookbehind excludes the #REF! ERROR literal
+        // (e.g. `=#REF!*2` after a row/col delete): that is a cell-level error
+        // marker, not a reference to a sheet named "REF" — classifying it as a
+        // missing sheet sent users hunting for a sheet that never existed.
         foreach (System.Text.RegularExpressions.Match m in
-                 System.Text.RegularExpressions.Regex.Matches(scan, @"(?<![A-Za-z0-9_'.])([A-Za-z_][A-Za-z0-9_.]*)!"))
+                 System.Text.RegularExpressions.Regex.Matches(scan, @"(?<![A-Za-z0-9_'.#])([A-Za-z_][A-Za-z0-9_.]*)!"))
         {
             if (!names.Contains(m.Groups[1].Value)) return true;
         }

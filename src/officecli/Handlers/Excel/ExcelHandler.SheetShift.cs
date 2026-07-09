@@ -442,7 +442,12 @@ public partial class ExcelHandler
                 {
                     if (cell.CellFormula == null) continue;
                     if (formulaTextMapper != null && !string.IsNullOrEmpty(cell.CellFormula.Text))
-                        cell.CellFormula.Text = formulaTextMapper(cell.CellFormula.Text);
+                    {
+                        var oldText = cell.CellFormula.Text;
+                        var newText = formulaTextMapper(oldText);
+                        cell.CellFormula.Text = newText;
+                        InvalidateCacheIfShiftBrokeFormula(cell, oldText, newText);
+                    }
                     if (cell.CellFormula.Reference?.Value != null)
                     {
                         var shifted = refMapper(cell.CellFormula.Reference.Value);
@@ -470,7 +475,12 @@ public partial class ExcelHandler
                 foreach (var row in otherData.Elements<Row>())
                     foreach (var cell in row.Elements<Cell>())
                         if (cell.CellFormula != null && !string.IsNullOrEmpty(cell.CellFormula.Text))
-                            cell.CellFormula.Text = crossSheetFormulaMapper(otherName, cell.CellFormula.Text);
+                        {
+                            var oldText = cell.CellFormula.Text;
+                            var newText = crossSheetFormulaMapper(otherName, oldText);
+                            cell.CellFormula.Text = newText;
+                            InvalidateCacheIfShiftBrokeFormula(cell, oldText, newText);
+                        }
                 otherPart.Worksheet.Save();
             }
         }
@@ -498,5 +508,19 @@ public partial class ExcelHandler
                 if (changed) GetWorkbook().Save();
             }
         }
+    }
+
+    // A structural shift that rewrites a formula to contain #REF! (its target
+    // row/col was deleted) must not leave the pre-delete cached value behind:
+    // `get` would keep reporting the old number with evaluated=true and
+    // `view text` would present it as truth, while Excel shows #REF!. Persist
+    // what Excel itself would after recalc — an error-typed cell with #REF! as
+    // the cached value — so display shows #REF! and `view issues` classifies it
+    // as a formula error (not a stale number).
+    private static void InvalidateCacheIfShiftBrokeFormula(Cell cell, string oldText, string newText)
+    {
+        if (newText == oldText || !newText.Contains("#REF!", StringComparison.Ordinal)) return;
+        cell.DataType = CellValues.Error;
+        cell.CellValue = new CellValue("#REF!");
     }
 }
