@@ -1664,7 +1664,11 @@ public partial class ExcelHandler
                         throw new Core.CliException(
                             $"row[{ak} …] is ambiguous: '{ak}' names both a row property and a table column. " +
                             $"Use 'row[col.{ak} …]' to match the column, or 'row[@{ak} …]' to match the row property.")
-                            { Code = "invalid_selector" };
+                        {
+                            Code = "invalid_selector",
+                            Suggestion = $"row[col.{ak} …] (table column) or row[@{ak} …] (row property)",
+                            ValidValues = new[] { $"col.{ak}", $"@{ak}" },
+                        };
                 if (colCount > 0 && attrCount > 0)
                     throw new Core.CliException(
                         "row[...] cannot mix table columns and row properties in one expression. Split into separate queries.")
@@ -1697,6 +1701,13 @@ public partial class ExcelHandler
                         ChildCount = row.Elements<Cell>().Count(),
                         Preview = rowIdx.ToString()
                     };
+                    // Row properties are emitted only when set (height on 3 of
+                    // 1000 rows). Declare the full queryable-key set so the
+                    // post-filter treats an absent-but-known key (row[@height>…]
+                    // on a sheet where no row has a custom height — the exact
+                    // form the collision error recommends) as 0 matches, not
+                    // "unknown key".
+                    node.InternalFormat["declaredKeys"] = RowAttributeKeys;
                     if (row.Height?.Value != null)
                         node.Format["height"] = $"{row.Height.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}pt";
                     if (row.Hidden?.Value == true) node.Format["hidden"] = true;

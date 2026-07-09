@@ -3140,16 +3140,18 @@ public partial class ExcelHandler
         _ => false,
     };
 
-    // Every key SetRow interprets as a row property — the explicit switch
-    // cases (with their aliases) plus the long-tail CT_Row attributes. Used by
-    // the column-shadow collision check: a bare key in this set that ALSO
-    // resolves as a table column is ambiguous.
-    private static bool IsRowSetAttributeKey(string key) => key.ToLowerInvariant() switch
-    {
-        "height" or "rowheight" or "hidden" or "outline" or "outlinelevel"
-            or "group" or "collapsed" => true,
-        _ => IsLongTailRowAttribute(key),
-    };
+    // Every key SetRow interprets as a row property — used by the
+    // column-shadow collision check: a bare key in this set that ALSO resolves
+    // as a table column is ambiguous. Single source: the query-side
+    // RowAttributeKeys (Get-emitted props) plus the Set-only input aliases and
+    // the long-tail CT_Row passthrough attrs. The set is deliberately WIDER
+    // than the query side's: query can only filter on keys Get emits, so a
+    // bare `row[style=…]` is unambiguous there (must be a column), while Set
+    // can write style/group/… and therefore must treat them as colliding.
+    private static bool IsRowSetAttributeKey(string key)
+        => RowAttributeKeys.Contains(key)
+            || key.ToLowerInvariant() is "rowheight" or "outline" or "group"
+            || IsLongTailRowAttribute(key);
 
     private List<string> SetRow(WorksheetPart worksheet, uint rowIdx, Dictionary<string, string> properties)
     {

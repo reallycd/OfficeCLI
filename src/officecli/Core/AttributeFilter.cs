@@ -150,6 +150,7 @@ internal static class AttributeFilter
                     Suggestion = $"Did you mean [{key}~={val.Trim('*')}]?"
                 };
 
+            RejectRegexOnNonContainsOp(key, op, val, isRegexForm);
             conditions.Add(new Condition(key, op, val));
             matchedSpans.Add((m.Index, m.Index + m.Length));
         }
@@ -239,7 +240,7 @@ internal static class AttributeFilter
         {
             if (cond.Op == FilterOp.NotEqual) continue; // missing key is valid for !=
             bool anyHasKey = nodes.Any(n => ResolveValue(n, cond.Key).HasKey);
-            if (!anyHasKey && nodes.Count > 0)
+            if (!anyHasKey && nodes.Count > 0 && !KeyDeclaredValid(nodes, cond.Key))
             {
                 var keys = GetAllFormatKeys(nodes).ToArray();
                 warnings.Add(new FilterDiagnostic(
@@ -322,6 +323,7 @@ internal static class AttributeFilter
             if (!anyHasKey)
             {
                 if (cond.Op == FilterOp.NotEqual) continue; // an absent key satisfies !=
+                if (KeyDeclaredValid(candidates, cond.Key)) continue; // known-but-unset → a clean 0-match
                 var keys = GetAllFormatKeys(candidates).OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
                 var near = NearestMatch(cond.Key, keys, matchKeySegment: true);
                 var msg = $"Warning: unknown key '{cond.Key}'. Available: {string.Join(", ", keys)}";
@@ -867,7 +869,7 @@ internal static class AttributeFilter
             if (cond.Op != FilterOp.NotEqual)
             {
                 bool anyHasKey = nodes.Any(n => ResolveValue(n, cond.Key).HasKey);
-                if (!anyHasKey && nodes.Count > 0)
+                if (!anyHasKey && nodes.Count > 0 && !KeyDeclaredValid(nodes, cond.Key))
                 {
                     var keys = GetAllFormatKeys(nodes).ToArray();
                     warnings.Add(new FilterDiagnostic(
@@ -1335,6 +1337,33 @@ internal static class AttributeFilter
             "!=" => FilterOp.NotEqual,
             _ => FilterOp.Equal
         };
+        RejectRegexOnNonContainsOp(key, op, val, isRegexForm);
         return new Condition(key.TrimStart('@'), op, val);
+    }
+
+    // A node may DECLARE keys that are valid for its type even when no node in
+    // the result set currently carries a value (sparse emit-only-when-set
+    // props, e.g. Excel row height/hidden). Handlers stamp the set on
+    // InternalFormat["declaredKeys"]; a filter on a declared-but-unset key is a
+    // clean 0-match, not an "unknown key" warning.
+    private static bool KeyDeclaredValid(List<DocumentNode> nodes, string key)
+        => nodes.Any(n => n.InternalFormat.TryGetValue("declaredKeys", out var v)
+            && v is IEnumerable<string> ks && ks.Contains(key, StringComparer.OrdinalIgnoreCase));
+
+    // Only ~= evaluates the r"..." regex form; every other operator compares
+    // the raw `r"..."` string LITERALLY, which silently matches nothing (the
+    // stored text almost never contains the quotes). Fail fast instead — a
+    // silent 0-hit reads as "the data doesn't exist". To compare against a
+    // literal value that genuinely starts with r", quote it: [key="r\"x\""].
+    private static void RejectRegexOnNonContainsOp(string key, FilterOp op, string val, bool isRegexForm)
+    {
+        if (!isRegexForm || op == FilterOp.Contains) return;
+        throw new CliException(
+            $"Regex values (r\"...\") are only supported with the ~= operator; " +
+            $"'{OpToString(op)}' would compare the r\"...\" text literally and match nothing. Use [{key.TrimStart('@')}~={val}].")
+        {
+            Code = "invalid_selector",
+            Suggestion = $"[{key.TrimStart('@')}~={val}]",
+        };
     }
 }
