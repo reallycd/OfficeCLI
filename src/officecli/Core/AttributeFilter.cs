@@ -54,6 +54,34 @@ internal static class AttributeFilter
         @"\[([^\]]*)\]",
         RegexOptions.Compiled);
 
+    // Quote-aware extraction of top-level [...] block contents. Brackets inside
+    // a quoted value ("...", '...', or the r"..."/r'...' regex form) are treated
+    // as literal text, so a regex character class ([a-z]) or any value that
+    // contains a bracket does not truncate the block or unbalance the selector.
+    // `balanced` is false when a '[' is never closed (outside quotes) or a ']'
+    // appears with no open block — the caller reports an unclosed-bracket error.
+    private static List<string> ExtractBracketBlocks(string selector, out bool balanced)
+    {
+        var blocks = new List<string>();
+        char? quote = null;
+        int blockStart = -1;
+        bool strayClose = false;
+        for (int i = 0; i < selector.Length; i++)
+        {
+            char c = selector[i];
+            if (quote.HasValue) { if (c == quote.Value) quote = null; continue; }
+            if (c == '"' || c == '\'') { quote = c; continue; }
+            if (c == '[') { if (blockStart < 0) blockStart = i + 1; }
+            else if (c == ']')
+            {
+                if (blockStart >= 0) { blocks.Add(selector[blockStart..i]); blockStart = -1; }
+                else strayClose = true;
+            }
+        }
+        balanced = blockStart < 0 && !strayClose && !quote.HasValue;
+        return blocks;
+    }
+
     // Regex: numeric positional index [N] only (used for reverse-doc-order keys).
     private static readonly Regex BracketIndexRegex = new(
         @"\[(\d+)\]",
@@ -113,7 +141,7 @@ internal static class AttributeFilter
             // matches. Users tried e.g. `ole[progId=Excel*]` expecting a
             // contains-like match. Fail fast with a clear error pointing to
             // the right operator rather than quietly mis-filtering.
-            if (val.Contains('*'))
+            if (!isRegexForm && val.Contains('*'))
                 throw new CliException(
                     $"Wildcards (*) are not supported in attribute filters. " +
                     $"Use ~= for contains, e.g. {key}~={val.Trim('*')}.")
@@ -752,9 +780,13 @@ internal static class AttributeFilter
     /// </summary>
     public static FilterExpr? ParseExpr(string selector)
     {
-        var openCount = selector.Count(c => c == '[');
-        var closeCount = selector.Count(c => c == ']');
-        if (openCount != closeCount)
+        // Quote-aware bracket extraction: a `[` or `]` inside a quoted value
+        // (including the r"..."/r'...' regex form) is literal, so a regex
+        // character class `[a-z]` or a value containing `]` neither truncates
+        // the block nor trips the balance check. A raw count would mis-handle
+        // both (unterminated-quote for r"[A]", unclosed-bracket for "x]y").
+        var blocks = ExtractBracketBlocks(selector, out bool balanced);
+        if (!balanced)
             throw new CliException($"Malformed selector: unclosed bracket in \"{selector}\"")
             {
                 Code = "invalid_selector",
@@ -762,9 +794,8 @@ internal static class AttributeFilter
             };
 
         var parts = new List<FilterExpr>();
-        foreach (Match block in BracketBlockRegex.Matches(selector))
+        foreach (var content in blocks)
         {
-            var content = block.Groups[1].Value;
             if (string.IsNullOrWhiteSpace(content))
                 throw new CliException($"Malformed selector: empty brackets \"[]\" in \"{selector}\"")
                 {
@@ -1286,7 +1317,11 @@ internal static class AttributeFilter
                 Code = "invalid_selector",
                 Suggestion = $"Did you mean [{key}={val.TrimStart('=', '~', '!')}]?"
             };
-        if (val.Contains('*'))
+        // The wildcard guard is for a bare `*` (glob), which the engine does not
+        // support. A regex value (r"...") legitimately uses `*` as a quantifier
+        // (`.*`, `a*`) — exempt it, or the flagship regex form is unusable and
+        // the error even suggests the r"..." syntax it just rejected.
+        if (!isRegexForm && val.Contains('*'))
             throw new CliException($"Wildcards (*) are not supported in attribute filters. Use ~= for contains, e.g. {key}~={val.Trim('*')}.")
             {
                 Code = "invalid_selector",
