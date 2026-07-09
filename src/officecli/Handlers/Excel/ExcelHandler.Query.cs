@@ -1256,9 +1256,38 @@ public partial class ExcelHandler
         return false;
     }
 
+    // True when a '/' sits outside every bracket and quote — the sheet/path
+    // separator of a slash path, as opposed to a '/' inside a predicate value.
+    private static bool HasTopLevelSlash(string selector)
+    {
+        int bracket = 0, paren = 0;
+        char? quote = null;
+        foreach (var c in selector)
+        {
+            if (quote.HasValue) { if (c == quote.Value) quote = null; continue; }
+            if (c == '"' || c == '\'') { quote = c; continue; }
+            else if (c == '[') bracket++;
+            else if (c == ']') bracket = System.Math.Max(0, bracket - 1);
+            else if (c == '(') paren++;
+            else if (c == ')') paren = System.Math.Max(0, paren - 1);
+            else if (bracket == 0 && paren == 0 && c == '/')
+                return true;
+        }
+        return false;
+    }
+
     private List<DocumentNode> QueryDispatch(string selector)
     {
         var results = new List<DocumentNode>();
+
+        // A slash-path copied from Get output ("/Sheet1/row[2]") that lost its
+        // leading slash ("Sheet1/row[2]") would otherwise read as an unknown
+        // element type and return a silent empty set. A top-level '/' (outside
+        // brackets — a value's '/' like row[url~=a/b] does not count) with no
+        // leading slash is unambiguously that mistake; restore the slash so it
+        // resolves the same as the copied path.
+        if (!selector.StartsWith("/") && HasTopLevelSlash(selector))
+            selector = "/" + selector;
 
         // Handle Excel-native direct cell ref: Sheet1!A1 or Sheet1!A1:D10
         // For ranges (containing ':'), expand the "range" container node into its
