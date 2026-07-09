@@ -395,64 +395,18 @@ internal static class AttributeFilter
         {
             var lc = c.ToLowerInvariant();
             if (lc == lower) continue; // identical — nothing to suggest
-            var d = LevenshteinDistance(lower, lc);
+            var d = EditDistance.Damerau(lower, lc);
             if (matchKeySegment)
             {
                 int dot = lc.LastIndexOf('.');
                 if (dot >= 0 && dot < lc.Length - 1)
-                    d = Math.Min(d, LevenshteinDistance(lower, lc[(dot + 1)..]));
+                    d = Math.Min(d, EditDistance.Damerau(lower, lc[(dot + 1)..]));
             }
             if (d > threshold) continue;
             if (d < bestDist) { bestDist = d; best = c; tie = 1; }
             else if (d == bestDist) tie++;
         }
         return tie == 1 ? best : null;
-    }
-
-    /// <summary>
-    /// Optimal string alignment (restricted Damerau-Levenshtein) distance:
-    /// like Levenshtein but a swap of two adjacent chars costs 1, not 2, so a
-    /// typo like `Salray`→`Salary` scores 1. Used by column-name "did you mean"
-    /// suggestions where adjacent transposition is a common real-world typo.
-    /// </summary>
-    internal static int DamerauLevenshteinDistance(string s, string t)
-    {
-        if (s.Length == 0) return t.Length;
-        if (t.Length == 0) return s.Length;
-        var d = new int[s.Length + 1, t.Length + 1];
-        for (int i = 0; i <= s.Length; i++) d[i, 0] = i;
-        for (int j = 0; j <= t.Length; j++) d[0, j] = j;
-        for (int i = 1; i <= s.Length; i++)
-        {
-            for (int j = 1; j <= t.Length; j++)
-            {
-                int cost = s[i - 1] == t[j - 1] ? 0 : 1;
-                d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
-                if (i > 1 && j > 1 && s[i - 1] == t[j - 2] && s[i - 2] == t[j - 1])
-                    d[i, j] = Math.Min(d[i, j], d[i - 2, j - 2] + 1);
-            }
-        }
-        return d[s.Length, t.Length];
-    }
-
-    internal static int LevenshteinDistance(string s, string t)
-    {
-        if (s.Length == 0) return t.Length;
-        if (t.Length == 0) return s.Length;
-        var prev = new int[t.Length + 1];
-        var cur = new int[t.Length + 1];
-        for (int j = 0; j <= t.Length; j++) prev[j] = j;
-        for (int i = 1; i <= s.Length; i++)
-        {
-            cur[0] = i;
-            for (int j = 1; j <= t.Length; j++)
-            {
-                int cost = s[i - 1] == t[j - 1] ? 0 : 1;
-                cur[j] = Math.Min(Math.Min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + cost);
-            }
-            (prev, cur) = (cur, prev);
-        }
-        return prev[t.Length];
     }
 
     /// <summary>

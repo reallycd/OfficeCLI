@@ -1400,7 +1400,7 @@ static partial class CommandBuilder
         foreach (var prop in KnownProps)
         {
             if (exclude != null && exclude.Contains(prop)) continue;
-            var dist = LevenshteinDistance(lower, prop.ToLowerInvariant());
+            var dist = OfficeCli.Core.EditDistance.Damerau(lower, prop.ToLowerInvariant());
             if (dist > 0 && dist <= Math.Max(2, rawInput.Length / 3))
             {
                 if (dist < bestDist)
@@ -1417,27 +1417,6 @@ static partial class CommandBuilder
         }
 
         return best != null ? (best, bestDist, bestCount == 1) : (null, int.MaxValue, false);
-    }
-
-    internal static int LevenshteinDistance(string s, string t)
-    {
-        if (s.Length == 0) return t.Length;
-        if (t.Length == 0) return s.Length;
-
-        var d = new int[s.Length + 1, t.Length + 1];
-        for (int i = 0; i <= s.Length; i++) d[i, 0] = i;
-        for (int j = 0; j <= t.Length; j++) d[0, j] = j;
-
-        for (int i = 1; i <= s.Length; i++)
-        {
-            for (int j = 1; j <= t.Length; j++)
-            {
-                int cost = s[i - 1] == t[j - 1] ? 0 : 1;
-                d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
-            }
-        }
-
-        return d[s.Length, t.Length];
     }
 
     // ==================== PPT spatial info helpers ====================

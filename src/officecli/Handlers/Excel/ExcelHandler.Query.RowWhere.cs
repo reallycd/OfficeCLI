@@ -286,7 +286,7 @@ public partial class ExcelHandler
     private static string[] NearestColumns(List<string> cols, List<string> wanted)
         => cols
             .Select(col => (col, dist: wanted.Count == 0 ? int.MaxValue
-                : wanted.Min(w => AttributeFilter.DamerauLevenshteinDistance(
+                : wanted.Min(w => Core.EditDistance.Damerau(
                     w.ToLowerInvariant(), col.ToLowerInvariant()))))
             .OrderBy(x => x.dist)
             .Take(ColumnSuggestTopK)
