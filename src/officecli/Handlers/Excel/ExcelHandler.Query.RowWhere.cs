@@ -33,6 +33,26 @@ public partial class ExcelHandler
     // Strip a `col.` / `column.` namespace prefix from a predicate key. The
     // prefix forces COLUMN interpretation at parse time; the resolver works on
     // the bare name. Case-insensitive. Returns the key unchanged when absent.
+    private static int LevenshteinDistanceRowWhere(string a, string b)
+    {
+        if (a.Length == 0) return b.Length;
+        if (b.Length == 0) return a.Length;
+        var prev = new int[b.Length + 1];
+        var cur = new int[b.Length + 1];
+        for (int j = 0; j <= b.Length; j++) prev[j] = j;
+        for (int i = 1; i <= a.Length; i++)
+        {
+            cur[0] = i;
+            for (int j = 1; j <= b.Length; j++)
+            {
+                var cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                cur[j] = Math.Min(Math.Min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + cost);
+            }
+            (prev, cur) = (cur, prev);
+        }
+        return prev[b.Length];
+    }
+
     private static string StripColPrefix(string key)
     {
         var m = Regex.Match(key, @"^col(?:umn)?\.(.+)$", RegexOptions.IgnoreCase);
@@ -53,6 +73,10 @@ public partial class ExcelHandler
         // authoritative (column names are stored metadata); detected tables are
         // a header-sniff heuristic (stable=false), so they are only consulted
         // when no ListObject matches — a real table never loses to a guess.
+        // Every table's headers within scope, for the unknown-column error:
+        // callers need the available names (or nearest matches) to fix a typo
+        // without a separate query round-trip.
+        var allTableHeaders = new List<(string Label, List<string> Columns)>();
         var listObjCands = new List<(string sheetName, WorksheetPart part, string label, string source,
             int dataR1, int dataR2, Dictionary<string, int> colAbsIndex)>();
         var detectedCands = new List<(string sheetName, WorksheetPart part, string label, string source,
@@ -74,6 +98,7 @@ public partial class ExcelHandler
 
                 var colNames = tbl.GetFirstChild<TableColumns>()?.Elements<TableColumn>()
                     .Select(c => c.Name?.Value ?? "").ToList() ?? new List<string>();
+                allTableHeaders.Add(($"{sheetName}!{tbl.Name?.Value ?? "table"}", colNames));
                 var resolved = ResolveColumns(colNames, rng.c1, rng.c2, colConds);
                 if (resolved == null) continue;
 
@@ -104,9 +129,40 @@ public partial class ExcelHandler
         {
             var cols = string.Join(", ", colConds.Select(c => $"'{StripColPrefix(c.Key)}'"));
             var scope = sheetFilter == null ? "any sheet" : $"sheet '{sheetFilter}'";
-            throw new ArgumentException(
-                $"row[col op val] found no table on {scope} with column(s) {cols}. " +
-                "Column predicates resolve header names (or column letters) against a ListObject or a detected (header-row) table.");
+            var baseMsg = $"row[col op val] found no table on {scope} with column(s) {cols}. "
+                + "Column predicates resolve header names (or column letters) against a ListObject or a detected (header-row) table.";
+            if (allTableHeaders.Count == 0)
+                throw new CliException(baseMsg) { Code = "not_found" };
+
+            // Tables exist but none owns the referenced column(s) — surface
+            // the available headers so the caller can fix the typo without a
+            // separate query round-trip. Narrow tables list everything; wide
+            // tables (>20 headers) rank the nearest names instead and point
+            // at the column-listing command.
+            var headerPool = allTableHeaders.SelectMany(t => t.Columns)
+                .Where(h => h.Length > 0).Distinct().ToList();
+            var missing = StripColPrefix(colConds[0].Key);
+            if (headerPool.Count <= 20)
+            {
+                var listing = string.Join("; ", allTableHeaders.Select(t =>
+                    $"table '{t.Label}' has columns: {string.Join(", ", t.Columns)}"));
+                throw new CliException($"{baseMsg} Available: {listing}")
+                {
+                    Code = "not_found",
+                    ValidValues = headerPool.ToArray(),
+                };
+            }
+            var nearest = headerPool
+                .OrderBy(h => LevenshteinDistanceRowWhere(missing.ToLowerInvariant(), h.ToLowerInvariant()))
+                .Take(5).ToList();
+            throw new CliException(
+                $"{baseMsg} did you mean: {string.Join(", ", nearest)}? "
+                + "Run `query table --json` to list all columns.")
+            {
+                Code = "not_found",
+                ValidValues = nearest.ToArray(),
+                Help = "query table --json",
+            };
         }
         if (candidates.Count > 1)
         {
