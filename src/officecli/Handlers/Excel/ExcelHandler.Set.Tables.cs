@@ -374,6 +374,13 @@ public partial class ExcelHandler
                     // must be handled here, not caught downstream.
                     var headerOn = IsTruthy(value);
                     table.HeaderRowCount = headerOn ? 1u : 0u;
+                    // Turning the header ON: the first row's cells must carry
+                    // text EXACTLY matching each <tableColumn name>. Add's create
+                    // path stamps them; the Set toggle did not, so a numeric
+                    // first row (10, 20) stayed mismatched from Column1/Column2
+                    // and real Excel refused the file (0x800A03EC). Stamp here.
+                    if (headerOn)
+                        StampTableHeaderCells(worksheet, table);
                     var existingAf = table.GetFirstChild<AutoFilter>();
                     if (!headerOn)
                     {
@@ -575,6 +582,59 @@ public partial class ExcelHandler
 
         tableParts[PathIndex.ToArrayIndex(tableIdx)].Table!.Save();
         return tblUnsupported;
+    }
+
+    /// <summary>
+    /// Stamp a table's header-row (first-row) cells with inline-string text
+    /// EXACTLY matching each &lt;tableColumn name&gt;. Excel requires this match;
+    /// a numeric or mismatched header cell makes it refuse the file
+    /// (0x800A03EC). Mirrors the create-time stamping in AddTable so the
+    /// Set headerRow=true toggle produces a valid header row.
+    /// </summary>
+    private void StampTableHeaderCells(WorksheetPart worksheet, Table table)
+    {
+        if (table.Reference?.Value is not { } refStr) return;
+        var first = refStr.Split(':')[0];
+        var (startColName, startRow) = ParseCellReference(first);
+        int startColIdx = ColumnNameToIndex(startColName);
+        var colNames = (table.GetFirstChild<TableColumns>()?.Elements<TableColumn>()
+            .Select(c => c.Name?.Value ?? "").ToList()) ?? new List<string>();
+        if (colNames.Count == 0) return;
+
+        var sheetData = GetSheet(worksheet).GetFirstChild<SheetData>()
+            ?? GetSheet(worksheet).AppendChild(new SheetData());
+        var hdrRow = sheetData.Elements<Row>().FirstOrDefault(r => r.RowIndex?.Value == (uint)startRow);
+        if (hdrRow == null)
+        {
+            hdrRow = new Row { RowIndex = (uint)startRow };
+            var insertAfter = sheetData.Elements<Row>()
+                .Where(r => r.RowIndex?.Value < (uint)startRow).LastOrDefault();
+            if (insertAfter != null) insertAfter.InsertAfterSelf(hdrRow);
+            else sheetData.PrependChild(hdrRow);
+        }
+        for (int i = 0; i < colNames.Count; i++)
+        {
+            var cellRefStr = $"{IndexToColumnName(startColIdx + i)}{startRow}";
+            var headerCell = hdrRow.Elements<Cell>()
+                .FirstOrDefault(c => c.CellReference?.Value == cellRefStr);
+            if (headerCell == null)
+            {
+                headerCell = new Cell { CellReference = cellRefStr };
+                var insertBefore = hdrRow.Elements<Cell>()
+                    .FirstOrDefault(c => ColumnNameToIndex(
+                        System.Text.RegularExpressions.Regex.Match(
+                            c.CellReference?.Value ?? "", @"^[A-Z]+").Value) > startColIdx + i);
+                if (insertBefore != null) insertBefore.InsertBeforeSelf(headerCell);
+                else hdrRow.AppendChild(headerCell);
+            }
+            if (!string.Equals(GetCellDisplayValue(headerCell), colNames[i], StringComparison.Ordinal))
+            {
+                headerCell.DataType = CellValues.InlineString;
+                headerCell.CellValue = null;
+                headerCell.CellFormula = null;
+                headerCell.InlineString = new InlineString(new Text(colNames[i]));
+            }
+        }
     }
 
     private List<string> SetCommentByPath(Match m, WorksheetPart worksheet, string sheetName, Dictionary<string, string> properties)
