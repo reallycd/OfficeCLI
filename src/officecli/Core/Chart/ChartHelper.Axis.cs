@@ -246,10 +246,16 @@ internal static partial class ChartHelper
                         var scaling = minAx2.GetFirstChild<C.Scaling>();
                         if (scaling != null)
                         {
+                            var minV = ParseHelpers.SafeParseDouble(value, "min");
+                            // A log-scaled axis cannot have min <= 0 (Excel
+                            // refuses the file, 0x800A03EC).
+                            if (minV <= 0 && scaling.GetFirstChild<C.LogBase>() != null)
+                                throw new ArgumentException(
+                                    $"min={value} is invalid on a log-scaled axis: a logarithmic axis minimum must be greater than 0.");
                             scaling.RemoveAllChildren<C.MinAxisValue>();
                             // CT_Scaling order: logBase, orientation, max, min —
                             // min is last, so append is always valid.
-                            scaling.AppendChild(new C.MinAxisValue { Val = ParseHelpers.SafeParseDouble(value, "min") });
+                            scaling.AppendChild(new C.MinAxisValue { Val = minV });
                         }
                         directlyHandled.Add(key);
                     }
@@ -462,6 +468,12 @@ internal static partial class ChartHelper
                                     throw new ArgumentException($"Invalid logBase '{value}': must be in the OOXML range [2, 1000] (ST_LogBase).");
                                 newLogBase = logVal;
                             }
+                            // A log scale requires axis min > 0 (Excel refuses
+                            // the file, 0x800A03EC).
+                            if (newLogBase != null
+                                && scaling.GetFirstChild<C.MinAxisValue>()?.Val?.Value is { } curMin && curMin <= 0)
+                                throw new ArgumentException(
+                                    $"logBase cannot be enabled while the axis minimum ({curMin}) is <= 0: a logarithmic axis minimum must be greater than 0.");
                             scaling.RemoveAllChildren<C.LogBase>();
                             if (newLogBase != null)
                                 scaling.PrependChild(new C.LogBase { Val = newLogBase.Value });
