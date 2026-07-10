@@ -580,7 +580,7 @@ public partial class ExcelHandler
                     && inferredDate >= new System.DateTime(1900, 1, 1))
                 {
                     cell.CellValue = new CellValue(
-                        ExcelDataFormatter.ToExcelSerial(inferredDate).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        ExcelDataFormatter.ToExcelSerial(inferredDate, IsWorkbookDate1904()).ToString(System.Globalization.CultureInfo.InvariantCulture));
                     cell.DataType = null;
                 }
                 else if (!double.TryParse(safeValue, out var dbl) || !double.IsFinite(dbl))
@@ -710,7 +710,7 @@ public partial class ExcelHandler
                                 $"Cannot store '{dateText}' as date; Excel does not support dates before 1900-01-01 " +
                                 $"(serial epoch is 1899-12-30). Use type=string to keep the literal text.");
                         cell.CellValue = new CellValue(
-                            ExcelDataFormatter.ToExcelSerial(dt).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                            ExcelDataFormatter.ToExcelSerial(dt, IsWorkbookDate1904()).ToString(System.Globalization.CultureInfo.InvariantCulture));
                     }
                     else if (!string.IsNullOrEmpty(dateText))
                     {

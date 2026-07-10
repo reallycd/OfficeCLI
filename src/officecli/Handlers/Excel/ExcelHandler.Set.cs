@@ -562,7 +562,7 @@ public partial class ExcelHandler
                                 throw new ArgumentException(
                                     $"Cannot store '{cellValue}' as date; Excel does not support dates before 1900-01-01 " +
                                     $"(serial epoch is 1899-12-30). Use type=string to keep the literal text.");
-                            cell.CellValue = new CellValue(ExcelDataFormatter.ToExcelSerial(dt).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                            cell.CellValue = new CellValue(ExcelDataFormatter.ToExcelSerial(dt, IsWorkbookDate1904()).ToString(System.Globalization.CultureInfo.InvariantCulture));
                             cell.DataType = null;
                             if (!properties.ContainsKey("numberformat") && !properties.ContainsKey("numfmt") && !properties.ContainsKey("format"))
                                 styleProps["numberformat"] = "yyyy-mm-dd";
