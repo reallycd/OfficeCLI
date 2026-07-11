@@ -429,6 +429,7 @@ public partial class ExcelHandler
                     break;
                 }
                 case "totalrow":
+                case "totalsrow":   // Excel UI calls it "Total Row"; the plural slips in
                 case "showtotals":
                 {
                     // CONSISTENCY(table-totalrow): mirror Add — toggling

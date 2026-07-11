@@ -292,6 +292,19 @@ public partial class ExcelHandler
         _ => false,
     };
 
+    // Every key SetRow interprets as a row property — used by the
+    // column-shadow collision check: a bare key in this set that ALSO resolves
+    // as a table column is ambiguous. Single source: the query-side
+    // RowAttributeKeys (Get-emitted props) plus the Set-only input aliases and
+    // the long-tail CT_Row passthrough attrs. The set is deliberately WIDER
+    // than the query side's: query can only filter on keys Get emits, so a
+    // bare `row[style=…]` is unambiguous there (must be a column), while Set
+    // can write style/group/… and therefore must treat them as colliding.
+    private static bool IsRowSetAttributeKey(string key)
+        => RowAttributeKeys.Contains(key)
+            || key.ToLowerInvariant() is "rowheight" or "outline" or "group"
+            || IsLongTailRowAttribute(key);
+
     private List<string> SetRow(WorksheetPart worksheet, uint rowIdx, Dictionary<string, string> properties)
     {
         var unsupported = new List<string>();
@@ -312,9 +325,34 @@ public partial class ExcelHandler
         // set cell-in-row-N.
         var row = FindOrCreateRow(sheetData, rowIdx);
 
-        foreach (var (key, value) in properties)
+        foreach (var (rawKey, value) in properties)
         {
-            switch (key.ToLowerInvariant())
+            // CONSISTENCY(row-col-collision): same escape vocabulary as the
+            // query side (`row[@height…]` / `row[col.Salary…]`) — `@key`
+            // forces the ROW PROPERTY, `col.key` forces the table COLUMN. A
+            // bare key that names BOTH (a table column literally called
+            // "Height"/"Group"/"Style" over this row) is ambiguous and throws
+            // instead of silently picking one: before this check the switch
+            // cases below always won for height/hidden/outline/group/
+            // collapsed (so `--prop Height=180` re-sized the row instead of
+            // writing the cell), while long-tail attrs silently lost to the
+            // column — both directions were silent wrong-writes.
+            bool forcedAttr = rawKey.StartsWith("@", StringComparison.Ordinal);
+            var key = forcedAttr ? rawKey[1..] : rawKey;
+            bool forcedCol = !forcedAttr
+                && System.Text.RegularExpressions.Regex.IsMatch(key, @"^col(?:umn)?\.", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!forcedAttr && !forcedCol && IsRowSetAttributeKey(key)
+                && TryResolveRowColumnCell(worksheet, rowIdx, key, out _))
+                throw new Core.CliException(
+                    $"set row[{rowIdx}] --prop {key}=… is ambiguous: '{key}' names both a row property and a table column. " +
+                    $"Use --prop col.{key}=… to write the column's cell, or --prop @{key}=… for the row property.")
+                {
+                    Code = "invalid_selector",
+                    Suggestion = $"col.{key}={value} (table column) or @{key}={value} (row property)",
+                    ValidValues = new[] { $"col.{key}", $"@{key}" },
+                };
+
+            switch (forcedCol ? null : key.ToLowerInvariant())
             {
                 case "height" or "rowheight":
                     row.Height = ParseRowHeightPoints(value);
@@ -345,14 +383,14 @@ public partial class ExcelHandler
                     // neither is reported as unsupported — NEVER silently written
                     // (the old bug stamped `年龄="99"` onto <row> and reported
                     // success while the data never changed).
-                    if (TryResolveRowColumnCell(worksheet, rowIdx, key, out var colCellRef))
+                    if (!forcedAttr && TryResolveRowColumnCell(worksheet, rowIdx, key, out var colCellRef))
                     {
                         var colCell = FindOrCreateCell(sheetData, colCellRef);
                         unsupported.AddRange(ApplyCellProperties(
                             colCell, colCellRef, worksheet, new() { ["value"] = value }));
                         PruneEmptyCell(colCell);
                     }
-                    else if (IsLongTailRowAttribute(key))
+                    else if (!forcedCol && IsLongTailRowAttribute(key))
                     {
                         row.SetAttribute(new DocumentFormat.OpenXml.OpenXmlAttribute("", key, "", value));
                     }

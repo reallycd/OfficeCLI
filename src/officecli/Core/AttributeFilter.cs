@@ -69,7 +69,12 @@ internal static class AttributeFilter
         for (int i = 0; i < selector.Length; i++)
         {
             char c = selector[i];
-            if (quote.HasValue) { if (c == quote.Value) quote = null; continue; }
+            if (quote.HasValue)
+            {
+                if (c == '\\' && i + 1 < selector.Length) { i++; continue; }   // \" stays inside the quote
+                if (c == quote.Value) quote = null;
+                continue;
+            }
             if (c == '"' || c == '\'') { quote = c; continue; }
             if (c == '[') { if (blockStart < 0) blockStart = i + 1; }
             else if (c == ']')
@@ -116,7 +121,7 @@ internal static class AttributeFilter
             // would otherwise eat the surrounding quote that marks the prefix.
             var isRegexForm = rawVal.Length >= 3 && rawVal[0] == 'r'
                 && (rawVal[1] == '"' || rawVal[1] == '\'');
-            var val = isRegexForm ? rawVal : rawVal.Trim('\'', '"');
+            var val = isRegexForm ? rawVal : UnquoteValue(rawVal);
 
             // Detect corrupted values from mis-parsed operators (e.g. === parsed as = with value ==X)
             if (val.StartsWith("=") || val.StartsWith("~") || val.StartsWith("!"))
@@ -150,6 +155,7 @@ internal static class AttributeFilter
                     Suggestion = $"Did you mean [{key}~={val.Trim('*')}]?"
                 };
 
+            RejectRegexOnNonContainsOp(key, op, val, isRegexForm);
             conditions.Add(new Condition(key, op, val));
             matchedSpans.Add((m.Index, m.Index + m.Length));
         }
@@ -239,7 +245,7 @@ internal static class AttributeFilter
         {
             if (cond.Op == FilterOp.NotEqual) continue; // missing key is valid for !=
             bool anyHasKey = nodes.Any(n => ResolveValue(n, cond.Key).HasKey);
-            if (!anyHasKey && nodes.Count > 0)
+            if (!anyHasKey && nodes.Count > 0 && !KeyDeclaredValid(nodes, cond.Key))
             {
                 var keys = GetAllFormatKeys(nodes).ToArray();
                 warnings.Add(new FilterDiagnostic(
@@ -322,6 +328,7 @@ internal static class AttributeFilter
             if (!anyHasKey)
             {
                 if (cond.Op == FilterOp.NotEqual) continue; // an absent key satisfies !=
+                if (KeyDeclaredValid(candidates, cond.Key)) continue; // known-but-unset → a clean 0-match
                 var keys = GetAllFormatKeys(candidates).OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
                 var near = NearestMatch(cond.Key, keys, matchKeySegment: true);
                 var msg = $"Warning: unknown key '{cond.Key}'. Available: {string.Join(", ", keys)}";
@@ -516,7 +523,12 @@ internal static class AttributeFilter
         if ((cond.Op == FilterOp.Equal || cond.Op == FilterOp.NotEqual)
             && string.Equals(cond.Key, "style", StringComparison.OrdinalIgnoreCase))
         {
-            bool dualHit = StringEquals(node.Style ?? "", cond.Value)
+            // hasKey/actualStr covers nodes whose "style" key is NOT the Word
+            // paragraph style at all — e.g. an Excel row-where probe carrying a
+            // table column literally headed "Style" — so the dual-key sugar
+            // must not shadow the plain resolved value.
+            bool dualHit = (hasKey && StringEquals(actualStr, cond.Value))
+                || StringEquals(node.Style ?? "", cond.Value)
                 || (node.Format.TryGetValue("style", out var sid) && StringEquals(sid?.ToString() ?? "", cond.Value))
                 || (node.Format.TryGetValue("styleName", out var sname) && StringEquals(sname?.ToString() ?? "", cond.Value));
             return cond.Op == FilterOp.Equal ? dualHit : !dualHit;
@@ -712,7 +724,7 @@ internal static class AttributeFilter
         return null;
     }
 
-    private static decimal? ExtractNumber(string value)
+    private static double? ExtractNumber(string value)
     {
         if (string.IsNullOrEmpty(value)) return null;
 
@@ -727,7 +739,13 @@ internal static class AttributeFilter
             }
         }
 
-        return decimal.TryParse(trimmed, NumberStyles.Any, CultureInfo.InvariantCulture, out var n) ? n : null;
+        // double, not decimal: Excel's numeric domain is IEEE double
+        // (±9.99e307, 15 significant digits). decimal.TryParse silently fails
+        // past ~7.9e28, which made `[Amount>1e200]` a no-match while
+        // `[Amount=1e300]` still hit via the string-equality fallback —
+        // wrong answers with no warning. Non-finite parses (1e999) stay null.
+        return double.TryParse(trimmed, NumberStyles.Any, CultureInfo.InvariantCulture, out var n)
+            && double.IsFinite(n) ? n : null;
     }
 
     private static string ExtractUnit(string value)
@@ -763,6 +781,7 @@ internal static class AttributeFilter
     public sealed record PredicateExpr(Condition Cond) : FilterExpr;
     public sealed record AndExpr(IReadOnlyList<FilterExpr> Parts) : FilterExpr;
     public sealed record OrExpr(IReadOnlyList<FilterExpr> Parts) : FilterExpr;
+    public sealed record NotExpr(FilterExpr Part) : FilterExpr;
 
     /// <summary>
     /// Parse a selector's bracket filters into one expression tree. Multiple
@@ -830,6 +849,7 @@ internal static class AttributeFilter
         PredicateExpr p => new PredicateExpr(new Condition(keyResolver(p.Cond.Key), p.Cond.Op, p.Cond.Value)),
         AndExpr a => new AndExpr(a.Parts.Select(x => NormalizeKeysExpr(x, keyResolver)).ToList()),
         OrExpr o => new OrExpr(o.Parts.Select(x => NormalizeKeysExpr(x, keyResolver)).ToList()),
+        NotExpr n => new NotExpr(NormalizeKeysExpr(n.Part, keyResolver)),
         _ => expr
     };
 
@@ -840,6 +860,7 @@ internal static class AttributeFilter
         PredicateExpr p => MatchOne(node, p.Cond),
         AndExpr a => a.Parts.All(x => MatchesExpr(node, x)),
         OrExpr o => o.Parts.Any(x => MatchesExpr(node, x)),
+        NotExpr n => !MatchesExpr(node, n.Part),
         _ => true
     };
 
@@ -862,7 +883,7 @@ internal static class AttributeFilter
             if (cond.Op != FilterOp.NotEqual)
             {
                 bool anyHasKey = nodes.Any(n => ResolveValue(n, cond.Key).HasKey);
-                if (!anyHasKey && nodes.Count > 0)
+                if (!anyHasKey && nodes.Count > 0 && !KeyDeclaredValid(nodes, cond.Key))
                 {
                     var keys = GetAllFormatKeys(nodes).ToArray();
                     warnings.Add(new FilterDiagnostic(
@@ -1034,6 +1055,7 @@ internal static class AttributeFilter
             {
                 case AndExpr:
                 case OrExpr:
+                case NotExpr:                                                // not(...) — negation is always a content filter
                     return true;                                             // boolean expression
                 case PredicateExpr p:
                     if (p.Cond.Op == FilterOp.Exists) break;                // `[A]` / `[key]` bare token → structural (Excel col[A])
@@ -1088,6 +1110,7 @@ internal static class AttributeFilter
         PredicateExpr p => new[] { p.Cond },
         AndExpr a => a.Parts.SelectMany(LeafConditions),
         OrExpr o => o.Parts.SelectMany(LeafConditions),
+        NotExpr n => LeafConditions(n.Part),
         _ => Enumerable.Empty<Condition>()
     };
 
@@ -1095,7 +1118,7 @@ internal static class AttributeFilter
     //   expr   := or
     //   or     := and ( 'or' and )*
     //   and    := factor ( 'and' factor )*
-    //   factor := '(' or ')' | predicate
+    //   factor := 'not' '(' or ')' | '(' or ')' | predicate
     //   pred   := key op value
     private sealed class ExprParser
     {
@@ -1128,9 +1151,20 @@ internal static class AttributeFilter
         private FilterExpr ParseFactor()
         {
             SkipWs();
-            // Only `and` / `or` are reserved. `not` is intentionally NOT a keyword
-            // — it parses as an ordinary value/identifier, leaving the word free
-            // for a future negation design.
+            // `not(...)` negates a sub-expression — the form the Err suggestion
+            // has always advertised. Word-bounded: `[not=5]` (a column named
+            // "not") still parses as a predicate because '=' breaks the keyword;
+            // an exists-check on a column literally named "not" needs quotes
+            // (["not"]).
+            if (TryKeyword("not"))
+            {
+                SkipWs();
+                Expect('(');
+                var negated = ParseOr();
+                SkipWs();
+                Expect(')');
+                return new NotExpr(negated);
+            }
             if (Peek() == '(')
             {
                 _i++;
@@ -1160,6 +1194,14 @@ internal static class AttributeFilter
                 if (_i < _s.Length && _s[_i] == '@') _i++;
                 while (_i < _s.Length && (char.IsLetterOrDigit(_s[_i]) || _s[_i] == '.' || _s[_i] == '_')) _i++;
                 key = _s[keyStart.._i];
+                // The bare reader stopped INSIDE the name (emoji, dash, … —
+                // anything outside letters/digits/._). Without this check the
+                // leftover reads as trailing junk ("unexpected '📊>90'") with
+                // no hint that quoting the header is the fix.
+                if (key.Length > 0 && _i < _s.Length && !char.IsWhiteSpace(_s[_i])
+                    && _s[_i] != ')' && !IsOpStart(_s[_i]))
+                    throw Err($"key '{key}' stops at '{_s[_i..Math.Min(_i + 4, _s.Length)]}' — a name with characters " +
+                              $"outside letters/digits/._ must be quoted, e.g. [\"{key}…\">90]");
             }
             if (key.Length == 0 || key == "@")
                 throw Err($"expected a predicate (key op value) at '{_s[_i..]}'");
@@ -1222,7 +1264,11 @@ internal static class AttributeFilter
             if (rPrefixed) _i++;                 // consume 'r'
             char quote = _s[_i];
             _i++;                                // consume opening quote
-            while (_i < _s.Length && _s[_i] != quote) _i++;
+            // A backslash escapes the next char, so \" continues the string
+            // (r-form included, Python-raw-string style: the backslash itself
+            // stays in the token — UnquoteValue / the regex engine handle it).
+            while (_i < _s.Length && _s[_i] != quote)
+                _i += _s[_i] == '\\' && _i + 1 < _s.Length ? 2 : 1;
             if (_i >= _s.Length) throw Err($"unterminated quoted value in '{_s[start..]}'");
             _i++;                                // consume closing quote
             return _s[start.._i];
@@ -1236,9 +1282,12 @@ internal static class AttributeFilter
             char quote = _s[_i];
             _i++;                                // consume opening quote
             int start = _i;
-            while (_i < _s.Length && _s[_i] != quote) _i++;
+            while (_i < _s.Length && _s[_i] != quote)
+                _i += _s[_i] == '\\' && _i + 1 < _s.Length ? 2 : 1;
             if (_i >= _s.Length) throw Err($"unterminated quoted key in '{_s[start..]}'");
-            var inner = _s[start.._i];
+            // Re-wrap so UnquoteValue applies the same one-pair strip + escape
+            // processing as values (a header can contain the quote char too).
+            var inner = UnquoteValue(quote + _s[start.._i] + quote);
             _i++;                                // consume closing quote
             return inner;
         }
@@ -1301,7 +1350,7 @@ internal static class AttributeFilter
     private static Condition BuildCondition(string key, string opStr, string rawVal)
     {
         var isRegexForm = rawVal.Length >= 3 && rawVal[0] == 'r' && (rawVal[1] == '"' || rawVal[1] == '\'');
-        var val = isRegexForm ? rawVal : rawVal.Trim('\'', '"');
+        var val = isRegexForm ? rawVal : UnquoteValue(rawVal);
 
         if (val.StartsWith("=") || val.StartsWith("~") || val.StartsWith("!"))
             throw new CliException($"Malformed selector: invalid operator near \"{key}{opStr}{val}\". Supported operators: =, !=, ~=, >=, <=, >, <")
@@ -1330,6 +1379,57 @@ internal static class AttributeFilter
             "!=" => FilterOp.NotEqual,
             _ => FilterOp.Equal
         };
+        RejectRegexOnNonContainsOp(key, op, val, isRegexForm);
         return new Condition(key.TrimStart('@'), op, val);
+    }
+
+    // Strip exactly ONE matching quote pair from a value token, honoring the
+    // backslash escapes the tokenizer recognizes inside a quoted value (\" \'
+    // \\). The old Trim('\'','"') was wrong twice over: it stripped a whole
+    // RUN of trailing quote chars ('a "b"' lost its legal final double quote
+    // and the predicate silently matched nothing), and it stripped mismatched
+    // pairs ("a' → a). Unquoted tokens pass through untouched, so a Windows
+    // path value keeps its backslashes.
+    private static string UnquoteValue(string rawVal)
+    {
+        if (rawVal.Length < 2) return rawVal;
+        char q = rawVal[0];
+        if ((q != '"' && q != '\'') || rawVal[^1] != q) return rawVal;
+        var inner = rawVal[1..^1];
+        if (!inner.Contains('\\')) return inner;
+        var sb = new System.Text.StringBuilder(inner.Length);
+        for (int i = 0; i < inner.Length; i++)
+        {
+            if (inner[i] == '\\' && i + 1 < inner.Length && (inner[i + 1] == q || inner[i + 1] == '\\'))
+            { sb.Append(inner[i + 1]); i++; continue; }
+            sb.Append(inner[i]);
+        }
+        return sb.ToString();
+    }
+
+    // A node may DECLARE keys that are valid for its type even when no node in
+    // the result set currently carries a value (sparse emit-only-when-set
+    // props, e.g. Excel row height/hidden). Handlers stamp the set on
+    // InternalFormat["declaredKeys"]; a filter on a declared-but-unset key is a
+    // clean 0-match, not an "unknown key" warning.
+    private static bool KeyDeclaredValid(List<DocumentNode> nodes, string key)
+        => nodes.Any(n => n.InternalFormat.TryGetValue("declaredKeys", out var v)
+            && v is IEnumerable<string> ks && ks.Contains(key, StringComparer.OrdinalIgnoreCase));
+
+    // Only ~= evaluates the r"..." regex form; every other operator compares
+    // the raw `r"..."` string LITERALLY, which silently matches nothing (the
+    // stored text almost never contains the quotes). Fail fast instead — a
+    // silent 0-hit reads as "the data doesn't exist". To compare against a
+    // literal value that genuinely starts with r", quote it: [key="r\"x\""].
+    private static void RejectRegexOnNonContainsOp(string key, FilterOp op, string val, bool isRegexForm)
+    {
+        if (!isRegexForm || op == FilterOp.Contains) return;
+        throw new CliException(
+            $"Regex values (r\"...\") are only supported with the ~= operator; " +
+            $"'{OpToString(op)}' would compare the r\"...\" text literally and match nothing. Use [{key.TrimStart('@')}~={val}].")
+        {
+            Code = "invalid_selector",
+            Suggestion = $"[{key.TrimStart('@')}~={val}]",
+        };
     }
 }

@@ -63,6 +63,14 @@ public partial class ExcelHandler
         // expression tree (which may be `or` / parens, e.g. row[金额>5 or 金额<1])
         // drives the actual row match via MatchesExpr.
         var colConds = AttributeFilter.LeafConditions(expr).ToList();
+        // `*/row[...]` reads as a literal sheet named "*" and would report the
+        // baffling "no table on sheet '*'". Wildcard sheet scope is not a
+        // thing — the UNSCOPED form already searches every sheet.
+        if (sheetFilter == "*")
+            throw new Core.CliException(
+                "Wildcard sheet scope ('*/row[...]') is not supported — omit the sheet prefix entirely; " +
+                "an unscoped row[...] searches every sheet.")
+            { Code = "invalid_selector", Suggestion = "row[...] (no sheet prefix) searches all sheets" };
         // A table that owns every referenced column. ListObjects are
         // authoritative (column names are stored metadata); detected tables are
         // a header-sniff heuristic (stable=false), so they are only consulted
@@ -172,14 +180,31 @@ public partial class ExcelHandler
         if (sheetData == null) return results;
         var eval = new Core.FormulaEvaluator(sheetData, _doc.WorkbookPart);
 
+        // Index the physically-stored rows in the data range once. FindCell is
+        // a full-sheet scan, so calling it per (row × predicate column) made a
+        // 10k-row table cost O(rows × cells) ≈ seconds per query; one pass
+        // keeps the whole match O(cells). Sparse rows stay probed via the
+        // r-loop below (absent <row> → empty value), same as before.
+        var rowsByIdx = new Dictionary<uint, Row>();
+        foreach (var rw in sheetData.Elements<Row>())
+        {
+            var ri = rw.RowIndex?.Value ?? 0u;
+            if (ri >= (uint)cand.dataR1 && ri <= (uint)cand.dataR2) rowsByIdx[ri] = rw;
+        }
         for (int r = cand.dataR1; r <= cand.dataR2; r++)
         {
+            rowsByIdx.TryGetValue((uint)r, out var xmlRow);
             // Probe node carries each predicate column's cell value under its
             // key so AttributeFilter evaluates all operators with one engine.
             var probe = new DocumentNode { Type = "cell" };
             foreach (var keyGroup in colConds.GroupBy(c => c.Key))
             {
-                var cell = FindCell(sheetData, $"{IndexToColumnName(cand.colAbsIndex[keyGroup.Key])}{r}");
+                var wantRef = $"{IndexToColumnName(cand.colAbsIndex[keyGroup.Key])}{r}";
+                Cell? cell = null;
+                if (xmlRow != null)
+                    foreach (var cc in xmlRow.Elements<Cell>())
+                        if (cc.CellReference?.Value?.Equals(wantRef, StringComparison.OrdinalIgnoreCase) == true)
+                        { cell = cc; break; }
                 if (cell == null) { probe.Format[keyGroup.Key] = ""; continue; }
                 // Compare on the underlying stored value (0.5 / date serial) when
                 // any condition on this column is relational or carries a numeric
@@ -209,13 +234,22 @@ public partial class ExcelHandler
             // because "Salary" is absent from a plain row node's Format.
             foreach (var cond in colConds)
                 rowNode.Format[cond.Key] = probe.Format[cond.Key];
+            // Cross-handler `evaluated` protocol: when a probed column
+            // surfaced the #OCLI_NOTEVAL! sentinel, flag the row so callers
+            // read Format["evaluated"] instead of string-sniffing the
+            // sentinel out of the column value.
+            if (colConds.Any(c => (probe.Format[c.Key]?.ToString() ?? "") == "#OCLI_NOTEVAL!"))
+                rowNode.Format["evaluated"] = false;
             // Trace which table bound the predicate. source=detected flags a
             // header-sniff (stable=false) match so the caller knows the column
             // resolution was heuristic, mirroring DetectTables' own stable flag.
             rowNode.Format["matchedTable"] = cand.label;
             if (cand.source == "detected") rowNode.Format["tableSource"] = "detected";
-            rowNode.ChildCount = sheetData.Elements<Row>()
-                .FirstOrDefault(rw => rw.RowIndex?.Value == (uint)r)?.Elements<Cell>().Count() ?? 0;
+            rowNode.ChildCount = xmlRow?.Elements<Cell>().Count() ?? 0;
+            // Surface the row's own sparse-emit properties (hidden rows DO
+            // match predicates — Excel-consistent), so a hit is self-describing
+            // without a follow-up get row[N].
+            if (xmlRow?.Hidden?.Value == true) rowNode.Format["hidden"] = true;
             results.Add(rowNode);
         }
         return results;
@@ -316,7 +350,26 @@ public partial class ExcelHandler
         absCol = 0;
         key = StripColPrefix(key);   // `col.Salary` → resolve against `Salary`
         var nameIdx = colNames.FindIndex(n => n.Equals(key, StringComparison.OrdinalIgnoreCase));
-        if (nameIdx >= 0) { absCol = c1 + nameIdx; return true; }
+        if (nameIdx >= 0)
+        {
+            // Duplicate header WITHIN one table (only possible on detected
+            // tables — Excel de-dupes real ListObject column names). Silently
+            // taking the first match mis-targets half the time; make the
+            // caller pick the exact column by LETTER instead.
+            var dupIdx = colNames.FindIndex(nameIdx + 1, n => n.Equals(key, StringComparison.OrdinalIgnoreCase));
+            if (dupIdx >= 0)
+                throw new Core.CliException(
+                    $"Column '{key}' is ambiguous: this table has {colNames.Count(n => n.Equals(key, StringComparison.OrdinalIgnoreCase))} " +
+                    $"columns with that header. Address it by column letter instead, e.g. '{IndexToColumnName(c1 + nameIdx)}' or '{IndexToColumnName(c1 + dupIdx)}'.")
+                {
+                    Code = "invalid_selector",
+                    ValidValues = colNames.Select((n, i) => (n, i))
+                        .Where(x => x.n.Equals(key, StringComparison.OrdinalIgnoreCase))
+                        .Select(x => IndexToColumnName(c1 + x.i)).ToArray(),
+                };
+            absCol = c1 + nameIdx;
+            return true;
+        }
         if (Regex.IsMatch(key, @"^[A-Za-z]{1,3}$"))
         {
             var letterIdx = ColumnNameToIndex(key.ToUpperInvariant());

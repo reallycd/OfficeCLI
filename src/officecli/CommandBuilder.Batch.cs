@@ -20,7 +20,7 @@ static partial class CommandBuilder
         + "Each array item is an OBJECT whose \"command\" is the bare verb "
         + "(add/set/remove/move/swap/get/query/...); the verb's arguments are SIBLING fields, "
         + "not a CLI string inside \"command\". Common fields: \"parent\" (add target), "
-        + "\"path\" (set/remove/get target), \"type\" (element type for add), "
+        + "\"path\" (set/remove/get target), \"selector\" (query filter; \"path\" is accepted as an alias), \"type\" (element type for add), "
         + "\"props\" (a key->value map of --prop values), \"to\"/\"after\"/\"before\" (move), "
         + "\"path2\" (swap's second path).\n\n"
         + "Pass the array via --commands, or as the same JSON on stdin / --input <file>. Example:\n"

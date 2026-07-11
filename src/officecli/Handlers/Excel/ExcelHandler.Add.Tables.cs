@@ -1143,6 +1143,7 @@ public partial class ExcelHandler
         // alongside `totalRow=true` (mirrors the `showHeader` alias
         // pattern above for users coming from Office API vocabulary).
         var hasTotalRow = (properties.TryGetValue("totalRow", out var trVal) && IsTruthy(trVal))
+                       || (properties.TryGetValue("totalsRow", out var tsVal) && IsTruthy(tsVal))
                        || (properties.TryGetValue("showTotals", out var stVal) && IsTruthy(stVal));
 
         var rangeParts = rangeRef.Split(':');

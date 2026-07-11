@@ -645,7 +645,15 @@ static partial class CommandBuilder
             }
             case "query":
             {
-                var selector = item.Selector ?? "";
+                // `path` is accepted as an alias for `selector` — the generic
+                // field table says "path (set/remove/get target)" and users
+                // carry it over to query; ignoring it silently ran an EMPTY
+                // selector, i.e. returned every node as if the predicate
+                // matched (the most dangerous kind of wrong data). Neither
+                // field present is an error, mirroring the required CLI arg.
+                var selector = item.Selector ?? item.Path ?? "";
+                if (string.IsNullOrEmpty(selector))
+                    throw new ArgumentException("'query' command requires 'selector' field. Example: {\"command\": \"query\", \"selector\": \"row[Score>80]\"}");
                 Func<string, string>? keyResolver =
                     handler is OfficeCli.Handlers.ExcelHandler
                     && OfficeCli.Handlers.ExcelHandler.SelectorTargetsCells(selector)

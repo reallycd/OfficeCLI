@@ -1002,7 +1002,7 @@ public partial class ExcelHandler
 
         // Strip the sheet prefix (Sheet1! — but not a != operator) and any
         // leading /Sheet/ so we see the bare `elem[token]`.
-        var s = Regex.Replace(selector, @"^.+?!(?!=)", "");
+        var s = StripTopLevelSheetPrefix(selector);
         if (s.StartsWith('/'))
         {
             var t = s.TrimStart('/');
@@ -1069,25 +1069,25 @@ public partial class ExcelHandler
         return false;
     }
 
+    // Strip a `Sheet!` prefix, recognizing only a TOP-LEVEL '!' (outside
+    // brackets and quotes) as the sheet separator. The old regex ^.+?!(?!=)
+    // was quote-blind: a predicate value containing '!' — row[F="x!"],
+    // row[Msg~=hello!] — was truncated at the value's bang and the selector
+    // silently dispatched as an unknown element (0 matches, no warning). A
+    // top-level '!' followed by '=' (a bare != filter) is not a separator.
+    private static string StripTopLevelSheetPrefix(string selector)
+    {
+        var i = Core.SelectorCommaSplit.TopLevelIndexOf(selector, '!');
+        if (i < 0 || (i + 1 < selector.Length && selector[i + 1] == '=')) return selector;
+        return selector[(i + 1)..];
+    }
+
     // True when a '/' sits outside every bracket and quote — the sheet/path
     // separator of a slash path, as opposed to a '/' inside a predicate value.
+    // Shared scan with MutationSelectorGuard so query and set/remove agree on
+    // what counts as a scoped slash path.
     private static bool HasTopLevelSlash(string selector)
-    {
-        int bracket = 0, paren = 0;
-        char? quote = null;
-        foreach (var c in selector)
-        {
-            if (quote.HasValue) { if (c == quote.Value) quote = null; continue; }
-            if (c == '"' || c == '\'') { quote = c; continue; }
-            else if (c == '[') bracket++;
-            else if (c == ']') bracket = System.Math.Max(0, bracket - 1);
-            else if (c == '(') paren++;
-            else if (c == ')') paren = System.Math.Max(0, paren - 1);
-            else if (bracket == 0 && paren == 0 && c == '/')
-                return true;
-        }
-        return false;
-    }
+        => Core.SelectorCommaSplit.ContainsTopLevelChar(selector, '/');
 
     private List<DocumentNode> QueryDispatch(string selector)
     {
@@ -1109,7 +1109,9 @@ public partial class ExcelHandler
         var nativeCellRef = Regex.Match(selector, @"^([^/!]+)!([A-Z]+\d+(:[A-Z]+\d+)?)$", RegexOptions.IgnoreCase);
         if (nativeCellRef.Success)
         {
-            var node = Get($"/{nativeCellRef.Groups[1].Value}/{nativeCellRef.Groups[2].Value}");
+            // 'My Data (2024)'!A1 — Excel requires quoting names with spaces;
+            // strip the quotes so the DOM path resolves the real sheet.
+            var node = Get($"/{UnquoteSheetName(nativeCellRef.Groups[1].Value)}/{nativeCellRef.Groups[2].Value}");
             if (node.Type == "range" && node.Children.Count > 0)
                 return node.Children;
             return [node];
@@ -1168,7 +1170,7 @@ public partial class ExcelHandler
         // "/namedrange", and "/Sheet1/table[1]". Mirrors GET's bare-path
         // listers (see ecb36111) — without this normalization, the bare
         // path falls through to ParseCellSelector and returns cells.
-        var selectorForType = Regex.Replace(selector, @"^.+?!(?!=)", "");
+        var selectorForType = StripTopLevelSheetPrefix(selector);
         if (selectorForType.StartsWith('/'))
         {
             var trimmed = selectorForType.TrimStart('/');
@@ -1650,6 +1652,20 @@ public partial class ExcelHandler
                             $"Use '{full}' to filter by a column named '{lc.Key}', or 'row[{lc.Key}]' (no operator) for that row.")
                             { Code = "invalid_selector" };
                     }
+                    if (!forcedCol && atForced.Contains(lc.Key) && !RowAttributeKeys.Contains(lc.Key)
+                        && !IsRowSetAttributeKey(lc.Key))
+                        // '@' names a row PROPERTY; an unknown one must not fall
+                        // through to the generic post-filter, where the absent
+                        // key evaluates false and a not(@typo=…) flips to
+                        // matching EVERY row (deletion-scale hazard on remove).
+                        throw new Core.CliException(
+                            $"row[@{lc.Key} …]: '{lc.Key}' is not a row property. " +
+                            $"Row properties: {string.Join(", ", RowAttributeKeys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase))}. " +
+                            $"For the table column, drop the '@' (row[{lc.Key} …]) or force it with row[col.{lc.Key} …].")
+                        {
+                            Code = "invalid_selector",
+                            ValidValues = RowAttributeKeys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToArray(),
+                        };
                     if (!forcedCol && (atForced.Contains(lc.Key) || RowAttributeKeys.Contains(lc.Key)))
                     {
                         attrCount++;
@@ -1664,7 +1680,11 @@ public partial class ExcelHandler
                         throw new Core.CliException(
                             $"row[{ak} …] is ambiguous: '{ak}' names both a row property and a table column. " +
                             $"Use 'row[col.{ak} …]' to match the column, or 'row[@{ak} …]' to match the row property.")
-                            { Code = "invalid_selector" };
+                        {
+                            Code = "invalid_selector",
+                            Suggestion = $"row[col.{ak} …] (table column) or row[@{ak} …] (row property)",
+                            ValidValues = new[] { $"col.{ak}", $"@{ak}" },
+                        };
                 if (colCount > 0 && attrCount > 0)
                     throw new Core.CliException(
                         "row[...] cannot mix table columns and row properties in one expression. Split into separate queries.")
@@ -1697,6 +1717,13 @@ public partial class ExcelHandler
                         ChildCount = row.Elements<Cell>().Count(),
                         Preview = rowIdx.ToString()
                     };
+                    // Row properties are emitted only when set (height on 3 of
+                    // 1000 rows). Declare the full queryable-key set so the
+                    // post-filter treats an absent-but-known key (row[@height>…]
+                    // on a sheet where no row has a custom height — the exact
+                    // form the collision error recommends) as 0 matches, not
+                    // "unknown key".
+                    node.InternalFormat["declaredKeys"] = RowAttributeKeys;
                     if (row.Height?.Value != null)
                         node.Format["height"] = $"{row.Height.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}pt";
                     if (row.Hidden?.Value == true) node.Format["hidden"] = true;
