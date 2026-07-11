@@ -495,6 +495,31 @@ internal static partial class ChartHelper
         if (barChart?.GetFirstChild<C.SeriesLines>() != null)
             node.Format["serLines"] = "true";
 
+        // gapDepth (3D bar/line/area chart depth spacing). Setter writes
+        // <c:gapDepth> on the 3D chart group but the Reader had no read site,
+        // so dump→replay dropped it. Only present on 3D charts, so Descendants
+        // is unambiguous; emit only when the element exists (non-default).
+        var gapDepthEl = plotArea.Descendants<C.GapDepth>().FirstOrDefault();
+        if (gapDepthEl?.Val?.HasValue == true)
+            node.Format["gapDepth"] = gapDepthEl.Val.Value.ToString();
+
+        // Category-axis position (<c:catAx><c:axPos>). Setter's axisPosition
+        // writes it on the category axis; the Reader never read it back, so a
+        // non-default (top/left/right) tick position reverted to the bottom
+        // default on dump→replay. axPos is a required element (always present),
+        // so emit only when it differs from the category-axis default "b" to
+        // avoid newly stamping axisPosition onto every existing chart's dump.
+        var catAxisPos = plotArea.GetFirstChild<C.CategoryAxis>()
+            ?.GetFirstChild<C.AxisPosition>()?.Val;
+        if (catAxisPos?.HasValue == true && catAxisPos.InnerText != "b")
+            node.Format["axisPosition"] = catAxisPos.InnerText switch
+            {
+                "t" => "top",
+                "l" => "left",
+                "r" => "right",
+                _ => "bottom",
+            };
+
         // CONSISTENCY(bar3d-shape): emit barShape so Set/Add shape=cone|cylinder|...
         // round-trips through Get. Lives on <c:bar3DChart><c:shape>.
         var bar3dForShape = plotArea.GetFirstChild<C.Bar3DChart>();
