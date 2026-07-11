@@ -224,10 +224,35 @@ internal static partial class ChartHelper
             switch (lower)
             {
                 case "title":
+                case "axistitle":
+                case "vtitle":
                     // Map role → existing axis-title keys already handled by SetChartProperties.
-                    // category/series → cattitle; value/value2 → axistitle.
+                    // category/series → cattitle; value → axistitle (primary value axis).
+                    // The common alias `axisTitle` (and `vtitle`) must route here
+                    // too — otherwise it falls through to the default and always
+                    // targets the PRIMARY value axis, clobbering it for role=value2.
                     if (normalizedRole is "category" or "series")
                         translated["cattitle"] = value;
+                    // CONSISTENCY(chart/axis-role-write): the legacy `axistitle`
+                    // key always targets the PRIMARY value axis. For role=value2
+                    // that would overwrite the primary axis's title and leave the
+                    // secondary untouched — write directly to the resolved
+                    // secondary axis instead (mirrors min/max/crosses below).
+                    else if (normalizedRole == "value2" && targetAxis is OpenXmlCompositeElement titleAx2)
+                    {
+                        titleAx2.RemoveAllChildren<C.Title>();
+                        if (!value.Equals("none", StringComparison.OrdinalIgnoreCase))
+                        {
+                            ParseHelpers.ValidateXmlText(value, "axisTitle");
+                            var insertAfter = (OpenXmlElement?)titleAx2.GetFirstChild<C.MinorGridlines>()
+                                ?? (OpenXmlElement?)titleAx2.GetFirstChild<C.MajorGridlines>()
+                                ?? titleAx2.GetFirstChild<C.AxisPosition>();
+                            var newTitle = BuildChartTitle(value);
+                            if (insertAfter != null) titleAx2.InsertAfter(newTitle, insertAfter);
+                            else titleAx2.AppendChild(newTitle);
+                        }
+                        directlyHandled.Add(key);
+                    }
                     else
                         translated["axistitle"] = value;
                     break;
