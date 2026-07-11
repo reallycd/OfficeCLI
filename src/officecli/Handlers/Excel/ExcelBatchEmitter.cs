@@ -107,6 +107,10 @@ public static partial class ExcelBatchEmitter
         "calc.fullCalcOnLoad", "calc.refMode",
         "activeTab", "firstSheet",
         "workbook.lockStructure", "workbook.lockWindows",
+        // Legacy workbook password hash — carried verbatim (SetWorkbook's
+        // workbook.passwordhash case writes it without re-hashing) so workbook
+        // protection survives round-trip, mirroring sheet-level passwordHash.
+        "workbook.passwordHash",
         // Core document properties. lastModifiedBy / timestamps excluded:
         // save-time stamping would flip them every replay cycle.
         "title", "author", "subject", "description", "keywords", "category",
@@ -211,9 +215,11 @@ public static partial class ExcelBatchEmitter
         }
         if (wb.Format.TryGetValue("calc.fullPrecision", out var fp) && fp is bool fpB && !fpB)
             props["calc.fullPrecision"] = "false";
-        if (wb.Format.ContainsKey("workbook.password"))
-            warnings.Add(new UnsupportedWarning("workbook.password", "/workbook",
-                "protection password hashes cannot be round-tripped; workbook protection is emitted without a password"));
+        // workbook.passwordHash (added above) now round-trips the protection
+        // hash verbatim, so no lossy-password warning is needed. The
+        // display-only workbook.password="***" mask is intentionally NOT
+        // emitted (it is not in WorkbookSettingKeys) — replaying "***" would
+        // re-hash the literal mask into a bogus password.
 
         if (props.Count == 0) return;
         items.Add(new BatchItem { Command = "set", Path = "/", Props = props });
