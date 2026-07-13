@@ -165,10 +165,16 @@ internal class WatchServer : IDisposable
     /// Check if another watch process is already running for this file.
     /// Returns the port number if running, or null if not.
     ///
-    /// Implementation: reads the on-disk marker file ({pid}\n{port}\n) and
-    /// validates the pid is still alive. Replaces the pre-1.0.51 pipe ping
-    /// probe, which cost ~100ms and falsely reported "not watching" when
-    /// the pipe server was momentarily busy with another connection.
+    /// Implementation: reads the on-disk marker file
+    /// ({pid}\n{port}\n{startTicksUtc}\n) and validates the pid is still
+    /// alive AND is the same process incarnation that wrote the marker
+    /// (start-time comparison — a bare pid check accepts an unrelated
+    /// process that got the crashed writer's pid recycled to it, which
+    /// made this report a dead watch as live forever). Legacy two-line
+    /// markers ({pid}\n{port}\n) fall back to the bare pid check.
+    /// Replaces the pre-1.0.51 pipe ping probe, which cost ~100ms and
+    /// falsely reported "not watching" when the pipe server was
+    /// momentarily busy with another connection.
     /// </summary>
     public static int? GetExistingWatchPort(string filePath)
     {
@@ -186,10 +192,15 @@ internal class WatchServer : IDisposable
             if (lines.Length < 2) return null;
             if (!int.TryParse(lines[0], out var pid)) return null;
             if (!int.TryParse(lines[1], out var port)) return null;
-            if (!IsProcessAlive(pid))
+            long? startTicksUtc = null;
+            if (lines.Length >= 3 && long.TryParse(lines[2], out var ticks))
+                startTicksUtc = ticks;
+            if (!IsProcessAlive(pid, startTicksUtc))
             {
-                // Stale marker — writer crashed or was killed without cleanup.
-                // Best-effort remove so the caller can start a fresh watch.
+                // Stale marker — writer crashed or was killed without cleanup
+                // (possibly with its pid since recycled to an unrelated
+                // process). Best-effort remove so the caller can start a
+                // fresh watch.
                 try { File.Delete(markerPath); } catch { }
                 return null;
             }
@@ -206,12 +217,29 @@ internal class WatchServer : IDisposable
         return GetExistingWatchPort(filePath).HasValue;
     }
 
-    private static bool IsProcessAlive(int pid)
+    private static bool IsProcessAlive(int pid, long? expectedStartTicksUtc)
     {
         try
         {
             using var p = System.Diagnostics.Process.GetProcessById(pid);
-            return !p.HasExited;
+            if (p.HasExited) return false;
+            if (expectedStartTicksUtc.HasValue)
+            {
+                try
+                {
+                    if (p.StartTime.ToUniversalTime().Ticks != expectedStartTicksUtc.Value)
+                        return false; // pid recycled by an unrelated process
+                }
+                catch
+                {
+                    // StartTime unreadable — typically the pid was recycled to
+                    // another user's process. Markers are 0600 files written by
+                    // the same user, so an unverifiable identity means a
+                    // recycled pid, not our watch: treat as dead.
+                    return false;
+                }
+            }
+            return true;
         }
         catch (ArgumentException) { return false; }
         catch (InvalidOperationException) { return false; }
@@ -231,8 +259,12 @@ internal class WatchServer : IDisposable
             // a dead writer was cleared by GetExistingWatchPort just above; if a
             // squatter still holds the name we simply skip the marker (IsWatching
             // then reports false — fail-safe, no clobber).
+            // Third line: this process's start time (UTC ticks), so the
+            // liveness check can tell "our writer" from "an unrelated process
+            // that got the pid recycled to it after our writer crashed".
+            using var self = System.Diagnostics.Process.GetCurrentProcess();
             var bytes = Encoding.UTF8.GetBytes(
-                $"{System.Diagnostics.Process.GetCurrentProcess().Id}\n{_port}\n");
+                $"{self.Id}\n{_port}\n{self.StartTime.ToUniversalTime().Ticks}\n");
             var opts = new FileStreamOptions
             {
                 Mode = FileMode.CreateNew,
