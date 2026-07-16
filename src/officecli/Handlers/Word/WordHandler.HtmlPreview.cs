@@ -1811,8 +1811,13 @@ public partial class WordHandler
 
     private static readonly HashSet<string> CssKeywordNonFonts = new(StringComparer.OrdinalIgnoreCase)
     {
+        // NOTE: "fangsong" is deliberately ABSENT although CSS4 lists it as a
+        // generic family — it is also the real ASCII name of the FangSong
+        // (仿宋) font, and killing it would drop the font's metric-override
+        // and web-font fallback. A generic-keyword leak of that spelling is
+        // far less likely than the genuine font name.
         "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui",
-        "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "math", "emoji", "fangsong",
+        "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "math", "emoji",
         "inherit", "initial", "unset", "revert", "revert-layer",
         "auto", "normal", "none", "undefined", "null", "inline",
     };
