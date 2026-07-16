@@ -851,10 +851,18 @@ public class ResidentServer : IDisposable
                 //   - envelope success:false                        -> 1
                 //   - stderr contains UNSUPPORTED (unsupported_property) -> 2
                 //   - otherwise                                      -> 0
+                // Batch/validate verdict failures OUTRANK applied-with-caveats
+                // markers, mirroring the non-resident batch path — an
+                // atomically rolled-back batch whose only green item carried a
+                // LaTeX warning must not report exit 2, which would claim
+                // something was applied when nothing was. Single-command
+                // marker precedence (all-unsupported set → 2) is unchanged.
                 int jsonExitCode = 0;
-                if (stderr.Contains("UNSUPPORTED") || stderr.Contains(UnrecognizedLatexMarker))
+                if (batchFailure || validateFailure)
+                    jsonExitCode = 1;
+                else if (stderr.Contains("UNSUPPORTED") || stderr.Contains(UnrecognizedLatexMarker))
                     jsonExitCode = 2;
-                else if (!EnvelopeSuccess(envelope) || batchFailure || validateFailure || stderr.Contains("VALIDATION:"))
+                else if (!EnvelopeSuccess(envelope) || stderr.Contains("VALIDATION:"))
                     jsonExitCode = 1;
                 return MakeResponse(jsonExitCode, envelope, "");
             }
@@ -862,8 +870,12 @@ public class ResidentServer : IDisposable
             // BUG-DUMP12-01: surface stderr "VALIDATION:" token (emitted by
             // ExecuteRawSet / ExecuteAddPart when the SDK validator gains new
             // errors) as exit 1 so callers can detect rejected raw mutations.
-            int exitCode = (stderr.Contains("UNSUPPORTED") || stderr.Contains(UnrecognizedLatexMarker)) ? 2
-                : ((batchFailure || validateFailure || stderr.Contains("VALIDATION:")) ? 1 : 0);
+            // Batch/validate verdict failures outrank applied-with-caveats
+            // markers (mirrors the non-resident batch path); single-command
+            // marker precedence is unchanged.
+            int exitCode = (batchFailure || validateFailure) ? 1
+                : ((stderr.Contains("UNSUPPORTED") || stderr.Contains(UnrecognizedLatexMarker)) ? 2
+                : (stderr.Contains("VALIDATION:") ? 1 : 0));
             return MakeResponse(exitCode, stdout, stderr);
         }
         catch (Exception ex)
