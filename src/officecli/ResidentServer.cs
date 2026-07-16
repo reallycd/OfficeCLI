@@ -1120,7 +1120,10 @@ public class ResidentServer : IDisposable
                 ExecuteSave();
                 break;
             case "batch":
-                PromoteToEditable();
+                // Promotion happens INSIDE ExecuteBatch: the atomic flush
+                // barrier must read the pre-batch _dirty state, and
+                // PromoteToEditable latches _dirty=true — promoting here would
+                // make every batch look dirty and pay a full serialize.
                 ExecuteBatch(request);
                 break;
             case "dump":
@@ -1148,13 +1151,11 @@ public class ResidentServer : IDisposable
     // watch session after applying the items — parity with the per-verb
     // NotifyWatch* calls in ExecuteCommand (issue #169). A batch made up
     // entirely of these read-only verbs skips the full-refresh to avoid a
-    // needless re-render + SSE push. Any verb NOT listed here (including
-    // unknown / future ones) fails open to "notify", so a new mutating verb
-    // is never silently dropped from the preview.
-    private static readonly HashSet<string> ReadOnlyBatchVerbs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "get", "query", "view", "validate", "dump", "raw"
-    };
+    // needless re-render + SSE push, skips the editable promotion, and skips
+    // the atomic machinery. Fail-open contract and the canonical verb list
+    // live in CommandBuilder.ReadOnlyBatchVerbs (shared with the non-resident
+    // atomic-copy decision).
+    private static HashSet<string> ReadOnlyBatchVerbs => CommandBuilder.ReadOnlyBatchVerbs;
 
     private void ExecuteBatch(ResidentRequest request)
     {
@@ -1199,6 +1200,30 @@ public class ResidentServer : IDisposable
                 throw new CliException(protBlock) { Code = "document_protected" };
         }
 
+        var bestEffort = request.GetArg("bestEffort", "false")
+            .Equals("true", StringComparison.OrdinalIgnoreCase);
+        var hasMutating = items.Any(it => !ReadOnlyBatchVerbs.Contains(it.Command ?? ""));
+        var atomic = !bestEffort && hasMutating;
+
+        // Atomic flush barrier: make the on-disk file identical to the
+        // pre-batch in-memory tree, so a failed batch can roll back by simply
+        // discarding the poisoned DOM and reloading. Reads the TRUE pre-batch
+        // _dirty state (PromoteToEditable below latches it), so a batch on an
+        // already-flushed session pays nothing — the serialize below only
+        // happens when a flush was owed anyway, just earlier than the idle
+        // debounce would have run it. Ordered before promotion: mutations
+        // cannot exist while !_editable, so the not-yet-promoted case needs no
+        // barrier.
+        if (atomic && _editable && _dirty)
+        {
+            var swBarrier = System.Diagnostics.Stopwatch.StartNew();
+            _handler.Save();
+            swBarrier.Stop();
+            _dirty = false;
+            RecordSaveDuration(swBarrier.Elapsed);
+        }
+        if (hasMutating) PromoteToEditable();
+
         // Defer per-mutation Document.Save() across the whole batch so N resident
         // mutations serialize once (at the next save/close) instead of N times —
         // the per-op Save was an O(N²) re-serialize of the growing part. Mirrors
@@ -1233,6 +1258,32 @@ public class ResidentServer : IDisposable
             if (deferHandler != null) deferHandler.DeferSave = prevDefer;
         }
 
+        // Atomic rollback: any failed item discards the WHOLE batch. The
+        // barrier above guaranteed disk == pre-batch state, and nothing
+        // flushed mid-batch (DeferSave + _commandLock keeps the autosave
+        // watchdog out), so rolling back is: drop the poisoned in-memory DOM
+        // without serializing it (DiscardOnDispose) and reload the pre-batch
+        // file. The reload pays one parse — only on the failure path.
+        var anyFailed = results.Any(r => !r.Success);
+        var rolledBack = false;
+        if (atomic && anyFailed)
+        {
+            switch (_handler)
+            {
+                case OfficeCli.Handlers.WordHandler w: w.DiscardOnDispose = true; break;
+                case OfficeCli.Handlers.ExcelHandler x: x.DiscardOnDispose = true; break;
+                case OfficeCli.Handlers.PowerPointHandler p: p.DiscardOnDispose = true; break;
+            }
+            try { _handler.Dispose(); } catch { /* discard path */ }
+            _handler = OfficeCli.Handlers.DocumentHandlerFactory.Open(_filePath, editable: true);
+            // Re-establish the resident's long-lived handler invariants
+            // (mirrors PromoteToEditable's post-open state): _editable stays
+            // latched, deferral re-applies, and memory now equals disk.
+            if (_handler is OfficeCli.Handlers.WordHandler wh2) wh2.DeferSave = true;
+            _dirty = false;
+            rolledBack = true;
+        }
+
         // BUG-R7B(BUG2): reconcile document-wide ids (wp:docPr, paraId, sdt)
         // after the deferred batch. Each item ran under DeferSave so the
         // per-raw-set id passes were skipped; a raw-set of a header/footer part
@@ -1240,16 +1291,18 @@ public class ResidentServer : IDisposable
         // save/close. Run the same document-scoped passes here so a `validate`
         // (or watch render) issued before the eventual save sees the same clean
         // state save/close would write. Mirrors the non-resident path, where
-        // Dispose-time FinalizeDeferredIds already does this.
-        deferHandler?.ReconcileGlobalIds();
+        // Dispose-time FinalizeDeferredIds already does this. Skipped after a
+        // rollback — the batch's changes no longer exist and deferHandler
+        // points at the disposed pre-rollback handler.
+        if (!rolledBack) deferHandler?.ReconcileGlobalIds();
 
         // Judgment contract: batch is classified as a judgment command (root
         // the project conventions "Judgment: any batch step failed -> outer false"). The
         // verdict flips to failure as soon as ANY step is rejected. Keeps
         // envelope.success / exit code in lockstep with the non-resident
         // path.
-        _lastBatchHadFailure = results.Any(r => !r.Success);
-        CommandBuilder.PrintBatchResults(results, json, items.Count);
+        _lastBatchHadFailure = anyFailed;
+        CommandBuilder.PrintBatchResults(results, json, items.Count, atomicRolledBack: rolledBack);
         // BUG-BT2: emit the collected unrecognized-LaTeX markers so the
         // dispatcher maps them to exit 2 and the envelope warning code, exactly
         // as the single-shot resident add/set path (EmitUnrecognizedLatex) does.
@@ -1264,8 +1317,11 @@ public class ResidentServer : IDisposable
         // slides/sheets/pages with mixed verbs, so a targeted per-slide patch
         // isn't derivable — a full refresh mirrors swap / refresh / raw-set /
         // add-part. Skip only provably read-only batches to avoid a needless
-        // re-render; unknown verbs fail open to notify.
-        if (items.Any(it => !ReadOnlyBatchVerbs.Contains(it.Command ?? "")))
+        // re-render; unknown verbs fail open to notify. An atomic rollback
+        // also skips: the document is byte-identical to what the preview
+        // already shows, so pushing a frame would be a lie about a change
+        // that never landed.
+        if (hasMutating && !rolledBack)
             NotifyWatchFullRefresh();
     }
 

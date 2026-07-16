@@ -1003,7 +1003,7 @@ static partial class CommandBuilder
         return true;
     }
 
-    internal static void PrintBatchResults(List<BatchResult> results, bool json, int totalCount = 0, TextWriter? output = null)
+    internal static void PrintBatchResults(List<BatchResult> results, bool json, int totalCount = 0, TextWriter? output = null, bool atomicRolledBack = false)
     {
         var @out = output ?? Console.Out;
         if (totalCount == 0) totalCount = results.Count;
@@ -1026,6 +1026,10 @@ static partial class CommandBuilder
                 writer.WriteNumber("succeeded", succeeded);
                 writer.WriteNumber("failed", failed);
                 writer.WriteNumber("skipped", skipped);
+                // Additive field, only present when the atomic default
+                // discarded the batch — parsers keying on the existing
+                // summary fields are unaffected.
+                if (atomicRolledBack) writer.WriteBoolean("atomicRolledBack", true);
                 writer.WriteEndObject();
                 writer.WriteEndObject();
             }
@@ -1072,6 +1076,7 @@ static partial class CommandBuilder
                     slimWriter.WriteNumber("succeeded", succeeded);
                     slimWriter.WriteNumber("failed", failed);
                     slimWriter.WriteNumber("skipped", skipped);
+                    if (atomicRolledBack) slimWriter.WriteBoolean("atomicRolledBack", true);
                     slimWriter.WriteEndObject();
                     slimWriter.WriteEndObject();
                 }
@@ -1099,7 +1104,10 @@ static partial class CommandBuilder
 
             var succeeded = results.Count(r => r.Success);
             var failed = results.Count - succeeded;
-            @out.WriteLine($"\nBatch complete: {succeeded} succeeded, {failed} failed, {results.Count} total");
+            // FROZEN TEXT: the "Batch complete: N succeeded, M failed" skeleton
+            // is a machine-consumed contract — extend by SUFFIX only.
+            var atomicNote = atomicRolledBack ? " (atomic: no changes were applied)" : "";
+            @out.WriteLine($"\nBatch complete: {succeeded} succeeded, {failed} failed, {results.Count} total{atomicNote}");
         }
     }
 

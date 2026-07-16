@@ -442,10 +442,28 @@ public partial class ExcelHandler : IDocumentHandler, Rendering.IRenderModelHost
         _filteredPackageStream.Position = pos;
     }
 
+    /// <summary>See <see cref="OfficeCli.Handlers.WordHandler.DiscardOnDispose"/> —
+    /// atomic-batch rollback: drop the in-memory DOM without serializing.</summary>
+    public bool DiscardOnDispose { get; set; }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        if (DiscardOnDispose)
+        {
+            // Never serialize the poisoned DOM. Close the disk-backed streams
+            // first so the package's dispose-time autosave has nowhere to
+            // write (the filtered-package path autosaves into its
+            // MemoryStream, which is discarded — WriteBackFilteredPackage is
+            // the only disk write there and is skipped).
+            _backingStream?.Dispose();
+            _backingStream = null;
+            try { _doc.Dispose(); } catch { /* autosave hit the closed stream — intended */ }
+            _filteredPackageStream?.Dispose();
+            _filteredPackageStream = null;
+            return;
+        }
         try { FlushDirtyParts(); } catch { /* best-effort */ }
         // Mirror the PPT/Word pattern: when we own the backing FileStream the
         // package would otherwise leave the on-disk file in whatever state

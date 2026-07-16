@@ -165,6 +165,16 @@ public partial class WordHandler : IDocumentHandler, Rendering.IRenderModelHost
     public bool DeferSave { get; set; }
 
     /// <summary>
+    /// When true, Dispose releases the document WITHOUT serializing the
+    /// in-memory DOM — the backing stream is closed first so the package's
+    /// autosave has nowhere to write. Used by atomic-batch rollback: the
+    /// on-disk file (flushed to the pre-batch state) stays authoritative and
+    /// the poisoned DOM is simply dropped. Only meaningful when no
+    /// intra-session flush has happened since the state to preserve.
+    /// </summary>
+    public bool DiscardOnDispose { get; set; }
+
+    /// <summary>
     /// Serialize the main document part to the backing store, unless
     /// <see cref="DeferSave"/> is set (batch replay defers to one save at the
     /// end). Every mutation path (Add/Set/Remove/Move/Swap) routes its
@@ -2393,6 +2403,17 @@ public partial class WordHandler : IDocumentHandler, Rendering.IRenderModelHost
 
     public void Dispose()
     {
+        if (DiscardOnDispose)
+        {
+            // Atomic-batch rollback: never serialize the poisoned DOM. Close
+            // the backing stream FIRST so the package's dispose-time autosave
+            // has nowhere to write, then swallow its complaint. The on-disk
+            // file keeps the last flushed (pre-batch) state.
+            _backingStream?.Dispose();
+            _backingStream = null;
+            try { _doc.Dispose(); } catch { /* autosave hit the closed stream — intended */ }
+            return;
+        }
         // Mirror the PPT pattern: when we own the backing FileStream the
         // package would otherwise leave the on-disk file in whatever state
         // the last auto-flush left it (potentially truncated for the

@@ -2263,8 +2263,23 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
         _backingStream?.Flush();
     }
 
+    /// <summary>See <see cref="OfficeCli.Handlers.WordHandler.DiscardOnDispose"/> —
+    /// atomic-batch rollback: drop the in-memory DOM without serializing.</summary>
+    public bool DiscardOnDispose { get; set; }
+
     public void Dispose()
     {
+        if (DiscardOnDispose)
+        {
+            // Atomic-batch rollback: never serialize the poisoned DOM. Close
+            // the backing stream FIRST so the package's dispose-time autosave
+            // has nowhere to write. The on-disk file keeps the last flushed
+            // (pre-batch) state.
+            _backingStream?.Dispose();
+            _backingStream = null;
+            try { _doc.Dispose(); } catch { /* autosave hit the closed stream — intended */ }
+            return;
+        }
         // Save through the package (flush in-memory edits to the underlying
         // stream) before disposing. When we own the backing FileStream, the
         // package would otherwise leave the on-disk file in whatever state
