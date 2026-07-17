@@ -597,9 +597,13 @@ internal static class OutputFormatter
         // Pattern: batch item shape errors — "'add-part' command requires
         // 'parent' field" / "requires 'type' or 'from' field" / "requires
         // 'path' and 'path2' (or 'to') fields" / "Batch item missing required
-        // 'command' field" / "add-part extpart requires property 'data'".
+        // 'command' field" / "add-part extpart requires property 'data'" /
+        // "pivottable requires 'source' property" / "'shapes' property
+        // required" / "Chart requires data".
         if (System.Text.RegularExpressions.Regex.IsMatch(msg, @"requires .{0,40}'[\w-]+'.{0,20}\bfields?\b")
-            || System.Text.RegularExpressions.Regex.IsMatch(msg, @"requires property '[\w-]+'")
+            || System.Text.RegularExpressions.Regex.IsMatch(msg, @"requires (property )?'[\w-]+'( property)?")
+            || msg.Contains("property required")
+            || msg.Contains("requires data")
             || msg.Contains("missing required"))
         {
             result.Code = "missing_property";
@@ -616,12 +620,29 @@ internal static class OutputFormatter
 
         // Pattern: "add-part extpart: 'data' is not valid base64" (ours) or
         // "The input is not a valid Base-64 string…" (raw .NET
-        // FormatException, e.g. a data: URI with a corrupt payload) —
-        // malformed payload value, same semantic class as "Invalid <…>".
+        // FormatException, e.g. a data: URI with a corrupt payload) or
+        // "Only base64-encoded data URIs are supported" (data:, / non-base64
+        // data URI) — malformed payload value, same class as "Invalid <…>".
         if (msg.Contains("is not valid base64")
-            || msg.Contains("not a valid Base-64"))
+            || msg.Contains("not a valid Base-64")
+            || msg.Contains("Only base64-encoded data URIs"))
         {
             result.Code = "invalid_value";
+            return;
+        }
+
+        // Pattern: "…overlaps existing pivot… choose a different anchor" —
+        // placement conflict, a well-formed but unusable value.
+        if (msg.Contains("overlaps existing pivot"))
+        {
+            result.Code = "invalid_value";
+            return;
+        }
+
+        // Pattern: batch item carries unknown field(s) — payload shape error.
+        if (msg.Contains("unknown field"))
+        {
+            result.Code = "invalid_input";
             return;
         }
 
