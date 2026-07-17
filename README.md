@@ -1,3 +1,11 @@
+
+别的这个项目可以通过网址和上传文件进行预览。
+https://501351981.github.io/vue-office/examples/dist/#/docx
+
+
+
+
+
 # OfficeCLI
 
 > **OfficeCLI is the world's first and the best Office suite designed for AI agents.**
