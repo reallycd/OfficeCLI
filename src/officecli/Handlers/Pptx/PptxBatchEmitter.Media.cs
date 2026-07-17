@@ -643,8 +643,41 @@ public static partial class PptxBatchEmitter
             // sample07). Pin the SOURCE rId so the verbatim r:embed resolves.
             var altRids = new HashSet<string>(StringComparer.Ordinal);
             foreach (System.Text.RegularExpressions.Match rm in
-                     System.Text.RegularExpressions.Regex.Matches(slice, @"r:(?:embed|link)=""(rId\d+)"""))
+                     System.Text.RegularExpressions.Regex.Matches(slice, @"r:(?:embed|link)=""([^""]+)"""))
                 altRids.Add(rm.Groups[1].Value);
+
+            // Internal slide-jump links inside the block (<a:hlinkClick
+            // r:id="rIdN" action="…hlinksldjump"> — every zoom frame carries
+            // one next to its preview blip). The verbatim slice keeps the
+            // source rId, but the relationship targets another SLIDE, which
+            // is re-added later in the batch — so DEFER the pinned slide
+            // relationship to the end of the emit (ctx.DeferredLinks replays
+            // after every slide exists). Without this the jump r:id dangled
+            // and the zoom frames were functionally dead (semantic validate
+            // reds on every zoom/prezi deck). Mirrors the table txBodyRaw
+            // slide-jump carrier.
+            try
+            {
+                var altIdRids = new HashSet<string>(StringComparer.Ordinal);
+                foreach (System.Text.RegularExpressions.Match rm in
+                         System.Text.RegularExpressions.Regex.Matches(slice, @"r:id=""([^""]+)"""))
+                    altIdRids.Add(rm.Groups[1].Value);
+                foreach (var (jumpRelId, targetOrd) in ppt.GetSlideInternalSlideJumpRels(slideNum, altIdRids))
+                {
+                    ctx.DeferredLinks.Add(new BatchItem
+                    {
+                        Command = "add-part",
+                        Parent = slidePath,
+                        Type = "sliderel",
+                        Props = new Dictionary<string, string>
+                        {
+                            ["rid"] = jumpRelId,
+                            ["target"] = targetOrd.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        },
+                    });
+                }
+            }
+            catch { /* best-effort */ }
 
             // chartEx blocks (cx: extension charts — funnel/sunburst/treemap):
             // the Choice's <cx:chart r:id> references an ExtendedChartPart that
