@@ -1149,8 +1149,28 @@ internal partial class FormulaEvaluator
     {
         var arr = args.Count > 0 ? AsDoubles(args[0]) : null;
         var val = args.Count > 1 && args[1] is FormulaResult r ? r.AsNumber() : 0;
-        if (arr == null || arr.Length == 0) return FormulaResult.Error("#NUM!");
-        return FR((double)arr.Count(x => x < val) / (arr.Length - 1));
+        int sig = args.Count > 2 && args[2] is FormulaResult s ? (int)s.AsNumber() : 3;
+        if (arr == null || arr.Length == 0 || sig < 1) return FormulaResult.Error("#NUM!");
+        var sorted = arr.OrderBy(x => x).ToArray();
+        int n = sorted.Length;
+        if (val < sorted[0] || val > sorted[n - 1]) return FormulaResult.Error("#N/A");
+        int below = sorted.Count(x => x < val);
+        double rank;
+        if (below < n && sorted[below] == val)
+            rank = (double)below / (n - 1);                       // exact match
+        else                                                      // interpolate between neighbours
+        {
+            int i = below - 1;
+            rank = (i + (val - sorted[i]) / (sorted[i + 1] - sorted[i])) / (n - 1);
+        }
+        // Excel truncates (not rounds) the percentage to `sig` significant digits.
+        double result = rank;
+        if (result != 0)
+        {
+            double mag = Math.Pow(10, sig - Math.Ceiling(Math.Log10(Math.Abs(result))));
+            result = Math.Truncate(result * mag) / mag;
+        }
+        return FR(result);
     }
 
     private static FormulaResult? EvalStdev(double[] v, bool sample)
