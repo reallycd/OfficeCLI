@@ -49,12 +49,27 @@ internal static class UpdateChecker
         // home is read-only, so a CreateDirectory failure here is not fatal.
         try { Directory.CreateDirectory(ConfigDir); } catch { /* continue */ }
 
+        var config = LoadConfig();
+
         // Apply pending update from previous background check (.update file).
         // After this returns, the current process image is still the OLD binary;
         // the NEW binary is on disk and will run on the *next* invocation.
-        ApplyPendingUpdate();
-
-        var config = LoadConfig();
+        //
+        // GATED ON autoUpdate: the pending file sits NEXT TO THE BINARY
+        // (shared across users) while the opt-out lives in per-HOME
+        // config.json — so a refresh spawned under some other HOME (default
+        // = enabled) could stage a .update that a later invocation applied
+        // even though THIS user had autoUpdate off, silently swapping a
+        // version-pinned binary. When the setting is off, the pending file
+        // is deleted, not deferred — off means nothing changes the binary.
+        if (config.AutoUpdate)
+        {
+            ApplyPendingUpdate();
+        }
+        else
+        {
+            DiscardPendingUpdate();
+        }
 
         // Skill auto-refresh: if the running binary's version differs from the
         // last version that performed a refresh, push embedded skills from THIS
@@ -285,6 +300,28 @@ internal static class UpdateChecker
         // check, which ensures the *new* binary writes its own resources on
         // its first run.
         TryApplyPendingUpdate(exePath);
+    }
+
+    /// <summary>
+    /// Remove a staged <c>{exePath}.update</c> (and any <c>.update.partial</c>)
+    /// without applying it. Called when this user's autoUpdate is off: the
+    /// staged file may have been downloaded under another HOME whose config
+    /// defaults to enabled, and leaving it in place would let a later
+    /// invocation swap a version-pinned binary.
+    /// </summary>
+    private static void DiscardPendingUpdate()
+    {
+        try
+        {
+            var exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+            if (exePath == null) return;
+            foreach (var suffix in new[] { ".update", ".update.partial" })
+            {
+                var p = exePath + suffix;
+                try { if (File.Exists(p)) File.Delete(p); } catch { /* best effort */ }
+            }
+        }
+        catch { /* best effort */ }
     }
 
     /// <summary>
