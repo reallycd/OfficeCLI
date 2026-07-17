@@ -118,6 +118,23 @@ internal partial class FormulaEvaluator
     private static double RoundDown(double v, int d) { var f = Math.Pow(10, d); return Math.Floor(Math.Abs(v) * f) / f * Math.Sign(v); }
     private static double CeilingF(double v, double s) => s == 0 ? 0 : Math.Ceiling(v / s) * s;
     private static double FloorF(double v, double s) => s == 0 ? 0 : Math.Floor(v / s) * s;
+
+    // CEILING.MATH / FLOOR.MATH take an optional mode; significance sign is
+    // ignored (magnitude only). For a negative number a nonzero mode flips the
+    // rounding direction: CEILING.MATH rounds away from zero, FLOOR.MATH toward
+    // zero. Mode is irrelevant for non-negative numbers.
+    private static double CeilingMath(double v, double s, double mode)
+    {
+        if (s == 0) return 0;
+        s = Math.Abs(s);
+        return v < 0 && mode != 0 ? Math.Floor(v / s) * s : Math.Ceiling(v / s) * s;
+    }
+    private static double FloorMath(double v, double s, double mode)
+    {
+        if (s == 0) return 0;
+        s = Math.Abs(s);
+        return v < 0 && mode != 0 ? Math.Ceiling(v / s) * s : Math.Floor(v / s) * s;
+    }
     private static double EvenF(double v) { var c = (int)Math.Ceiling(Math.Abs(v)); return (c % 2 == 0 ? c : c + 1) * Math.Sign(v); }
     private static double OddF(double v) { var c = (int)Math.Ceiling(Math.Abs(v)); return (c % 2 == 1 ? c : c + 1) * Math.Sign(v); }
     private static double Factorial(double n) { double r = 1; for (int i = 2; i <= (int)n; i++) r *= i; return r; }
