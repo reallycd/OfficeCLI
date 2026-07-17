@@ -51,12 +51,12 @@ internal partial class FormulaEvaluator
             "CEILING" => num(0) > 0 && args.Count >= 2 && num(1) < 0 ? FormulaResult.Error("#NUM!") : FR(CeilingF(num(0), args.Count >= 2 ? num(1) : 1)),
             "FLOOR" => num(0) > 0 && args.Count >= 2 && num(1) < 0 ? FormulaResult.Error("#NUM!") : FR(FloorF(num(0), args.Count >= 2 ? num(1) : 1)),
             "MOD" => num(1) != 0 ? FR(num(0) - num(1) * Math.Floor(num(0) / num(1))) : FormulaResult.Error("#DIV/0!"),
-            "POWER" => num(0) == 0 && num(1) == 0 ? FormulaResult.Error("#NUM!") : FR(Math.Pow(num(0), num(1))),
+            "POWER" => num(0) == 0 && num(1) == 0 ? FormulaResult.Error("#NUM!") : FR(ExcelPow(num(0), num(1))),
             "SQRT" => num(0) >= 0 ? FR(Math.Sqrt(num(0))) : FormulaResult.Error("#NUM!"),
-            "FACT" => FR(Factorial(num(0))),
-            "COMBIN" => FR(Combin((int)num(0), (int)num(1))),
-            "COMBINA" => FR(Combin((int)num(0) + (int)num(1) - 1, (int)num(1))),
-            "PERMUT" => FR(Permut((int)num(0), (int)num(1))),
+            "FACT" => num(0) < 0 ? FormulaResult.Error("#NUM!") : FR(Factorial(num(0))),
+            "COMBIN" => (int)num(0) < 0 || (int)num(1) < 0 || (int)num(1) > (int)num(0) ? FormulaResult.Error("#NUM!") : FR(Combin((int)num(0), (int)num(1))),
+            "COMBINA" => (int)num(0) < 0 || (int)num(1) < 0 ? FormulaResult.Error("#NUM!") : FR(Combin((int)num(0) + (int)num(1) - 1, (int)num(1))),
+            "PERMUT" => (int)num(0) < 0 || (int)num(1) < 0 || (int)num(1) > (int)num(0) ? FormulaResult.Error("#NUM!") : FR(Permut((int)num(0), (int)num(1))),
             "SUMSQ" => CheckRangeErrors(args) ?? FR(nums().Sum(x => x * x)),
             "SUMX2MY2" => EvalSumXY(args, 0),
             "SUMX2PY2" => EvalSumXY(args, 1),
@@ -75,11 +75,11 @@ internal partial class FormulaEvaluator
             "ODD" => FR(OddF(num(0))),
             "PRODUCT" => CheckRangeErrors(args) ?? FR(nums().Aggregate(1.0, (a, b) => a * b)),
             "QUOTIENT" => num(1) != 0 ? FR(Math.Truncate(num(0) / num(1))) : FormulaResult.Error("#DIV/0!"),
-            "MROUND" => num(1) != 0 ? FR(Math.Round(num(0) / num(1), MidpointRounding.AwayFromZero) * num(1)) : FormulaResult.Error("#NUM!"),
+            "MROUND" => MRound(num(0), num(1)),
             "ROMAN" => FR_S(ToRoman((int)num(0))),
             "ARABIC" => FR(FromRoman(str(0))),
-            "BASE" => FR_S(Convert.ToString((long)num(0), (int)num(1)).ToUpperInvariant()),
-            "DECIMAL" => FR(Convert.ToInt64(str(0), (int)num(1))),
+            "BASE" => EvalBase((long)num(0), (int)num(1), args.Count >= 3 ? (int)num(2) : 0),
+            "DECIMAL" => EvalDecimal(str(0), (int)num(1)),
             "LOG" => args.Count >= 2 ? FR(Math.Log(num(0), num(1))) : FR(Math.Log10(num(0))),
             "LOG10" => FR(Math.Log10(num(0))),
             "LN" => FR(Math.Log(num(0))),
@@ -96,9 +96,9 @@ internal partial class FormulaEvaluator
             "ASINH" => FR(Math.Asinh(num(0))), "ACOSH" => FR(Math.Acosh(num(0))), "ATANH" => FR(Math.Atanh(num(0))),
             "DEGREES" => FR(num(0) * 180.0 / Math.PI),
             "RADIANS" => FR(num(0) * Math.PI / 180.0),
-            "SEC" => FR(1.0 / Math.Cos(num(0))), "CSC" => FR(1.0 / Math.Sin(num(0))),
-            "COT" => FR(1.0 / Math.Tan(num(0))), "SECH" => FR(1.0 / Math.Cosh(num(0))),
-            "CSCH" => FR(1.0 / Math.Sinh(num(0))), "COTH" => FR(1.0 / Math.Tanh(num(0))),
+            "SEC" => FR(1.0 / Math.Cos(num(0))), "CSC" => Math.Sin(num(0)) == 0 ? FormulaResult.Error("#DIV/0!") : FR(1.0 / Math.Sin(num(0))),
+            "COT" => Math.Tan(num(0)) == 0 ? FormulaResult.Error("#DIV/0!") : FR(1.0 / Math.Tan(num(0))), "SECH" => FR(1.0 / Math.Cosh(num(0))),
+            "CSCH" => Math.Sinh(num(0)) == 0 ? FormulaResult.Error("#DIV/0!") : FR(1.0 / Math.Sinh(num(0))), "COTH" => Math.Tanh(num(0)) == 0 ? FormulaResult.Error("#DIV/0!") : FR(1.0 / Math.Tanh(num(0))),
             "ACOT" => FR(Math.PI / 2 - Math.Atan(num(0))),
             "ACOTH" => FR(0.5 * Math.Log((num(0) + 1) / (num(0) - 1))),
 
@@ -168,7 +168,8 @@ internal partial class FormulaEvaluator
             "NEGBINOM_DIST" or "NEGBINOMDIST" => EvalNegBinom(args),
             "WEIBULL_DIST" or "WEIBULL" => EvalWeibull(args),
             "LOGNORM_DIST" or "LOGNORMDIST" => EvalLognormDist(args),
-            "LOGNORM_INV" or "LOGINV" => args.Count >= 3 ? FR(Math.Exp(num(1) + num(2) * InvNormCdf(num(0)))) : null,
+            "LOGNORM_INV" or "LOGINV" => args.Count < 3 ? null
+                : num(0) > 0 && num(0) < 1 ? FR(Math.Exp(num(1) + num(2) * InvNormCdf(num(0)))) : FormulaResult.Error("#NUM!"),
             "HYPGEOM_DIST" or "HYPGEOMDIST" => EvalHypgeom(args),
             // ----- descriptive & regression -----
             "SKEW" => EvalSkew(args, population: false),
@@ -213,8 +214,8 @@ internal partial class FormulaEvaluator
             // ===== Text =====
             "CONCATENATE" or "CONCAT" => FR_S(string.Concat(AllArgs(args).Select(r => r.AsString()))),
             "TEXTJOIN" => EvalTextJoin(args),
-            "LEFT" => FR_S(str(0).Length >= (int)num(1) ? str(0)[..(int)num(1)] : str(0)),
-            "RIGHT" => FR_S(str(0).Length >= (int)num(1) ? str(0)[^(int)num(1)..] : str(0)),
+            "LEFT" => EvalLeftRight(str(0), args.Count >= 2 ? (int)num(1) : 1, true),
+            "RIGHT" => EvalLeftRight(str(0), args.Count >= 2 ? (int)num(1) : 1, false),
             "MID" => EvalMid(args),
             "LEN" => FR(str(0).Length),
             "TRIM" => FR_S(Regex.Replace(str(0).Trim(), @"\s+", " ")),
@@ -225,7 +226,7 @@ internal partial class FormulaEvaluator
             "REPT" => FR_S(string.Concat(Enumerable.Repeat(str(0), (int)num(1)))),
             // CHAR is defined only for codes 1..255; out-of-range is #VALUE!.
             "CHAR" => (int)num(0) is >= 1 and <= 255 ? FR_S(((char)(int)num(0)).ToString()) : FormulaResult.Error("#VALUE!"),
-            "CODE" => FR(str(0).Length > 0 ? (int)str(0)[0] : 0),
+            "CODE" => str(0).Length > 0 ? FR((int)str(0)[0]) : FormulaResult.Error("#VALUE!"),
             "LENB" => FR(str(0).Sum(c => IsWideChar(c) ? 2 : 1)),
             "ASC" => FR_S(ToHalfWidth(str(0))),
             // UNICHAR/UNICODE work on full Unicode code points (surrogate pairs),
@@ -235,7 +236,7 @@ internal partial class FormulaEvaluator
             "FIND" => EvalFind(args, true), "SEARCH" => EvalFind(args, false),
             "REPLACE" => EvalReplace(args), "SUBSTITUTE" => EvalSubstitute(args),
             "EXACT" => FR_B(str(0) == str(1)),
-            "VALUE" => double.TryParse(str(0), NumberStyles.Any, CultureInfo.InvariantCulture, out var pv) ? FR(pv) : FormulaResult.Error("#VALUE!"),
+            "VALUE" => EvalValue(str(0)),
             "TEXT" => EvalText(args),
             "TEXTBEFORE" => EvalTextBeforeAfter(args, before: true),
             "TEXTAFTER" => EvalTextBeforeAfter(args, before: false),
@@ -304,8 +305,10 @@ internal partial class FormulaEvaluator
             "EOMONTH" => EvalEomonth(args),
             "DAYS" => FR(num(0) - num(1)),
             "DATEDIF" => EvalDateDif(args),
-            "NETWORKDAYS" or "NETWORKDAYS_INTL" => EvalNetworkDays(args),
-            "WORKDAY" or "WORKDAY_INTL" => EvalWorkDay(args),
+            "NETWORKDAYS" => EvalNetworkDays(args, false),
+            "NETWORKDAYS_INTL" => EvalNetworkDays(args, true),
+            "WORKDAY" => EvalWorkDay(args, false),
+            "WORKDAY_INTL" => EvalWorkDay(args, true),
             "ISOWEEKNUM" => FR(CultureInfo.InvariantCulture.Calendar.GetWeekOfYear(DateTime.FromOADate(num(0)), CalendarWeekRule.FirstFourDayWeek, DayOfWeek.Monday)),
             "TIME" => FR((((long)num(0) * 3600 + (long)num(1) * 60 + (long)num(2)) % 86400 + 86400) % 86400 / 86400.0),
             "WEEKNUM" => EvalWeekNum(num(0), args.Count >= 2 ? (int)num(1) : 1),
@@ -376,11 +379,11 @@ internal partial class FormulaEvaluator
 
             // ===== Conversion =====
             "CONVERT" => EvalConvert(num(0), str(1), str(2)),
-            "BIN2DEC" => FR(Convert.ToInt64(str(0), 2)),
+            "BIN2DEC" => FR(FromBaseSigned(str(0), 2)),
             "DEC2BIN" => Dec2Base(num(0), 2, arg(1)),
-            "HEX2DEC" => FR(Convert.ToInt64(str(0), 16)),
+            "HEX2DEC" => FR(FromBaseSigned(str(0), 16)),
             "DEC2HEX" => Dec2Base(num(0), 16, arg(1)),
-            "OCT2DEC" => FR(Convert.ToInt64(str(0), 8)),
+            "OCT2DEC" => FR(FromBaseSigned(str(0), 8)),
             "DEC2OCT" => Dec2Base(num(0), 8, arg(1)),
             "BIN2HEX" => FR_S(Convert.ToString(Convert.ToInt64(str(0), 2), 16).ToUpperInvariant()),
             "BIN2OCT" => FR_S(Convert.ToString(Convert.ToInt64(str(0), 2), 8)),
@@ -613,7 +616,9 @@ internal partial class FormulaEvaluator
         var start = args.Count > 1 && args[1] is FormulaResult r2 ? (int)r2.AsNumber() - 1 : 0;
         var len = args.Count > 2 && args[2] is FormulaResult r3 ? (int)r3.AsNumber() : 0;
         var rep = args.Count > 3 && args[3] is FormulaResult r4 ? r4.AsString() : "";
-        if (start < 0 || start > s.Length) return FormulaResult.Error("#VALUE!");
+        if (start < 0 || len < 0) return FormulaResult.Error("#VALUE!");
+        // start_num past the end appends the replacement (Excel clamps rather than errors).
+        if (start > s.Length) start = s.Length;
         return FR_S(s[..start] + rep + s[Math.Min(start + len, s.Length)..]);
     }
 
@@ -846,6 +851,22 @@ internal partial class FormulaEvaluator
         {
             var rowIdx = args[1] is FormulaResult r ? (int)r.AsNumber() : 0;
             var colIdx = args.Count > 2 && args[2] is FormulaResult c ? (int)c.AsNumber() : 1;
+            // row_num / col_num = 0 selects the whole column / row as an array.
+            if (rowIdx == 0 && colIdx == 0) return MakeArea(rd.Cells);
+            if (rowIdx == 0)
+            {
+                if (colIdx < 1 || colIdx > rd.Cols) return FormulaResult.Error("#REF!");
+                var col = new FormulaResult?[rd.Rows, 1];
+                for (int i = 0; i < rd.Rows; i++) col[i, 0] = rd.Cells[i, colIdx - 1];
+                return MakeArea(col);
+            }
+            if (colIdx == 0)
+            {
+                if (rowIdx < 1 || rowIdx > rd.Rows) return FormulaResult.Error("#REF!");
+                var rowArr = new FormulaResult?[1, rd.Cols];
+                for (int j = 0; j < rd.Cols; j++) rowArr[0, j] = rd.Cells[rowIdx - 1, j];
+                return MakeArea(rowArr);
+            }
             if (rowIdx < 1 || rowIdx > rd.Rows || colIdx < 1 || colIdx > rd.Cols) return FormulaResult.Error("#REF!");
             return rd.Cells[rowIdx - 1, colIdx - 1] ?? FormulaResult.Number(0);
         }
@@ -1075,6 +1096,13 @@ internal partial class FormulaEvaluator
         {
             var cell = isRow ? lookupArr.Cells[0, i] : lookupArr.Cells[i, 0];
             if (cell == null) continue;
+            if (matchMode == 2)
+            {
+                // Wildcard match against the whole cell text (?/*).
+                if (Regex.IsMatch(cell.AsString(), "^" + WildcardToRegex(lookupVal.AsString()) + "$", RegexOptions.IgnoreCase))
+                { found = i; break; }
+                continue;
+            }
             var cmp = CompareValues(cell, lookupVal);
             if (cmp == 0) { found = i; break; }
             if (matchMode == -1 && cmp < 0)
@@ -1219,8 +1247,13 @@ internal partial class FormulaEvaluator
     private static FormulaResult? EvalMode(double[] v)
     {
         if (v.Length == 0) return null;
-        var top = v.GroupBy(x => x).OrderByDescending(g => g.Count()).ThenBy(g => g.Key).First();
-        return top.Count() > 1 ? FR(top.Key) : FormulaResult.Error("#N/A");
+        int maxCount = v.GroupBy(x => x).Max(g => g.Count());
+        if (maxCount <= 1) return FormulaResult.Error("#N/A");
+        // On a count tie Excel returns the value that appears first in the data,
+        // not the numerically smallest.
+        var tied = v.GroupBy(x => x).Where(g => g.Count() == maxCount).Select(g => g.Key).ToHashSet();
+        foreach (var x in v) if (tied.Contains(x)) return FR(x);
+        return FormulaResult.Error("#N/A");
     }
 
     private static FormulaResult? EvalLarge(List<object> args)
@@ -1534,22 +1567,37 @@ internal partial class FormulaEvaluator
         };
     }
 
-    private static FormulaResult? EvalNetworkDays(List<object> args)
+    private static FormulaResult? EvalNetworkDays(List<object> args, bool intl)
     {
         if (args.Count < 2) return null;
         var start = args[0] is FormulaResult r1 ? DateTime.FromOADate(r1.AsNumber()) : DateTime.Today;
         var end = args[1] is FormulaResult r2 ? DateTime.FromOADate(r2.AsNumber()) : DateTime.Today;
-        int count = 0; for (var d = start; d <= end; d = d.AddDays(1)) if (d.DayOfWeek != DayOfWeek.Saturday && d.DayOfWeek != DayOfWeek.Sunday) count++;
-        return FR(count);
+        // .INTL takes an optional weekend descriptor at arg 2; holidays follow.
+        int holidayArg = 2;
+        var isWeekend = intl ? ParseWeekend(args, 2, ref holidayArg) : DefaultWeekend;
+        var holidays = CollectHolidays(args, holidayArg);
+        int sign = end >= start ? 1 : -1;
+        if (sign < 0) (start, end) = (end, start);
+        int count = 0;
+        for (var d = start; d <= end; d = d.AddDays(1))
+            if (!isWeekend(d.DayOfWeek) && !holidays.Contains(d.Date)) count++;
+        return FR(sign * count);
     }
 
-    private static FormulaResult? EvalWorkDay(List<object> args)
+    private static FormulaResult? EvalWorkDay(List<object> args, bool intl)
     {
         if (args.Count < 2) return null;
         var start = args[0] is FormulaResult r1 ? DateTime.FromOADate(r1.AsNumber()) : DateTime.Today;
         var days = args[1] is FormulaResult r2 ? (int)r2.AsNumber() : 0;
+        int holidayArg = 2;
+        var isWeekend = intl ? ParseWeekend(args, 2, ref holidayArg) : DefaultWeekend;
+        var holidays = CollectHolidays(args, holidayArg);
         var d = start; var step = days > 0 ? 1 : -1; var rem = Math.Abs(days);
-        while (rem > 0) { d = d.AddDays(step); if (d.DayOfWeek != DayOfWeek.Saturday && d.DayOfWeek != DayOfWeek.Sunday) rem--; }
+        while (rem > 0)
+        {
+            d = d.AddDays(step);
+            if (!isWeekend(d.DayOfWeek) && !holidays.Contains(d.Date)) rem--;
+        }
         return FR(d.ToOADate());
     }
 

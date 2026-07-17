@@ -773,7 +773,7 @@ internal partial class FormulaEvaluator
         while (p < t.Count && t[p].Type == TT.Op && t[p].Value == "^")
         { p++; var e = ParseUnary(t, ref p); if (e == null) return null;
           if (b.IsError) return b; if (e.IsError) return e;
-          b = ApplyBinaryOp(b, e, Math.Pow); }
+          b = ApplyBinaryOp(b, e, ExcelPow); }
         return b;
     }
 

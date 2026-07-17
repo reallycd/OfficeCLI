@@ -153,12 +153,148 @@ internal partial class FormulaEvaluator
         return v < 0 && mode != 0 ? Math.Ceiling(v / s) * s : Math.Floor(v / s) * s;
     }
     private static double EvenF(double v) { var c = (int)Math.Ceiling(Math.Abs(v)); return (c % 2 == 0 ? c : c + 1) * Math.Sign(v); }
-    private static double OddF(double v) { var c = (int)Math.Ceiling(Math.Abs(v)); return (c % 2 == 1 ? c : c + 1) * Math.Sign(v); }
+    private static double OddF(double v) { if (v == 0) return 1; var c = (int)Math.Ceiling(Math.Abs(v)); return (c % 2 == 1 ? c : c + 1) * Math.Sign(v); }
     private static double Factorial(double n) { double r = 1; for (int i = 2; i <= (int)n; i++) r *= i; return r; }
     private static double Combin(int n, int k) => k < 0 || k > n ? 0 : Factorial(n) / (Factorial(k) * Factorial(n - k));
     private static double Permut(int n, int k) => k < 0 || k > n ? 0 : Factorial(n) / Factorial(n - k);
     private static long Gcd(long a, long b) { a = Math.Abs(a); b = Math.Abs(b); while (b != 0) { var t = b; b = a % b; a = t; } return a; }
     private static long Lcm(long a, long b) => a == 0 || b == 0 ? 0 : Math.Abs(a / Gcd(a, b) * b);
+
+    // POWER/^: a negative base with a fractional exponent is real only when the
+    // exponent is the reciprocal of an odd integer (e.g. a cube root); otherwise
+    // NaN, which the serializer surfaces as #NUM!.
+    private static double ExcelPow(double b, double e)
+    {
+        if (b < 0 && e != Math.Floor(e))
+        {
+            double inv = 1.0 / e, invR = Math.Round(inv);
+            if (Math.Abs(inv - invR) < 1e-9 && ((long)invR) % 2 != 0) return -Math.Pow(-b, e);
+            return double.NaN;
+        }
+        return Math.Pow(b, e);
+    }
+
+    // MROUND: number and multiple must share a sign (else #NUM!); a zero multiple
+    // yields 0. Rounds half away from zero.
+    private static FormulaResult MRound(double n, double m)
+    {
+        if (m == 0) return FR(0);
+        if (n != 0 && Math.Sign(n) != Math.Sign(m)) return FormulaResult.Error("#NUM!");
+        return FR(Math.Round(n / m, MidpointRounding.AwayFromZero) * m);
+    }
+
+    // LEFT/RIGHT: num_chars defaults to 1 (handled by caller); negative errors.
+    private static FormulaResult EvalLeftRight(string s, int n, bool left)
+    {
+        if (n < 0) return FormulaResult.Error("#VALUE!");
+        if (n >= s.Length) return FR_S(s);
+        return FR_S(left ? s[..n] : s[^n..]);
+    }
+
+    // VALUE: parse numbers, thousands-grouped, percent, a leading currency symbol,
+    // time-of-day (fraction of a day) and dates (serial).
+    private static FormulaResult EvalValue(string s)
+    {
+        s = s.Trim();
+        if (s.Length == 0) return FR(0);
+        if (s.EndsWith("%") && double.TryParse(s[..^1].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out var p))
+            return FR(p / 100.0);
+        var body = s;
+        foreach (var sym in new[] { "$", "¥", "€", "£", "₹" })
+            if (body.StartsWith(sym)) { body = body[sym.Length..].Trim(); break; }
+        if (double.TryParse(body, NumberStyles.Any, CultureInfo.InvariantCulture, out var v)) return FR(v);
+        if (Regex.IsMatch(s, @"^\d{1,2}:\d{2}(:\d{2})?$") && TimeSpan.TryParse(s, CultureInfo.InvariantCulture, out var ts))
+            return FR(ts.TotalDays);
+        if (DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt)) return FR(dt.ToOADate());
+        return FormulaResult.Error("#VALUE!");
+    }
+
+    // BIN2DEC/OCT2DEC/HEX2DEC: the top bit of the fixed field width (10 binary /
+    // 30 octal / 40 hex bits) is a sign bit — read the two's complement.
+    private static double FromBaseSigned(string s, int radix)
+    {
+        s = s.Trim();
+        long val = Convert.ToInt64(s, radix);
+        long field = radix == 2 ? (1L << 10) : radix == 8 ? (1L << 30) : (1L << 40);
+        if (val >= field / 2) val -= field;
+        return val;
+    }
+
+    private const string BaseDigits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    private static FormulaResult EvalBase(long value, int radix, int minLen)
+    {
+        if (radix < 2 || radix > 36 || value < 0) return FormulaResult.Error("#NUM!");
+        var sb = new System.Text.StringBuilder();
+        if (value == 0) sb.Append('0');
+        while (value > 0) { sb.Insert(0, BaseDigits[(int)(value % radix)]); value /= radix; }
+        var s = sb.ToString();
+        return FR_S(minLen > s.Length ? s.PadLeft(minLen, '0') : s);
+    }
+
+    private static FormulaResult EvalDecimal(string s, int radix)
+    {
+        if (radix < 2 || radix > 36) return FormulaResult.Error("#NUM!");
+        s = s.Trim().ToUpperInvariant();
+        long val = 0;
+        foreach (var ch in s)
+        {
+            int d = BaseDigits.IndexOf(ch);
+            if (d < 0 || d >= radix) return FormulaResult.Error("#NUM!");
+            val = val * radix + d;
+        }
+        return FR(val);
+    }
+
+    // ---- workday / weekend helpers (NETWORKDAYS / WORKDAY and .INTL) ----
+    private static readonly Func<DayOfWeek, bool> DefaultWeekend =
+        d => d == DayOfWeek.Saturday || d == DayOfWeek.Sunday;
+
+    // .INTL weekend descriptor: a 7-char string ('1' = weekend, Mon..Sun), a
+    // two-day code 1..7, or a one-day code 11..17. Advances holidayArg past it.
+    private static Func<DayOfWeek, bool> ParseWeekend(List<object> args, int idx, ref int holidayArg)
+    {
+        if (idx >= args.Count || args[idx] is not FormulaResult w) { holidayArg = idx; return DefaultWeekend; }
+        holidayArg = idx + 1;
+        var week = new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday, DayOfWeek.Saturday, DayOfWeek.Sunday };
+        if (w.IsString)
+        {
+            var s = w.AsString();
+            if (s.Length == 7)
+            {
+                var set = new HashSet<DayOfWeek>();
+                for (int i = 0; i < 7; i++) if (s[i] == '1') set.Add(week[i]);
+                return d => set.Contains(d);
+            }
+        }
+        int code = (int)w.AsNumber();
+        if (code >= 1 && code <= 7)
+        {
+            var first = week[(code + 4) % 7];   // code 1 → Saturday
+            var second = week[(code + 5) % 7];  // code 1 → Sunday
+            return d => d == first || d == second;
+        }
+        if (code >= 11 && code <= 17)
+        {
+            var single = week[(code - 11 + 6) % 7]; // code 11 → Sunday
+            return d => d == single;
+        }
+        return DefaultWeekend;
+    }
+
+    private static HashSet<DateTime> CollectHolidays(List<object> args, int startArg)
+    {
+        var set = new HashSet<DateTime>();
+        for (int i = startArg; i < args.Count; i++)
+        {
+            if (AsResults(args[i]) is { } rd)
+            {
+                foreach (var c in rd) if (c != null && c.IsNumeric) set.Add(DateTime.FromOADate(c.AsNumber()).Date);
+            }
+            else if (args[i] is FormulaResult r && !r.IsError) set.Add(DateTime.FromOADate(r.AsNumber()).Date);
+        }
+        return set;
+    }
 
     // Double factorial n!! = n·(n-2)·…·(2 or 1). By definition 0!! = (-1)!! = 1.
     private static FormulaResult FactDouble(double nd)
@@ -418,6 +554,12 @@ internal partial class FormulaEvaluator
         {
             var cell = isRow ? arr.Cells[0, i] : arr.Cells[i, 0];
             if (cell == null) continue;
+            if (matchMode == 2)
+            {
+                if (Regex.IsMatch(cell.AsString(), "^" + WildcardToRegex(lookupVal.AsString()) + "$", RegexOptions.IgnoreCase))
+                { found = i; break; }
+                continue;
+            }
             var cmp = CompareValues(cell, lookupVal);
             if (cmp == 0) { found = i; break; }
             if (matchMode == -1 && cmp < 0) { var d = cell.AsNumber() - lookupVal.AsNumber(); if (d > bestDelta) { bestDelta = d; bestApprox = i; } }
