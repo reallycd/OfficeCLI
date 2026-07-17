@@ -592,6 +592,11 @@ public static partial class ExcelBatchEmitter
             CopyString(pic, "flip", props, "flip");
             CopyString(pic, "crop", props, "crop");
             CopyString(pic, "hyperlink", props, "hyperlink");
+            // Add-only accessibility/visual props now surfaced by Get; without
+            // these the dump silently dropped alt-text-exclusion (decorative)
+            // and transparency (opacity), which real Excel does not regenerate.
+            CopyValue(pic, "opacity", props, "opacity");
+            CopyValue(pic, "decorative", props, "decorative");
             items.Add(new BatchItem { Command = "add", Parent = sheetPath, Type = "picture", Props = props });
         }
     }
@@ -636,6 +641,15 @@ public static partial class ExcelBatchEmitter
             CopyValue(shp, "rotation", props, "rotation");
             CopyString(shp, "flip", props, "flip");
             CopyString(shp, "line", props, "line");
+            // Effect + text-inset props. Get surfaces them (shadow=#000000,
+            // glow=#4472C4-8, softEdge=5pt, margin=7.2pt) and Add re-consumes
+            // those exact forms, but the copy-list omitted them so dump dropped
+            // the shape's whole <a:effectLst> and text inset on round-trip.
+            CopyString(shp, "shadow", props, "shadow");
+            CopyString(shp, "glow", props, "glow");
+            CopyString(shp, "softEdge", props, "softEdge");
+            CopyString(shp, "reflection", props, "reflection");
+            CopyString(shp, "margin", props, "margin");
             items.Add(new BatchItem { Command = "add", Parent = sheetPath, Type = "shape", Props = props });
         }
     }
