@@ -550,8 +550,10 @@ internal static class OutputFormatter
         }
 
         // Pattern: batch item shape errors — "'add-part' command requires
-        // 'parent' field" / "Batch item missing required 'command' field".
+        // 'parent' field" / "Batch item missing required 'command' field" /
+        // "add-part extpart requires property 'data'".
         if (System.Text.RegularExpressions.Regex.IsMatch(msg, @"requires '\w+(-\w+)?' field")
+            || System.Text.RegularExpressions.Regex.IsMatch(msg, @"requires property '[\w-]+'")
             || msg.Contains("missing required"))
         {
             result.Code = "missing_property";
