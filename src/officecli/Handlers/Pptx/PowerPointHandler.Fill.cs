@@ -636,40 +636,46 @@ public partial class PowerPointHandler
         pProps.RemoveAllChildren<Drawing.NoBullet>();
         pProps.RemoveAllChildren<Drawing.BulletFont>();
 
+        // CONSISTENCY(schema-order-pptx): bu* children rank BEFORE tabLst and
+        // defRPr in CT_TextParagraphProperties — a pPr that already carries
+        // <a:defRPr> (kern/spacing set first) must not get the bullet appended
+        // after it, or PowerPoint silently ignores it and the strict validator
+        // flags the file. Route through InsertPPrChild like every other pPr
+        // child injection.
         switch (value.ToLowerInvariant())
         {
             case "bullet" or "•" or "disc":
-                pProps.AppendChild(new Drawing.CharacterBullet { Char = "•" });
+                InsertPPrChild(pProps, new Drawing.CharacterBullet { Char = "•" });
                 break;
             case "dash" or "-" or "–":
-                pProps.AppendChild(new Drawing.CharacterBullet { Char = "–" });
+                InsertPPrChild(pProps, new Drawing.CharacterBullet { Char = "–" });
                 break;
             case "arrow" or ">" or "→":
-                pProps.AppendChild(new Drawing.CharacterBullet { Char = "→" });
+                InsertPPrChild(pProps, new Drawing.CharacterBullet { Char = "→" });
                 break;
             case "check" or "✓":
-                pProps.AppendChild(new Drawing.CharacterBullet { Char = "✓" });
+                InsertPPrChild(pProps, new Drawing.CharacterBullet { Char = "✓" });
                 break;
             case "star" or "★":
-                pProps.AppendChild(new Drawing.CharacterBullet { Char = "★" });
+                InsertPPrChild(pProps, new Drawing.CharacterBullet { Char = "★" });
                 break;
             case "numbered" or "number" or "1":
-                pProps.AppendChild(new Drawing.AutoNumberedBullet { Type = Drawing.TextAutoNumberSchemeValues.ArabicPeriod });
+                InsertPPrChild(pProps, new Drawing.AutoNumberedBullet { Type = Drawing.TextAutoNumberSchemeValues.ArabicPeriod });
                 break;
             case "alpha" or "a":
-                pProps.AppendChild(new Drawing.AutoNumberedBullet { Type = Drawing.TextAutoNumberSchemeValues.AlphaLowerCharacterPeriod });
+                InsertPPrChild(pProps, new Drawing.AutoNumberedBullet { Type = Drawing.TextAutoNumberSchemeValues.AlphaLowerCharacterPeriod });
                 break;
             case "alphaupper" or "A":
-                pProps.AppendChild(new Drawing.AutoNumberedBullet { Type = Drawing.TextAutoNumberSchemeValues.AlphaUpperCharacterPeriod });
+                InsertPPrChild(pProps, new Drawing.AutoNumberedBullet { Type = Drawing.TextAutoNumberSchemeValues.AlphaUpperCharacterPeriod });
                 break;
             case "roman" or "i":
-                pProps.AppendChild(new Drawing.AutoNumberedBullet { Type = Drawing.TextAutoNumberSchemeValues.RomanLowerCharacterPeriod });
+                InsertPPrChild(pProps, new Drawing.AutoNumberedBullet { Type = Drawing.TextAutoNumberSchemeValues.RomanLowerCharacterPeriod });
                 break;
             case "romanupper" or "I":
-                pProps.AppendChild(new Drawing.AutoNumberedBullet { Type = Drawing.TextAutoNumberSchemeValues.RomanUpperCharacterPeriod });
+                InsertPPrChild(pProps, new Drawing.AutoNumberedBullet { Type = Drawing.TextAutoNumberSchemeValues.RomanUpperCharacterPeriod });
                 break;
             case "none" or "false":
-                pProps.AppendChild(new Drawing.NoBullet());
+                InsertPPrChild(pProps, new Drawing.NoBullet());
                 // Interactive convenience: removing the bullet also clears the
                 // hanging indent. Skipped when the same property bag carries an
                 // explicit indent/marginLeft — key-iteration order is
@@ -683,7 +689,7 @@ public partial class PowerPointHandler
                 return;
             default:
                 if (value.Length <= 2)
-                    pProps.AppendChild(new Drawing.CharacterBullet { Char = value });
+                    InsertPPrChild(pProps, new Drawing.CharacterBullet { Char = value });
                 else
                     throw new ArgumentException($"Invalid list style: {value}. Use: bullet, numbered, alpha, roman, none, or a single character");
                 break;
