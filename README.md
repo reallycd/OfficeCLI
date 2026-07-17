@@ -2,6 +2,8 @@
 别的这个项目可以通过网址和上传文件进行预览。
 https://501351981.github.io/vue-office/examples/dist/#/docx
 
+https://github.com/501351981/vue-office.git
+
 
 
 
