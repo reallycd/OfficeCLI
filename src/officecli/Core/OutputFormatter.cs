@@ -569,9 +569,12 @@ internal static class OutputFormatter
             return;
         }
 
-        // Pattern: "add-part extpart: 'data' is not valid base64" — malformed
-        // payload value, same semantic class as "Invalid <…>".
-        if (msg.Contains("is not valid base64"))
+        // Pattern: "add-part extpart: 'data' is not valid base64" (ours) or
+        // "The input is not a valid Base-64 string…" (raw .NET
+        // FormatException, e.g. a data: URI with a corrupt payload) —
+        // malformed payload value, same semantic class as "Invalid <…>".
+        if (msg.Contains("is not valid base64")
+            || msg.Contains("not a valid Base-64"))
         {
             result.Code = "invalid_value";
             return;
